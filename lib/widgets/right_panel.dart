@@ -1,14 +1,19 @@
 import 'package:flutter/material.dart';
+import '../models/song_model.dart';
 import '../theme/app_theme.dart';
 import '../controllers/music_player_controller.dart';
 import 'animated_visualizer.dart';
 
 class RightActivityPanel extends StatefulWidget {
   final MusicPlayerController controller;
+  final VoidCallback? onOpenLyrics;
+  final ValueChanged<Song>? onPlaySong;
 
   const RightActivityPanel({
     super.key,
     required this.controller,
+    this.onOpenLyrics,
+    this.onPlaySong,
   });
 
   @override
@@ -266,34 +271,39 @@ class _RightActivityPanelState extends State<RightActivityPanel>
 
                   const SizedBox(height: 20),
 
-                  // Synchronized Lyrics snippet
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: AppTheme.cardSurface,
+                  // Synchronized Lyrics snippet (Tappable for full lyrics)
+                  Material(
+                    color: Colors.transparent,
+                    child: InkWell(
                       borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: AppTheme.border, width: 1),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Row(
-                          children: [
-                            Icon(Icons.lyrics_rounded, size: 16, color: AppTheme.primary),
-                            SizedBox(width: 8),
-                            Text(
-                              'LYRICS PREVIEW',
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.bold,
-                                letterSpacing: 1.0,
-                                color: AppTheme.textMuted,
-                              ),
-                            ),
-                          ],
+                      onTap: widget.onOpenLyrics,
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: AppTheme.cardSurface,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: AppTheme.border, width: 1),
                         ),
-                        const SizedBox(height: 12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Row(
+                              children: [
+                                Icon(Icons.lyrics_rounded, size: 16, color: AppTheme.primary),
+                                SizedBox(width: 8),
+                                Text(
+                                  'LYRICS PREVIEW',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                    letterSpacing: 1.0,
+                                    color: AppTheme.textMuted,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
                         if (currentSong != null && currentSong.lyrics.isNotEmpty)
                           ...currentSong.lyrics.take(3).map((line) {
                             return Padding(
@@ -320,6 +330,8 @@ class _RightActivityPanelState extends State<RightActivityPanel>
                       ],
                     ),
                   ),
+                ),
+              ),
 
                   const SizedBox(height: 20),
 
@@ -372,7 +384,13 @@ class _RightActivityPanelState extends State<RightActivityPanel>
                           color: Colors.transparent,
                           child: InkWell(
                             borderRadius: BorderRadius.circular(10),
-                            onTap: () => widget.controller.playSong(song),
+                            onTap: () {
+                              if (widget.onPlaySong != null) {
+                                widget.onPlaySong!(song);
+                              } else {
+                                widget.controller.playSong(song);
+                              }
+                            },
                             child: Padding(
                               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                               child: Row(

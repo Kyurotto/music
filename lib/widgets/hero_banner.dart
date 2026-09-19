@@ -6,11 +6,13 @@ import '../controllers/music_player_controller.dart';
 class HeroBanner extends StatelessWidget {
   final Song? song;
   final MusicPlayerController controller;
+  final ValueChanged<Song>? onPlaySong;
 
   const HeroBanner({
     super.key,
     required this.song,
     required this.controller,
+    this.onPlaySong,
   });
 
   @override
@@ -206,7 +208,11 @@ class HeroBanner extends StatelessWidget {
                                     if (isCurrentPlaying) {
                                       controller.pause();
                                     } else {
-                                      controller.playSong(currentSong);
+                                      if (onPlaySong != null) {
+                                        onPlaySong!(currentSong);
+                                      } else {
+                                        controller.playSong(currentSong);
+                                      }
                                     }
                                   },
                                 ),

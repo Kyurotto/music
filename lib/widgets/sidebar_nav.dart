@@ -5,10 +5,16 @@ import '../models/song_model.dart';
 
 class SidebarNav extends StatelessWidget {
   final MusicPlayerController controller;
+  final ValueChanged<String>? onPlaylistSelected;
+  final VoidCallback? onCreatePlaylist;
+  final String? selectedPlaylistId;
 
   const SidebarNav({
     super.key,
     required this.controller,
+    this.onPlaylistSelected,
+    this.onCreatePlaylist,
+    this.selectedPlaylistId,
   });
 
   @override
@@ -71,22 +77,6 @@ class SidebarNav extends StatelessWidget {
                             letterSpacing: 1.5,
                             fontWeight: FontWeight.w600,
                             color: AppTheme.primary.withValues(alpha: 0.9),
-                          ),
-                        ),
-                        const SizedBox(width: 4),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                          decoration: BoxDecoration(
-                            color: AppTheme.secondary.withValues(alpha: 0.2),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: const Text(
-                            'PRO',
-                            style: TextStyle(
-                              fontSize: 8,
-                              fontWeight: FontWeight.bold,
-                              color: AppTheme.secondary,
-                            ),
                           ),
                         ),
                       ],
@@ -171,7 +161,7 @@ class SidebarNav extends StatelessWidget {
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(),
                   splashRadius: 14,
-                  onPressed: () {},
+                  onPressed: onCreatePlaylist,
                 ),
               ],
             ),
@@ -180,20 +170,16 @@ class SidebarNav extends StatelessWidget {
           Expanded(
             child: ListView(
               padding: const EdgeInsets.symmetric(horizontal: 12),
-              children: SampleMusicData.playlists.map((playlist) {
+              children: controller.playlists.map((playlist) {
                 return _PlaylistItem(
                   playlist: playlist,
+                  isSelected: playlist.id == selectedPlaylistId,
                   onTap: () {
-                    controller.setSelectedGenre(
-                      playlist.title.contains('Lo-Fi')
-                          ? 'Lo-Fi'
-                          : playlist.title.contains('Cyberpunk')
-                              ? 'Cyberpunk'
-                              : playlist.title.contains('Ambient')
-                                  ? 'Ambient'
-                                  : 'Synthwave',
-                    );
-                    controller.setNavIndex(0);
+                    if (onPlaylistSelected != null) {
+                      onPlaylistSelected!(playlist.id);
+                    } else {
+                      controller.setNavIndex(2);
+                    }
                   },
                 );
               }).toList(),
@@ -250,13 +236,6 @@ class SidebarNav extends StatelessWidget {
                           color: AppTheme.textPrimary,
                         ),
                         overflow: TextOverflow.ellipsis,
-                      ),
-                      Text(
-                        'Premium Member',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: AppTheme.textMuted,
-                        ),
                       ),
                     ],
                   ),
@@ -357,18 +336,27 @@ class _NavItem extends StatelessWidget {
 }
 
 class _PlaylistItem extends StatelessWidget {
-  final PlaylistCategory playlist;
+  final MusicPlaylist playlist;
   final VoidCallback onTap;
+  final bool isSelected;
 
   const _PlaylistItem({
     required this.playlist,
     required this.onTap,
+    this.isSelected = false,
   });
 
   @override
   Widget build(BuildContext context) {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 2),
+      decoration: BoxDecoration(
+        color: isSelected ? AppTheme.primary.withValues(alpha: 0.15) : Colors.transparent,
+        borderRadius: BorderRadius.circular(8),
+        border: isSelected
+            ? Border.all(color: AppTheme.primary.withValues(alpha: 0.4), width: 1)
+            : null,
+      ),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
@@ -395,10 +383,10 @@ class _PlaylistItem extends StatelessWidget {
                 Expanded(
                   child: Text(
                     playlist.title,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 13,
-                      color: AppTheme.textSecondary,
-                      fontWeight: FontWeight.w500,
+                      color: isSelected ? Colors.white : AppTheme.textSecondary,
+                      fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
                     ),
                     overflow: TextOverflow.ellipsis,
                   ),

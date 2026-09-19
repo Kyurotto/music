@@ -3,15 +3,17 @@ import '../models/song_model.dart';
 import '../theme/app_theme.dart';
 
 class AlbumCard extends StatefulWidget {
-  final PlaylistCategory playlist;
+  final MusicPlaylist playlist;
   final VoidCallback onPlay;
   final VoidCallback onTap;
+  final bool isSelected;
 
   const AlbumCard({
     super.key,
     required this.playlist,
     required this.onPlay,
     required this.onTap,
+    this.isSelected = false,
   });
 
   @override
@@ -23,28 +25,34 @@ class _AlbumCardState extends State<AlbumCard> {
 
   @override
   Widget build(BuildContext context) {
+    final active = _isHovered || widget.isSelected;
+
     return MouseRegion(
       onEnter: (_) => setState(() => _isHovered = true),
       onExit: (_) => setState(() => _isHovered = false),
       child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
         onTap: widget.onTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 200),
-          transform: Matrix4.translationValues(0.0, _isHovered ? -4.0 : 0.0, 0.0),
+          transform: Matrix4.translationValues(0.0, active ? -4.0 : 0.0, 0.0),
           width: 175,
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: _isHovered ? AppTheme.cardSurfaceHover : AppTheme.cardSurface,
+            color: active ? AppTheme.cardSurfaceHover : AppTheme.cardSurface,
             borderRadius: BorderRadius.circular(16),
             border: Border.all(
-              color: _isHovered ? AppTheme.borderActive : AppTheme.border,
-              width: 1,
+              color: widget.isSelected
+                  ? AppTheme.primary
+                  : (_isHovered ? AppTheme.borderActive : AppTheme.border),
+              width: widget.isSelected ? 2 : 1,
             ),
-            boxShadow: _isHovered
+            boxShadow: active
                 ? [
                     BoxShadow(
-                      color: widget.playlist.gradient.first.withValues(alpha: 0.25),
-                      blurRadius: 16,
+                      color: (widget.isSelected ? AppTheme.primary : widget.playlist.gradient.first)
+                          .withValues(alpha: widget.isSelected ? 0.35 : 0.25),
+                      blurRadius: widget.isSelected ? 20 : 16,
                       offset: const Offset(0, 6),
                     ),
                   ]
@@ -76,14 +84,14 @@ class _AlbumCardState extends State<AlbumCard> {
                         ),
                       ),
                     ),
-                    // Floating play button on hover or always accessible
+                    // Floating play button on hover or when selected
                     AnimatedPositioned(
                       duration: const Duration(milliseconds: 200),
                       right: 8,
-                      bottom: _isHovered ? 8 : -40,
+                      bottom: active ? 8 : -40,
                       child: AnimatedOpacity(
                         duration: const Duration(milliseconds: 200),
-                        opacity: _isHovered ? 1.0 : 0.0,
+                        opacity: active ? 1.0 : 0.0,
                         child: Container(
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
@@ -125,9 +133,10 @@ class _AlbumCardState extends State<AlbumCard> {
               // Subtitle
               Text(
                 widget.playlist.subtitle,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 12,
-                  color: AppTheme.textMuted,
+                  color: widget.isSelected ? AppTheme.primary : AppTheme.textMuted,
+                  fontWeight: widget.isSelected ? FontWeight.w600 : FontWeight.normal,
                 ),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
