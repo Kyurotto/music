@@ -1,0 +1,14 @@
+{
+  "servers": {
+    "code-review-graph": {
+      "command": "C:\\Python314\\python.exe",
+      "args": [
+        "-m",
+        "code_review_graph",
+        "serve"
+      ],
+      "cwd": "C:\\Users\\johnl\\All Codes\\music",
+      "type": "stdio"
+    }
+  }
+}

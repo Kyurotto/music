@@ -1,0 +1,15 @@
+{
+  "mcp": {
+    "code-review-graph": {
+      "type": "local",
+      "command": [
+        "C:\\Python314\\python.exe",
+        "-m",
+        "code_review_graph",
+        "serve",
+        "--repo",
+        "C:\\Users\\johnl\\All Codes\\music"
+      ]
+    }
+  }
+}
