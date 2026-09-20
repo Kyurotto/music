@@ -40,6 +40,11 @@ dependencies:
   sqflite: ^2.4.2
   sqflite_common_ffi: ^2.3.6
   sqlite3_flutter_libs: ^0.6.0+eol
+  firebase_core: ^4.15.0
+  firebase_auth: ^6.7.0
+  cloud_firestore: ^6.10.0
+  google_sign_in: ^7.2.0
+  flutter_facebook_auth: ^7.2.0
 
 dev_dependencies:
   flutter_test:
