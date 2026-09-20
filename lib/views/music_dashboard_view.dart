@@ -8,6 +8,7 @@ import '../widgets/album_card.dart';
 import '../widgets/track_list_view.dart';
 import '../widgets/right_panel.dart';
 import '../widgets/bottom_player_bar.dart';
+import '../widgets/spotify_lyrics_sheet.dart';
 
 class MusicDashboardView extends StatefulWidget {
   const MusicDashboardView({super.key});
@@ -20,6 +21,7 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
   late final MusicPlayerController _controller;
   final TextEditingController _searchTextController = TextEditingController();
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  String? _selectedPlaylistId;
 
   @override
   void initState() {
@@ -40,6 +42,116 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
     super.dispose();
   }
 
+  void _openPlaylist(String playlistId) {
+    setState(() {
+      _selectedPlaylistId = playlistId;
+      _controller.setNavIndex(2);
+    });
+  }
+
+  void _selectPlaylist(String playlistId) {
+    setState(() => _selectedPlaylistId = playlistId);
+  }
+
+  void _playSongWithLyrics(Song song) {
+    _controller.playSong(song);
+    SpotifyLyricsSheet.show(
+      context,
+      song: song,
+      controller: _controller,
+    );
+  }
+
+  void _playPlaylistWithLyrics(String playlistId) {
+    _controller.playPlaylist(playlistId);
+    final song = _controller.currentSong;
+    if (song != null) {
+      SpotifyLyricsSheet.show(
+        context,
+        song: song,
+        controller: _controller,
+      );
+    }
+  }
+
+  void _showLyricsForCurrentSong() {
+    final song = _controller.currentSong ?? _controller.allSongs.firstOrNull;
+    if (song != null) {
+      SpotifyLyricsSheet.show(
+        context,
+        song: song,
+        controller: _controller,
+      );
+    }
+  }
+
+  Future<void> _showCreatePlaylistDialog() async {
+    final title = await showDialog<String>(
+      context: context,
+      barrierDismissible: true,
+      builder: (dialogContext) => const _CreatePlaylistDialog(),
+    );
+
+    if (title != null && title.trim().isNotEmpty && mounted) {
+      if (_controller.createPlaylist(title.trim())) {
+        final playlist = _controller.playlists.last;
+        setState(() => _selectedPlaylistId = playlist.id);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('"${playlist.title}" is ready for songs.')),
+        );
+      }
+    }
+  }
+
+  Future<void> _showAddToPlaylistSheet(Song song) async {
+    final selectedPlaylist = await showModalBottomSheet<MusicPlaylist>(
+      context: context,
+      backgroundColor: AppTheme.surface,
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.only(top: 12, bottom: 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('Add "${song.title}" to playlist',
+                  style: const TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              ..._controller.playlists.map(
+                (playlist) => ListTile(
+                  leading: Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(8),
+                      gradient: LinearGradient(colors: playlist.gradient),
+                    ),
+                    child: const Icon(Icons.queue_music_rounded,
+                        color: Colors.white, size: 20),
+                  ),
+                  title: Text(playlist.title),
+                  subtitle: Text('${playlist.trackCount} songs'),
+                  trailing: playlist.songIds.contains(song.id)
+                      ? const Icon(Icons.check_rounded, color: AppTheme.primary)
+                      : const Icon(Icons.add_rounded),
+                  onTap: () => Navigator.of(sheetContext).pop(playlist),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (selectedPlaylist != null && mounted) {
+      final added = _controller.addSongToPlaylist(selectedPlaylist.id, song);
+      if (added && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Added to ${selectedPlaylist.title}.')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
@@ -54,16 +166,18 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
               ? Drawer(
                   backgroundColor: AppTheme.surface,
                   child: SafeArea(
-                    child: SidebarNav(controller: _controller),
-                  ),
-                )
-              : null,
-          endDrawer: !isDesktop
-              ? Drawer(
-                  backgroundColor: AppTheme.surface,
-                  width: 320,
-                  child: SafeArea(
-                    child: RightActivityPanel(controller: _controller),
+                    child: SidebarNav(
+                      controller: _controller,
+                      selectedPlaylistId: _selectedPlaylistId,
+                      onPlaylistSelected: (id) {
+                        Navigator.of(context).pop();
+                        _openPlaylist(id);
+                      },
+                      onCreatePlaylist: () {
+                        Navigator.of(context).pop();
+                        _showCreatePlaylistDialog();
+                      },
+                    ),
                   ),
                 )
               : null,
@@ -76,7 +190,12 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                     children: [
                       // Persistent Sidebar for Desktop and Tablet
                       if (!isMobile)
-                        SidebarNav(controller: _controller),
+                        SidebarNav(
+                          controller: _controller,
+                          selectedPlaylistId: _selectedPlaylistId,
+                          onPlaylistSelected: _openPlaylist,
+                          onCreatePlaylist: _showCreatePlaylistDialog,
+                        ),
 
                       // Main Content View
                       Expanded(
@@ -101,13 +220,20 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
 
                       // Right Activity / Now Playing Panel on Wide Screens
                       if (isDesktop)
-                        RightActivityPanel(controller: _controller),
+                        RightActivityPanel(
+                          controller: _controller,
+                          onOpenLyrics: _showLyricsForCurrentSong,
+                          onPlaySong: _playSongWithLyrics,
+                        ),
                     ],
                   ),
                 ),
 
                 // Persistent Bottom Player
-                BottomPlayerBar(controller: _controller),
+                BottomPlayerBar(
+                  controller: _controller,
+                  onOpenLyrics: _showLyricsForCurrentSong,
+                ),
               ],
             ),
           ),
@@ -172,30 +298,6 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
 
           const SizedBox(width: 12),
 
-          // Open Now Playing Drawer on Mobile/Tablet
-          if (!isDesktop)
-            IconButton(
-              tooltip: 'Now Playing',
-              icon: Container(
-                padding: const EdgeInsets.all(6),
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: _controller.isPlaying
-                      ? AppTheme.primary.withValues(alpha: 0.2)
-                      : AppTheme.cardSurface,
-                  border: Border.all(
-                    color: _controller.isPlaying ? AppTheme.primary : AppTheme.border,
-                  ),
-                ),
-                child: Icon(
-                  Icons.graphic_eq_rounded,
-                  size: 18,
-                  color: _controller.isPlaying ? AppTheme.primary : AppTheme.textSecondary,
-                ),
-              ),
-              onPressed: () => _scaffoldKey.currentState?.openEndDrawer(),
-            ),
-
           // Notifications button
           IconButton(
             tooltip: 'Notifications',
@@ -224,6 +326,7 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
   Widget _buildHomeFeed(bool isMobile) {
     final featuredSong = _controller.allSongs.where((s) => s.isFeatured).firstOrNull ??
         _controller.allSongs.firstOrNull;
+    final playlists = _controller.playlists;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -267,6 +370,7 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
           HeroBanner(
             song: featuredSong,
             controller: _controller,
+            onPlaySong: _playSongWithLyrics,
           ),
           const SizedBox(height: 32),
         ],
@@ -281,36 +385,21 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
 
         // Featured Playlists Carousel
         if (_controller.searchQuery.isEmpty) ...[
-          _buildSectionHeader('Curated Playlists', 'Hand-crafted sonic journeys'),
+          _buildSectionHeader('Featured Playlists', 'Fresh playlists updated for you'),
           const SizedBox(height: 14),
           SizedBox(
             height: 230,
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
-              itemCount: SampleMusicData.playlists.length,
+              itemCount: playlists.length,
               separatorBuilder: (context, index) => const SizedBox(width: 16),
               itemBuilder: (context, index) {
-                final playlist = SampleMusicData.playlists[index];
+                final playlist = playlists[index];
                 return AlbumCard(
                   playlist: playlist,
-                  onTap: () {
-                    _controller.setSelectedGenre(
-                      playlist.title.contains('Lo-Fi')
-                          ? 'Lo-Fi'
-                          : playlist.title.contains('Cyberpunk')
-                              ? 'Cyberpunk'
-                              : playlist.title.contains('Ambient')
-                                  ? 'Ambient'
-                                  : 'Synthwave',
-                    );
-                  },
-                  onPlay: () {
-                    final matchingSong = _controller.allSongs.firstWhere(
-                      (s) => s.genre.toLowerCase() == playlist.title.split(' ').first.toLowerCase(),
-                      orElse: () => _controller.allSongs[index % _controller.allSongs.length],
-                    );
-                    _controller.playSong(matchingSong);
-                  },
+                  isSelected: playlist.id == _selectedPlaylistId,
+                  onTap: () => _openPlaylist(playlist.id),
+                  onPlay: () => _playPlaylistWithLyrics(playlist.id),
                 );
               },
             ),
@@ -318,14 +407,18 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
           const SizedBox(height: 32),
         ],
 
-        // Top Tracks / Filtered Songs Table
+        // Main Songs Section Header
         _buildSectionHeader(
           _controller.searchQuery.isNotEmpty
-              ? 'Search Results ("${_controller.searchQuery}")'
-              : (_controller.selectedGenre == 'All' ? 'Trending Tracks' : '${_controller.selectedGenre} Tracks'),
-          '${_controller.filteredSongs.length} songs available',
+              ? 'Search Results'
+              : _controller.selectedGenre == 'All'
+                  ? 'Trending English Songs'
+                  : '${_controller.selectedGenre} Tracks',
+          '${_controller.filteredSongs.length} tracks available',
         ),
-        const SizedBox(height: 14),
+        const SizedBox(height: 16),
+
+        // Interactive Track Table
         Container(
           decoration: BoxDecoration(
             color: AppTheme.cardSurface,
@@ -335,20 +428,20 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
           child: TrackListView(
             songs: _controller.filteredSongs,
             controller: _controller,
+            onSongTap: _playSongWithLyrics,
+            onAddToPlaylist: _showAddToPlaylistSheet,
           ),
         ),
-
-        const SizedBox(height: 40),
       ],
     );
   }
 
   Widget _buildQuickGrid() {
-    final recentSongs = _controller.allSongs.take(4).toList();
+    final recentSongs = _controller.allSongs.take(6).toList();
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final crossAxisCount = constraints.maxWidth > 700 ? 2 : 1;
+        final crossAxisCount = constraints.maxWidth > 900 ? 3 : 2;
 
         return GridView.builder(
           shrinkWrap: true,
@@ -364,79 +457,79 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
             final song = recentSongs[index];
             final isCurrent = _controller.currentSong?.id == song.id;
 
-            return InkWell(
-              onTap: () => _controller.playSong(song),
-              borderRadius: BorderRadius.circular(10),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: isCurrent
-                      ? AppTheme.primary.withValues(alpha: 0.15)
-                      : AppTheme.cardSurface,
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                    color: isCurrent ? AppTheme.primary : AppTheme.border,
-                    width: 1,
+            return Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(12),
+                onTap: () => _playSongWithLyrics(song),
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: isCurrent ? AppTheme.primary.withValues(alpha: 0.15) : AppTheme.cardSurface,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: isCurrent ? AppTheme.primary.withValues(alpha: 0.5) : AppTheme.border,
+                      width: 1,
+                    ),
                   ),
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 64,
-                      height: 64,
-                      decoration: BoxDecoration(
-                        borderRadius: const BorderRadius.horizontal(left: Radius.circular(10)),
-                        gradient: LinearGradient(colors: song.gradientColors),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(8),
+                          gradient: LinearGradient(
+                            colors: song.gradientColors,
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
+                        ),
+                        child: const Icon(Icons.music_note_rounded, color: Colors.white, size: 24),
                       ),
-                      child: const Center(
-                        child: Icon(Icons.music_note_rounded, color: Colors.white, size: 24),
-                      ),
-                    ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            song.title,
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.bold,
-                              color: isCurrent ? AppTheme.primary : AppTheme.textPrimary,
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              song.title,
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                                color: isCurrent ? AppTheme.primary : AppTheme.textPrimary,
+                              ),
+                              overflow: TextOverflow.ellipsis,
                             ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            song.artist,
-                            style: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ],
+                            const SizedBox(height: 2),
+                            Text(
+                              song.artist,
+                              style: const TextStyle(fontSize: 11, color: AppTheme.textMuted),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.only(right: 12),
-                      child: Container(
-                        padding: const EdgeInsets.all(6),
+                      Container(
+                        width: 32,
+                        height: 32,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          color: isCurrent && _controller.isPlaying
-                              ? AppTheme.primary
-                              : Colors.white10,
+                          color: isCurrent ? AppTheme.primary : Colors.white.withValues(alpha: 0.1),
                         ),
-                        child: Icon(
-                          isCurrent && _controller.isPlaying
-                              ? Icons.pause_rounded
-                              : Icons.play_arrow_rounded,
-                          color: Colors.white,
-                          size: 18,
+                        child: Center(
+                          child: Icon(
+                            isCurrent && _controller.isPlaying
+                                ? Icons.pause_rounded
+                                : Icons.play_arrow_rounded,
+                            color: Colors.white,
+                            size: 18,
+                          ),
                         ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             );
@@ -450,12 +543,12 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildSectionHeader('Explore Genres & Moods', 'Find soundscapes crafted for your day'),
+        _buildSectionHeader('Explore Playlists', 'Find soundscapes crafted for your day'),
         const SizedBox(height: 20),
         GridView.builder(
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
-          itemCount: SampleMusicData.playlists.length,
+          itemCount: _controller.playlists.length,
           gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
             maxCrossAxisExtent: 220,
             mainAxisExtent: 230,
@@ -463,25 +556,12 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
             mainAxisSpacing: 16,
           ),
           itemBuilder: (context, index) {
-            final playlist = SampleMusicData.playlists[index];
+            final playlist = _controller.playlists[index];
             return AlbumCard(
               playlist: playlist,
-              onTap: () {
-                _controller.setSelectedGenre(
-                  playlist.title.contains('Lo-Fi')
-                      ? 'Lo-Fi'
-                      : playlist.title.contains('Cyberpunk')
-                          ? 'Cyberpunk'
-                          : playlist.title.contains('Ambient')
-                              ? 'Ambient'
-                              : 'Synthwave',
-                );
-                _controller.setNavIndex(0);
-              },
-              onPlay: () {
-                final matchingSong = _controller.allSongs[index % _controller.allSongs.length];
-                _controller.playSong(matchingSong);
-              },
+              isSelected: playlist.id == _selectedPlaylistId,
+              onTap: () => _openPlaylist(playlist.id),
+              onPlay: () => _playPlaylistWithLyrics(playlist.id),
             );
           },
         ),
@@ -497,6 +577,8 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
           child: TrackListView(
             songs: _controller.allSongs,
             controller: _controller,
+            onSongTap: _playSongWithLyrics,
+            onAddToPlaylist: _showAddToPlaylistSheet,
           ),
         ),
       ],
@@ -504,11 +586,97 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
   }
 
   Widget _buildLibraryTab() {
+    final selectedPlaylist = _selectedPlaylistId == null
+        ? null
+        : _controller.playlistById(_selectedPlaylistId!);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildSectionHeader('Your Library', '${_controller.allSongs.length} saved songs across 4 playlists'),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            _buildSectionHeader(
+              'Your Library',
+              '${_controller.allSongs.length} saved songs across ${_controller.playlists.length} playlists',
+            ),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.primary,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              onPressed: _showCreatePlaylistDialog,
+              icon: const Icon(Icons.add_rounded),
+              label: const Text('Create playlist'),
+            ),
+          ],
+        ),
         const SizedBox(height: 20),
+        GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          itemCount: _controller.playlists.length,
+          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+            maxCrossAxisExtent: 210,
+            mainAxisExtent: 230,
+            crossAxisSpacing: 16,
+            mainAxisSpacing: 16,
+          ),
+          itemBuilder: (context, index) {
+            final playlist = _controller.playlists[index];
+            return AlbumCard(
+              playlist: playlist,
+              isSelected: playlist.id == _selectedPlaylistId,
+              onTap: () => _selectPlaylist(playlist.id),
+              onPlay: () => _playPlaylistWithLyrics(playlist.id),
+            );
+          },
+        ),
+        const SizedBox(height: 32),
+        if (selectedPlaylist != null) ...[
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              _buildSectionHeader(
+                selectedPlaylist.title,
+                '${selectedPlaylist.trackCount} ${selectedPlaylist.trackCount == 1 ? 'song' : 'songs'}',
+              ),
+              if (_controller.songsForPlaylist(selectedPlaylist.id).isNotEmpty)
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.primary,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  onPressed: () => _playPlaylistWithLyrics(selectedPlaylist.id),
+                  icon: const Icon(Icons.play_arrow_rounded),
+                  label: const Text('Play'),
+                ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Container(
+            decoration: BoxDecoration(
+              color: AppTheme.cardSurface,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: AppTheme.border, width: 1),
+            ),
+            child: TrackListView(
+              songs: _controller.songsForPlaylist(selectedPlaylist.id),
+              controller: _controller,
+              onSongTap: _playSongWithLyrics,
+              onAddToPlaylist: _showAddToPlaylistSheet,
+              emptyTitle: 'No songs in this playlist yet',
+              emptySubtitle: 'Add songs from "All saved songs" below by clicking "+"',
+            ),
+          ),
+          const SizedBox(height: 32),
+        ],
+        _buildSectionHeader('All saved songs', 'Add any song to a playlist'),
+        const SizedBox(height: 14),
         Container(
           decoration: BoxDecoration(
             color: AppTheme.cardSurface,
@@ -518,6 +686,8 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
           child: TrackListView(
             songs: _controller.allSongs,
             controller: _controller,
+            onSongTap: _playSongWithLyrics,
+            onAddToPlaylist: _showAddToPlaylistSheet,
           ),
         ),
       ],
@@ -544,7 +714,7 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                 ),
                 icon: const Icon(Icons.play_arrow_rounded),
                 label: const Text('Play All'),
-                onPressed: () => _controller.playSong(favorites.first),
+                onPressed: () => _playSongWithLyrics(favorites.first),
               ),
           ],
         ),
@@ -558,6 +728,8 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
           child: TrackListView(
             songs: favorites,
             controller: _controller,
+            onSongTap: _playSongWithLyrics,
+            onAddToPlaylist: _showAddToPlaylistSheet,
           ),
         ),
       ],
@@ -584,6 +756,68 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
             fontSize: 13,
             color: AppTheme.textMuted,
           ),
+        ),
+      ],
+    );
+  }
+}
+
+class _CreatePlaylistDialog extends StatefulWidget {
+  const _CreatePlaylistDialog();
+
+  @override
+  State<_CreatePlaylistDialog> createState() => _CreatePlaylistDialogState();
+}
+
+class _CreatePlaylistDialogState extends State<_CreatePlaylistDialog> {
+  late final TextEditingController _nameController;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameController = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final text = _nameController.text.trim();
+    if (text.isNotEmpty) {
+      Navigator.of(context).pop(text);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: AppTheme.surface,
+      title: const Text(
+        'Create playlist',
+        style: TextStyle(color: AppTheme.textPrimary),
+      ),
+      content: TextField(
+        controller: _nameController,
+        autofocus: true,
+        textCapitalization: TextCapitalization.words,
+        style: const TextStyle(color: AppTheme.textPrimary),
+        decoration: const InputDecoration(
+          hintText: 'My new playlist',
+          hintStyle: TextStyle(color: AppTheme.textMuted),
+        ),
+        onSubmitted: (_) => _submit(),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: _submit,
+          child: const Text('Create'),
         ),
       ],
     );

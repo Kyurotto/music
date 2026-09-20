@@ -6,10 +6,12 @@ import 'animated_visualizer.dart';
 
 class BottomPlayerBar extends StatelessWidget {
   final MusicPlayerController controller;
+  final VoidCallback? onOpenLyrics;
 
   const BottomPlayerBar({
     super.key,
     required this.controller,
+    this.onOpenLyrics,
   });
 
   @override
@@ -63,46 +65,54 @@ class BottomPlayerBar extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           child: Row(
             children: [
-              // Artwork
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(8),
-                  gradient: LinearGradient(
-                    colors: song?.gradientColors ?? const [Color(0xFF334155), Color(0xFF1E293B)],
-                  ),
-                ),
-                child: const Icon(Icons.music_note_rounded, color: Colors.white, size: 20),
-              ),
-              const SizedBox(width: 12),
-
-              // Title & Artist
+              // Artwork & Title (Tappable for Lyrics)
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      song?.title ?? 'No track selected',
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: AppTheme.textPrimary,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(8),
+                  onTap: onOpenLyrics,
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(8),
+                          gradient: LinearGradient(
+                            colors: song?.gradientColors ?? const [Color(0xFF334155), Color(0xFF1E293B)],
+                          ),
+                        ),
+                        child: const Icon(Icons.music_note_rounded, color: Colors.white, size: 20),
                       ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    Text(
-                      song?.artist ?? 'Select or add a track',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: AppTheme.textMuted,
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              song?.title ?? 'No track selected',
+                              style: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: AppTheme.textPrimary,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            Text(
+                              song?.artist ?? 'Select or add a track',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: AppTheme.textMuted,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                        ),
                       ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
 
@@ -156,57 +166,67 @@ class BottomPlayerBar extends StatelessWidget {
         children: [
           // Left: Current Track Info (260px)
           SizedBox(
-            width: 240,
+            width: 250,
             child: Row(
               children: [
-                Container(
-                  width: 52,
-                  height: 52,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(10),
-                    gradient: LinearGradient(
-                      colors: song?.gradientColors ?? const [Color(0xFF334155), Color(0xFF1E293B)],
-                    ),
-                    boxShadow: song != null
-                        ? [
-                            BoxShadow(
-                              color: song.gradientColors.first.withValues(alpha: 0.3),
-                              blurRadius: 8,
-                            ),
-                          ]
-                        : null,
-                  ),
-                  child: const Center(
-                    child: Icon(Icons.music_note_rounded, color: Colors.white, size: 24),
-                  ),
-                ),
-                const SizedBox(width: 14),
                 Expanded(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        song?.title ?? 'No track selected',
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                          color: AppTheme.textPrimary,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(10),
+                    onTap: onOpenLyrics,
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 52,
+                          height: 52,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(10),
+                            gradient: LinearGradient(
+                              colors: song?.gradientColors ?? const [Color(0xFF334155), Color(0xFF1E293B)],
+                            ),
+                            boxShadow: song != null
+                                ? [
+                                    BoxShadow(
+                                      color: song.gradientColors.first.withValues(alpha: 0.3),
+                                      blurRadius: 8,
+                                    ),
+                                  ]
+                                : null,
+                          ),
+                          child: const Center(
+                            child: Icon(Icons.music_note_rounded, color: Colors.white, size: 24),
+                          ),
                         ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 3),
-                      Text(
-                        song?.artist ?? 'Select a song to play',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: AppTheme.textSecondary,
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                song?.title ?? 'No track selected',
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.bold,
+                                  color: AppTheme.textPrimary,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              const SizedBox(height: 3),
+                              Text(
+                                song?.artist ?? 'Select a song to play',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: AppTheme.textSecondary,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
+                          ),
                         ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
                 IconButton(
@@ -354,6 +374,15 @@ class BottomPlayerBar extends StatelessWidget {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
+                // Lyrics button
+                if (onOpenLyrics != null)
+                  IconButton(
+                    icon: const Icon(Icons.lyrics_rounded, size: 20, color: AppTheme.textSecondary),
+                    tooltip: 'View Lyrics',
+                    splashRadius: 18,
+                    onPressed: song != null ? onOpenLyrics : null,
+                  ),
+
                 // Mini visualizer
                 SizedBox(
                   width: 32,
