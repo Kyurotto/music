@@ -12,12 +12,13 @@ class AuthGate extends StatelessWidget {
   Widget build(BuildContext context) {
     return StreamBuilder<Object?>(
       stream: AuthService.instance.authChanges,
+      initialData: AuthService.instance.currentUser,
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting && AuthService.instance.currentUser == null) {
+        if (!AuthService.instance.isInitialized && AuthService.instance.currentUser == null) {
           return const Scaffold(body: Center(child: CircularProgressIndicator()));
         }
-        final hasUser = (snapshot.hasData && snapshot.data != null) || AuthService.instance.currentUser != null;
-        return hasUser ? const MusicDashboardView() : const AuthView();
+        final user = snapshot.data ?? AuthService.instance.currentUser;
+        return user != null ? const MusicDashboardView() : const AuthView();
       },
     );
   }
@@ -71,17 +72,6 @@ class _AuthViewState extends State<AuthView> {
     }
   }
 
-  Future<void> _signInAsAdmin() async {
-    setState(() => _isBusy = true);
-    try {
-      await AuthService.instance.signInAsAdmin();
-    } catch (error) {
-      _showError('Unable to sign in as admin: $error');
-    } finally {
-      if (mounted) setState(() => _isBusy = false);
-    }
-  }
-
   Future<void> _socialSignIn(Future<void> Function() action) async {
     setState(() => _isBusy = true);
     try {
@@ -112,7 +102,7 @@ class _AuthViewState extends State<AuthView> {
       case 'invalid-email':
         return 'Enter a valid email address.';
       case 'configuration-not-found':
-        return error.message ?? 'Firebase Auth is not configured. Tap "Continue as Admin" to proceed.';
+        return error.message ?? 'Authentication failed. Please verify your credentials and try again.';
       default:
         return error.message ?? 'Authentication failed. Please try again.';
     }
@@ -182,16 +172,6 @@ class _AuthViewState extends State<AuthView> {
                     ElevatedButton(
                       onPressed: _isBusy ? null : _submit,
                       child: Text(_isRegistering ? 'Create account' : 'Sign in'),
-                    ),
-                    const SizedBox(height: 12),
-                    OutlinedButton.icon(
-                      onPressed: _isBusy ? null : _signInAsAdmin,
-                      icon: const Icon(Icons.shield_rounded, color: AppTheme.primary),
-                      label: const Text('Continue as Admin'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: AppTheme.primary,
-                        side: const BorderSide(color: AppTheme.primary),
-                      ),
                     ),
                     const SizedBox(height: 16),
                     const Row(children: [Expanded(child: Divider()), Padding(padding: EdgeInsets.symmetric(horizontal: 12), child: Text('OR')), Expanded(child: Divider())]),

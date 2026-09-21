@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../auth/auth_service.dart';
 import '../controllers/music_player_controller.dart';
+import '../data/local_database.dart';
 import '../theme/app_theme.dart';
 import 'auth_gate.dart';
 
@@ -58,6 +59,70 @@ class _SettingsViewState extends State<SettingsView> {
     'Vocal Booster',
   ];
 
+  @override
+  void initState() {
+    super.initState();
+    _loadSettings();
+  }
+
+  Future<void> _loadSettings() async {
+    try {
+      final settings = await LocalDatabase.instance.getAllSettings();
+      if (!mounted) return;
+      setState(() {
+        if (settings.containsKey('crossfade')) {
+          _crossfadeSeconds = double.tryParse(settings['crossfade']!) ?? _crossfadeSeconds;
+        }
+        if (settings.containsKey('gapless_playback')) {
+          _gaplessPlayback = settings['gapless_playback'] == 'true';
+        }
+        if (settings.containsKey('automix')) {
+          _automix = settings['automix'] == 'true';
+        }
+        if (settings.containsKey('normalize_volume')) {
+          _normalizeVolume = settings['normalize_volume'] == 'true';
+        }
+        if (settings.containsKey('mono_audio')) {
+          _monoAudio = settings['mono_audio'] == 'true';
+        }
+        if (settings.containsKey('autoplay')) {
+          _autoplay = settings['autoplay'] == 'true';
+        }
+        if (settings.containsKey('streaming_quality')) {
+          _streamingQuality = settings['streaming_quality']!;
+        }
+        if (settings.containsKey('download_quality')) {
+          _downloadQuality = settings['download_quality']!;
+        }
+        if (settings.containsKey('equalizer_preset')) {
+          _equalizerPreset = settings['equalizer_preset']!;
+        }
+        if (settings.containsKey('canvas_animation')) {
+          _canvasAnimation = settings['canvas_animation'] == 'true';
+        }
+        if (settings.containsKey('auto_lyrics')) {
+          _autoLyrics = settings['auto_lyrics'] == 'true';
+        }
+        if (settings.containsKey('allow_explicit')) {
+          _allowExplicit = settings['allow_explicit'] == 'true';
+        }
+        if (settings.containsKey('cache_size_mb')) {
+          _cacheSizeMb = int.tryParse(settings['cache_size_mb']!) ?? _cacheSizeMb;
+        }
+      });
+    } catch (e) {
+      debugPrint('Error loading settings: $e');
+    }
+  }
+
+  Future<void> _saveSetting(String key, String value) async {
+    try {
+      await LocalDatabase.instance.saveSetting(key, value);
+    } catch (e) {
+      debugPrint('Error saving setting $key: $e');
+    }
+  }
+
   Future<void> _showQualityPicker({required bool isStreaming}) async {
     final current = isStreaming ? _streamingQuality : _downloadQuality;
     final selected = await showModalBottomSheet<String>(
@@ -114,6 +179,10 @@ class _SettingsViewState extends State<SettingsView> {
           _downloadQuality = selected;
         }
       });
+      _saveSetting(
+        isStreaming ? 'streaming_quality' : 'download_quality',
+        selected,
+      );
     }
   }
 
@@ -170,6 +239,7 @@ class _SettingsViewState extends State<SettingsView> {
 
     if (selected != null && mounted) {
       setState(() => _equalizerPreset = selected);
+      _saveSetting('equalizer_preset', selected);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Equalizer set to "$selected"')),
       );
@@ -181,20 +251,37 @@ class _SettingsViewState extends State<SettingsView> {
       context: context,
       builder: (dialogContext) => AlertDialog(
         backgroundColor: AppTheme.surface,
-        title: const Text('Clear audio cache?', style: TextStyle(color: AppTheme.textPrimary)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: const BorderSide(color: AppTheme.border),
+        ),
+        title: const Text('Clear audio cache?', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.bold)),
         content: const Text(
           'This will free up storage space. Your playlists, library tracks, and account data will NOT be deleted.',
-          style: TextStyle(color: AppTheme.textSecondary),
+          style: TextStyle(color: AppTheme.textSecondary, height: 1.4),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel'),
+            child: const Text('Cancel', style: TextStyle(color: AppTheme.textSecondary)),
           ),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.primary,
+              foregroundColor: Colors.white,
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
             onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Clear'),
+            child: const Text(
+              'Clear',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
           ),
         ],
       ),
@@ -203,9 +290,12 @@ class _SettingsViewState extends State<SettingsView> {
     if (confirm == true && mounted) {
       final freed = _cacheSizeMb;
       setState(() => _cacheSizeMb = 0);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Cache cleared! Freed $freed MB of storage.')),
-      );
+      await _saveSetting('cache_size_mb', '0');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Cache cleared! Freed $freed MB of storage.')),
+        );
+      }
     }
   }
 
@@ -353,6 +443,7 @@ class _SettingsViewState extends State<SettingsView> {
                             max: 12,
                             divisions: 12,
                             onChanged: (val) => setState(() => _crossfadeSeconds = val),
+                            onChangeEnd: (val) => _saveSetting('crossfade', val.toString()),
                           ),
                         ),
                       ],
@@ -365,7 +456,10 @@ class _SettingsViewState extends State<SettingsView> {
                     title: 'Gapless Playback',
                     subtitle: 'Seamless playback of songs with no silent gaps',
                     value: _gaplessPlayback,
-                    onChanged: (val) => setState(() => _gaplessPlayback = val),
+                    onChanged: (val) {
+                      setState(() => _gaplessPlayback = val);
+                      _saveSetting('gapless_playback', val.toString());
+                    },
                   ),
                   const Divider(height: 1, color: AppTheme.border),
 
@@ -374,7 +468,10 @@ class _SettingsViewState extends State<SettingsView> {
                     title: 'Automix',
                     subtitle: 'Allow smooth AI-curated transitions between tracks',
                     value: _automix,
-                    onChanged: (val) => setState(() => _automix = val),
+                    onChanged: (val) {
+                      setState(() => _automix = val);
+                      _saveSetting('automix', val.toString());
+                    },
                   ),
                   const Divider(height: 1, color: AppTheme.border),
 
@@ -383,7 +480,10 @@ class _SettingsViewState extends State<SettingsView> {
                     title: 'Normalize Volume',
                     subtitle: 'Set the same volume level for all audio tracks',
                     value: _normalizeVolume,
-                    onChanged: (val) => setState(() => _normalizeVolume = val),
+                    onChanged: (val) {
+                      setState(() => _normalizeVolume = val);
+                      _saveSetting('normalize_volume', val.toString());
+                    },
                   ),
                   const Divider(height: 1, color: AppTheme.border),
 
@@ -392,7 +492,10 @@ class _SettingsViewState extends State<SettingsView> {
                     title: 'Mono Audio',
                     subtitle: 'Makes the left and right speakers play the same audio',
                     value: _monoAudio,
-                    onChanged: (val) => setState(() => _monoAudio = val),
+                    onChanged: (val) {
+                      setState(() => _monoAudio = val);
+                      _saveSetting('mono_audio', val.toString());
+                    },
                   ),
                   const Divider(height: 1, color: AppTheme.border),
 
@@ -401,7 +504,10 @@ class _SettingsViewState extends State<SettingsView> {
                     title: 'Autoplay',
                     subtitle: 'Keep listening to similar songs when your queue ends',
                     value: _autoplay,
-                    onChanged: (val) => setState(() => _autoplay = val),
+                    onChanged: (val) {
+                      setState(() => _autoplay = val);
+                      _saveSetting('autoplay', val.toString());
+                    },
                   ),
                 ]),
                 const SizedBox(height: 24),
@@ -439,21 +545,30 @@ class _SettingsViewState extends State<SettingsView> {
                     title: 'Animated Audio Wave Visualizer',
                     subtitle: 'Show live frequency wave effect in the player bar',
                     value: _canvasAnimation,
-                    onChanged: (val) => setState(() => _canvasAnimation = val),
+                    onChanged: (val) {
+                      setState(() => _canvasAnimation = val);
+                      _saveSetting('canvas_animation', val.toString());
+                    },
                   ),
                   const Divider(height: 1, color: AppTheme.border),
                   _buildSwitchTile(
                     title: 'Show Lyrics Automatically',
                     subtitle: 'Pop up the Spotify-style lyrics sheet when starting a song',
                     value: _autoLyrics,
-                    onChanged: (val) => setState(() => _autoLyrics = val),
+                    onChanged: (val) {
+                      setState(() => _autoLyrics = val);
+                      _saveSetting('auto_lyrics', val.toString());
+                    },
                   ),
                   const Divider(height: 1, color: AppTheme.border),
                   _buildSwitchTile(
                     title: 'Explicit Content Filter',
                     subtitle: 'Allow playback of explicit-rated content',
                     value: _allowExplicit,
-                    onChanged: (val) => setState(() => _allowExplicit = val),
+                    onChanged: (val) {
+                      setState(() => _allowExplicit = val);
+                      _saveSetting('allow_explicit', val.toString());
+                    },
                   ),
                 ]),
                 const SizedBox(height: 24),
@@ -498,7 +613,7 @@ class _SettingsViewState extends State<SettingsView> {
                           children: [
                             _StorageLegend(color: AppTheme.primary, label: 'Audio Cache'),
                             SizedBox(width: 16),
-                            _StorageLegend(color: Colors.blueAccent, label: 'Playlists & DB'),
+                            _StorageLegend(color: Colors.blueAccent, label: 'Playlists & Tracks'),
                             SizedBox(width: 16),
                             _StorageLegend(color: AppTheme.border, label: 'Free Space'),
                           ],
@@ -507,30 +622,19 @@ class _SettingsViewState extends State<SettingsView> {
                         OutlinedButton.icon(
                           onPressed: _cacheSizeMb > 0 ? _clearCache : null,
                           icon: const Icon(Icons.delete_sweep_outlined, size: 18),
-                          label: const Text('Clear Audio Cache'),
+                          label: Text(_cacheSizeMb > 0 ? 'Clear Audio Cache' : 'Cache is Clean (0 MB)'),
                           style: OutlinedButton.styleFrom(
-                            foregroundColor: AppTheme.textPrimary,
-                            side: const BorderSide(color: AppTheme.border),
+                            foregroundColor: _cacheSizeMb > 0 ? AppTheme.textPrimary : AppTheme.textMuted,
+                            side: BorderSide(color: _cacheSizeMb > 0 ? AppTheme.border : AppTheme.border.withValues(alpha: 0.3)),
                           ),
                         ),
                       ],
                     ),
                   ),
                 ]),
-                const SizedBox(height: 24),
-
-                // 6. About & System Info Section
-                _buildSectionHeader(Icons.info_outline_rounded, 'About'),
-                _buildCard([
-                  const ListTile(
-                    title: Text('Version', style: TextStyle(fontSize: 14, color: AppTheme.textPrimary)),
-                    subtitle: Text('Pulse Music v2.4.0 (Build 2026.09)', style: TextStyle(fontSize: 12, color: AppTheme.textMuted)),
-                    trailing: Text('Up to date', style: TextStyle(fontSize: 12, color: AppTheme.primary)),
-                  ),
-                ]),
                 const SizedBox(height: 32),
 
-                // 7. Log Out Button (Spotify Style)
+                // 6. Log Out Button (Spotify Style)
                 Container(
                   margin: const EdgeInsets.symmetric(horizontal: 16),
                   child: OutlinedButton.icon(

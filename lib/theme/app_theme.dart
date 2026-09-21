@@ -52,10 +52,20 @@ class AppTheme {
       primaryColor: primary,
       colorScheme: const ColorScheme.dark(
         primary: primary,
+        onPrimary: Colors.white,
         secondary: secondary,
+        onSecondary: Colors.white,
         surface: surface,
+        onSurface: textPrimary,
       ),
       fontFamily: 'Roboto',
+      elevatedButtonTheme: ElevatedButtonThemeData(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: primary,
+          foregroundColor: Colors.white,
+          textStyle: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+      ),
       appBarTheme: const AppBarTheme(
         backgroundColor: Colors.transparent,
         elevation: 0,

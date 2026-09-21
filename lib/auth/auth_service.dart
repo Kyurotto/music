@@ -52,6 +52,9 @@ class AuthService {
   final _authController = StreamController<Object?>.broadcast();
   Object? _currentUser;
   bool _listenerStarted = false;
+  bool _isInitialized = false;
+
+  bool get isInitialized => _isInitialized;
 
   Stream<Object?> get authChanges {
     _initAuthListener();
@@ -107,26 +110,39 @@ class AuthService {
             role: localData['role'] as String? ?? 'user',
             photoUrl: localData['photo_url'] as String?,
           );
+          _isInitialized = true;
           _authController.add(_currentUser);
           return;
         }
       }
 
       // If no local session, listen to Firebase Auth if initialized
-      _auth?.authStateChanges().listen((user) {
-        if (_currentUser is! LocalUser) {
-          _currentUser = user;
-          _authController.add(user);
-        }
-      });
+      final auth = _auth;
+      if (auth != null) {
+        _currentUser = auth.currentUser;
+        auth.authStateChanges().listen((user) {
+          if (_currentUser is! LocalUser) {
+            _currentUser = user;
+            _authController.add(user);
+          }
+        });
+      }
+      _isInitialized = true;
+      _authController.add(_currentUser);
     }).catchError((e) {
       debugPrint('[AuthService] Init local session error: $e');
-      _auth?.authStateChanges().listen((user) {
-        if (_currentUser is! LocalUser) {
-          _currentUser = user;
-          _authController.add(user);
-        }
-      });
+      _isInitialized = true;
+      final auth = _auth;
+      if (auth != null) {
+        _currentUser = auth.currentUser;
+        auth.authStateChanges().listen((user) {
+          if (_currentUser is! LocalUser) {
+            _currentUser = user;
+            _authController.add(user);
+          }
+        });
+      }
+      _authController.add(_currentUser);
     });
   }
 
@@ -324,6 +340,7 @@ class AuthService {
   Future<void> signOut() async {
     await LocalDatabase.instance.clearActiveSession();
     _currentUser = null;
+    _isInitialized = true;
     _authController.add(null);
     try {
       await _auth?.signOut();
