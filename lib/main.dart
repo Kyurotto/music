@@ -6,7 +6,6 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'data/local_database.dart';
 import 'theme/app_theme.dart';
-import 'views/music_dashboard_view.dart';
 import 'views/auth_gate.dart';
 
 Future<void> main() async {
@@ -20,11 +19,19 @@ Future<void> main() async {
   }
 
   await LocalDatabase.instance.initialize();
-  final firebaseEnabled = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
-  if (firebaseEnabled) {
-    await Firebase.initializeApp();
+  // Initialize Firebase on every platform so Google/Facebook OAuth can
+  // return the real accurate profile. Guarded: local auth still works
+  // when Firebase options are missing (e.g. desktop without config).
+  try {
+    if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+      await Firebase.initializeApp();
+    } else if (kIsWeb || Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      await Firebase.initializeApp();
+    }
+  } catch (e) {
+    debugPrint('[MusicApp] Firebase not configured, using local auth: $e');
   }
-  runApp(MusicApp(firebaseEnabled: firebaseEnabled));
+  runApp(const MusicApp(firebaseEnabled: true));
 }
 
 class MusicApp extends StatelessWidget {
@@ -38,7 +45,9 @@ class MusicApp extends StatelessWidget {
       title: 'Pulse Music Player & Dashboard',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.darkTheme,
-      home: firebaseEnabled ? const AuthGate() : const MusicDashboardView(),
+      // Always go through AuthGate: local session works on every platform
+      // (desktop included). Firebase is only used when initialized.
+      home: const AuthGate(),
     );
   }
 }

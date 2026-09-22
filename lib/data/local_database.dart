@@ -247,6 +247,23 @@ class LocalDatabase {
     );
   }
 
+  Future<List<Map<String, Object?>>> getUsersByProvider(String provider) async {
+    final db = await database;
+    return db.query(
+      'users',
+      where: 'auth_provider = ?',
+      whereArgs: [provider],
+      orderBy: 'last_login_at DESC',
+    );
+  }
+
+  /// Deletes one user row plus any session pointing at it. Best-effort.
+  Future<void> deleteUser(String id) async {
+    final db = await database;
+    await db.delete('user_sessions', where: 'user_id = ?', whereArgs: [id]);
+    await db.delete('users', where: 'id = ?', whereArgs: [id]);
+  }
+
   Future<void> saveActiveSession(String userId) async {
     final db = await database;
     final now = DateTime.now().millisecondsSinceEpoch;
