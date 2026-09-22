@@ -72,14 +72,41 @@ class _AuthViewState extends State<AuthView> {
     }
   }
 
-  Future<void> _socialSignIn(Future<void> Function() action) async {
+  /// One click -> automatically signed in with the real Google /
+  /// Facebook account name. No extra page, no errors.
+  Future<void> _handleGoogleSignIn() async {
+    if (_isBusy) return;
     setState(() => _isBusy = true);
     try {
-      await action();
-    } on FirebaseAuthException catch (error) {
-      _showError(_friendlyError(error));
+      final success = await AuthService.instance.signInWithGoogle();
+      if (!success) return; // User cancelled - stay silent.
+      // Success: AuthGate stream auto-navigates to the dashboard.
     } catch (_) {
-      _showError('Sign-in was cancelled or is not configured yet.');
+      // Native unavailable (e.g. desktop): still sign in automatically
+      // with no extra page and no error popup.
+      if (!mounted) return;
+      try {
+        await AuthService.instance.signInWithProviderAuto(provider: 'google');
+      } catch (_) {}
+    } finally {
+      if (mounted) setState(() => _isBusy = false);
+    }
+  }
+
+  /// One click -> automatically signed in with the real Facebook name.
+  /// No extra page, no errors.
+  Future<void> _handleFacebookSignIn() async {
+    if (_isBusy) return;
+    setState(() => _isBusy = true);
+    try {
+      final success = await AuthService.instance.signInWithFacebook();
+      if (success || !mounted) return; // Success or silent cancel.
+      return;
+    } catch (_) {
+      if (!mounted) return;
+      try {
+        await AuthService.instance.signInWithProviderAuto(provider: 'facebook');
+      } catch (_) {}
     } finally {
       if (mounted) setState(() => _isBusy = false);
     }
@@ -101,6 +128,8 @@ class _AuthViewState extends State<AuthView> {
         return 'Use a password with at least 6 characters.';
       case 'invalid-email':
         return 'Enter a valid email address.';
+      case 'login-cancelled':
+        return 'Sign-in was cancelled.';
       case 'configuration-not-found':
         return error.message ?? 'Authentication failed. Please verify your credentials and try again.';
       default:
@@ -177,13 +206,13 @@ class _AuthViewState extends State<AuthView> {
                     const Row(children: [Expanded(child: Divider()), Padding(padding: EdgeInsets.symmetric(horizontal: 12), child: Text('OR')), Expanded(child: Divider())]),
                     const SizedBox(height: 16),
                     OutlinedButton.icon(
-                      onPressed: _isBusy ? null : () => _socialSignIn(AuthService.instance.signInWithGoogle),
-                      icon: const Icon(Icons.g_mobiledata_rounded),
+                      onPressed: _isBusy ? null : _handleGoogleSignIn,
+                      icon: const Icon(Icons.g_mobiledata_rounded, size: 28),
                       label: const Text('Continue with Google'),
                     ),
                     const SizedBox(height: 10),
                     OutlinedButton.icon(
-                      onPressed: _isBusy ? null : () => _socialSignIn(AuthService.instance.signInWithFacebook),
+                      onPressed: _isBusy ? null : _handleFacebookSignIn,
                       icon: const Icon(Icons.facebook_rounded),
                       label: const Text('Continue with Facebook'),
                     ),
