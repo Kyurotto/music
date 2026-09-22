@@ -9,7 +9,7 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(() => tester.view.resetPhysicalSize());
 
-    await tester.pumpWidget(const MusicApp());
+    await tester.pumpWidget(const MusicApp(firebaseEnabled: false));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
 
@@ -34,7 +34,7 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(() => tester.view.resetPhysicalSize());
 
-    await tester.pumpWidget(const MusicApp());
+    await tester.pumpWidget(const MusicApp(firebaseEnabled: false));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
 
@@ -50,7 +50,7 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(() => tester.view.resetPhysicalSize());
 
-    await tester.pumpWidget(const MusicApp());
+    await tester.pumpWidget(const MusicApp(firebaseEnabled: false));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
 
