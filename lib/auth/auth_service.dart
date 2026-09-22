@@ -32,12 +32,29 @@ class AuthService {
   }
 
   static final instance = AuthService._();
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+
+  FirebaseAuth? get _auth {
+    try {
+      return FirebaseAuth.instance;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  FirebaseFirestore? get _firestore {
+    try {
+      return FirebaseFirestore.instance;
+    } catch (_) {
+      return null;
+    }
+  }
 
   final _authController = StreamController<Object?>.broadcast();
   Object? _currentUser;
   bool _listenerStarted = false;
+  bool _isInitialized = false;
+
+  bool get isInitialized => _isInitialized;
 
   Stream<Object?> get authChanges {
     _initAuthListener();
@@ -45,6 +62,37 @@ class AuthService {
   }
 
   Object? get currentUser => _currentUser;
+
+  String get userDisplayName {
+    final user = _currentUser;
+    if (user is LocalUser) return user.displayName;
+    if (user is User) return user.displayName ?? user.email?.split('@').first ?? 'System Administrator';
+    return 'System Administrator';
+  }
+
+  String get userEmail {
+    final user = _currentUser;
+    if (user is LocalUser) return user.email;
+    if (user is User) return user.email ?? 'admin@pulsemusic.app';
+    return 'admin@pulsemusic.app';
+  }
+
+  String get userRole {
+    final user = _currentUser;
+    if (user is LocalUser) return user.role;
+    if (user is User) return 'User';
+    return 'admin';
+  }
+
+  String get userInitials {
+    final name = userDisplayName.trim();
+    if (name.isEmpty) return 'PM';
+    final parts = name.split(' ');
+    if (parts.length >= 2 && parts[0].isNotEmpty && parts[1].isNotEmpty) {
+      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+    }
+    return name.substring(0, name.length >= 2 ? 2 : 1).toUpperCase();
+  }
 
   void _initAuthListener() {
     if (_listenerStarted) return;
@@ -62,26 +110,39 @@ class AuthService {
             role: localData['role'] as String? ?? 'user',
             photoUrl: localData['photo_url'] as String?,
           );
+          _isInitialized = true;
           _authController.add(_currentUser);
           return;
         }
       }
 
-      // If no local session, listen to Firebase Auth
-      _auth.authStateChanges().listen((user) {
-        if (_currentUser is! LocalUser) {
-          _currentUser = user;
-          _authController.add(user);
-        }
-      });
+      // If no local session, listen to Firebase Auth if initialized
+      final auth = _auth;
+      if (auth != null) {
+        _currentUser = auth.currentUser;
+        auth.authStateChanges().listen((user) {
+          if (_currentUser is! LocalUser) {
+            _currentUser = user;
+            _authController.add(user);
+          }
+        });
+      }
+      _isInitialized = true;
+      _authController.add(_currentUser);
     }).catchError((e) {
       debugPrint('[AuthService] Init local session error: $e');
-      _auth.authStateChanges().listen((user) {
-        if (_currentUser is! LocalUser) {
-          _currentUser = user;
-          _authController.add(user);
-        }
-      });
+      _isInitialized = true;
+      final auth = _auth;
+      if (auth != null) {
+        _currentUser = auth.currentUser;
+        auth.authStateChanges().listen((user) {
+          if (_currentUser is! LocalUser) {
+            _currentUser = user;
+            _authController.add(user);
+          }
+        });
+      }
+      _authController.add(_currentUser);
     });
   }
 
@@ -123,8 +184,25 @@ class AuthService {
     required String password,
   }) async {
     final cleanEmail = email.trim().toLowerCase();
+    final auth = _auth;
+    if (auth == null) {
+      final userId = 'usr-${DateTime.now().millisecondsSinceEpoch}';
+      await LocalDatabase.instance.saveUser(
+        id: userId,
+        email: cleanEmail,
+        displayName: name.trim(),
+        role: 'user',
+      );
+      final user = await LocalDatabase.instance.getUserById(userId);
+      if (user != null) {
+        await _loginAsLocalUser(user);
+        return;
+      }
+      throw FirebaseAuthException(code: 'firebase-unavailable');
+    }
+
     try {
-      final credential = await _auth.createUserWithEmailAndPassword(
+      final credential = await auth.createUserWithEmailAndPassword(
         email: cleanEmail,
         password: password,
       );
@@ -167,8 +245,21 @@ class AuthService {
       return;
     }
 
+    final auth = _auth;
+    if (auth == null) {
+      final localUser = await LocalDatabase.instance.getUserByEmail(cleanEmail);
+      if (localUser != null) {
+        await _loginAsLocalUser(localUser);
+        return;
+      }
+      throw FirebaseAuthException(
+        code: 'configuration-not-found',
+        message: 'Firebase is not initialized. Tap "Continue as Admin" to sign in.',
+      );
+    }
+
     try {
-      final credential = await _auth.signInWithEmailAndPassword(
+      final credential = await auth.signInWithEmailAndPassword(
         email: cleanEmail,
         password: password,
       );
@@ -206,36 +297,39 @@ class AuthService {
   }
 
   Future<void> signInWithGoogle() async {
+    final auth = _auth;
+    if (auth == null) throw FirebaseAuthException(code: 'firebase-unavailable');
     final googleUser = await GoogleSignIn.instance.authenticate();
     final googleAuth = googleUser.authentication;
     final credential = GoogleAuthProvider.credential(idToken: googleAuth.idToken);
-    final userCredential = await _auth.signInWithCredential(credential);
+    final userCredential = await auth.signInWithCredential(credential);
     _currentUser = userCredential.user;
     _authController.add(userCredential.user);
-    _upsertUser(userCredential.user!, provider: 'google').catchError((e) {
-      debugPrint('[AuthService] Firestore sync skipped: $e');
-    });
+    await _upsertUser(userCredential.user!, provider: 'google');
   }
 
   Future<void> signInWithFacebook() async {
+    final auth = _auth;
+    if (auth == null) throw FirebaseAuthException(code: 'firebase-unavailable');
     final result = await FacebookAuth.instance.login();
     final accessToken = result.accessToken;
     if (accessToken == null) {
       throw FirebaseAuthException(code: 'facebook-login-cancelled');
     }
     final credential = FacebookAuthProvider.credential(accessToken.tokenString);
-    final userCredential = await _auth.signInWithCredential(credential);
+    final userCredential = await auth.signInWithCredential(credential);
     _currentUser = userCredential.user;
     _authController.add(userCredential.user);
-    _upsertUser(userCredential.user!, provider: 'facebook').catchError((e) {
-      debugPrint('[AuthService] Firestore sync skipped: $e');
-    });
+    await _upsertUser(userCredential.user!, provider: 'facebook');
   }
 
   Future<void> recordActivity({required String screen, String? trackTitle}) async {
-    final user = _auth.currentUser;
+    final auth = _auth;
+    final firestore = _firestore;
+    if (auth == null || firestore == null) return;
+    final user = auth.currentUser;
     if (user == null) return;
-    await _firestore.collection('user_activity').doc(user.uid).set({
+    await firestore.collection('user_activity').doc(user.uid).set({
       'userId': user.uid,
       'screen': screen,
       'trackTitle': trackTitle,
@@ -246,16 +340,19 @@ class AuthService {
   Future<void> signOut() async {
     await LocalDatabase.instance.clearActiveSession();
     _currentUser = null;
+    _isInitialized = true;
     _authController.add(null);
     try {
-      await _auth.signOut();
+      await _auth?.signOut();
     } catch (e) {
       debugPrint('[AuthService] Firebase signOut: $e');
     }
   }
 
   Future<void> _upsertUser(User user, {required String provider}) async {
-    final document = _firestore.collection('users').doc(user.uid);
+    final firestore = _firestore;
+    if (firestore == null) return;
+    final document = firestore.collection('users').doc(user.uid);
     final snapshot = await document.get();
     await document.set({
       'email': user.email,

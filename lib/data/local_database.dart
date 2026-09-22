@@ -18,7 +18,13 @@ class LocalDatabase {
   Database? _database;
 
   Future<void> initialize() async {
-    await database;
+    final db = await database;
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS app_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      )
+    ''');
     await seedAdminUserIfNeeded();
   }
 
@@ -341,6 +347,51 @@ class LocalDatabase {
   Future<List<Map<String, Object?>>> getEmployees() async {
     final db = await database;
     return db.query('employees', orderBy: 'employee_code COLLATE NOCASE ASC');
+  }
+
+  Future<void> saveSetting(String key, String value) async {
+    final db = await database;
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS app_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      )
+    ''');
+    await db.insert(
+      'app_settings',
+      {'key': key, 'value': value},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<String?> getSetting(String key) async {
+    final db = await database;
+    final results = await db.query(
+      'app_settings',
+      where: 'key = ?',
+      whereArgs: [key],
+      limit: 1,
+    );
+    if (results.isNotEmpty) {
+      return results.first['value'] as String?;
+    }
+    return null;
+  }
+
+  Future<Map<String, String>> getAllSettings() async {
+    final db = await database;
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS app_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      )
+    ''');
+    final results = await db.query('app_settings');
+    final map = <String, String>{};
+    for (final row in results) {
+      map[row['key'] as String] = row['value'] as String;
+    }
+    return map;
   }
 
   Future<void> close() async {

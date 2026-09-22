@@ -9,6 +9,7 @@ import '../widgets/track_list_view.dart';
 import '../widgets/right_panel.dart';
 import '../widgets/bottom_player_bar.dart';
 import '../widgets/spotify_lyrics_sheet.dart';
+import 'settings_view.dart';
 
 class MusicDashboardView extends StatefulWidget {
   const MusicDashboardView({super.key});
@@ -303,6 +304,13 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
             tooltip: 'Notifications',
             icon: const Icon(Icons.notifications_none_rounded, size: 22, color: AppTheme.textSecondary),
             onPressed: () {},
+          ),
+
+          // Settings button
+          IconButton(
+            tooltip: 'Settings',
+            icon: const Icon(Icons.settings_outlined, size: 22, color: AppTheme.textSecondary),
+            onPressed: () => SettingsView.show(context, controller: _controller),
           ),
         ],
       ),
