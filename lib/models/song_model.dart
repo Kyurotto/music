@@ -5,15 +5,24 @@ class Song {
   final String title;
   final String artist;
   final String album;
-  final Duration duration;
+
+  /// Mutable so a resolved full-length stream can correct the Spotify
+  /// metadata duration (or a 30s clip can report its real length).
+  Duration duration;
   final String genre;
-  final String imageUrl;
+  String imageUrl;
   final List<Color> gradientColors;
   final String plays;
-  final List<String> lyrics;
-  final String audioUrl;
+  List<String> lyrics;
+  String audioUrl;
   final bool isFeatured;
   bool isLiked;
+  bool isPreview;
+
+  /// True when audio comes from YouTube (URLs expire after a few hours —
+  /// the player resolves a fresh one when a saved URL fails to load).
+  bool isYouTubeAudio;
+  bool isEnrichingLyrics;
 
   Song({
     required this.id,
@@ -29,7 +38,22 @@ class Song {
     this.audioUrl = '',
     this.isFeatured = false,
     this.isLiked = false,
+    this.isPreview = false,
+    this.isYouTubeAudio = false,
+    this.isEnrichingLyrics = false,
   });
+
+  /// True when this song can actually produce sound (local asset or URL).
+  bool get hasAudio => audioUrl.isNotEmpty;
+
+  /// Imported Spotify metadata starts silent — only true until enrichment
+  /// resolves a playable preview URL.
+  bool get isSilentPlaceholder => id.startsWith('spotify-') && !hasAudio;
+
+  /// True when an imported track resolved to a full-length stream
+  /// (not a 30-second preview clip).
+  bool get isFullTrack =>
+      id.startsWith('spotify-') && hasAudio && !isPreview;
 
   String get formattedDuration {
     final minutes = duration.inMinutes;
@@ -41,6 +65,42 @@ class Song {
     final minutes = d.inMinutes;
     final seconds = d.inSeconds % 60;
     return '$minutes:${seconds.toString().padLeft(2, '0')}';
+  }
+
+  /// Which lyric line should be active for this playback position.
+  ///
+  /// Plain (untimed) lyric lines are spread evenly across the track so the
+  /// sheet can auto-track without synced timestamps. Returns 0 when empty
+  /// or when the duration is unknown.
+  static int lyricsLineIndexForProgress(
+    List<String> lyrics,
+    Duration position,
+    Duration total,
+  ) {
+    if (lyrics.isEmpty || total <= Duration.zero) return 0;
+    final posUs = position.inMicroseconds;
+    final totalUs = total.inMicroseconds;
+    if (posUs <= 0) return 0;
+    final progress = posUs / totalUs;
+    if (progress >= 1) return lyrics.length - 1;
+    final idx = (progress * lyrics.length).floor();
+    if (idx < 0) return 0;
+    if (idx >= lyrics.length) return lyrics.length - 1;
+    return idx;
+  }
+
+  /// Playback position for a tapped lyric line (inverse of
+  /// [lyricsLineIndexForProgress]) so tapping a line seeks the player.
+  static Duration positionForLyricsLine(
+    List<String> lyrics,
+    int lineIndex,
+    Duration total,
+  ) {
+    if (lyrics.isEmpty || total <= Duration.zero) return Duration.zero;
+    final clamped = lineIndex.clamp(0, lyrics.length - 1).toInt();
+    final micros =
+        (total.inMicroseconds * clamped) ~/ lyrics.length;
+    return Duration(microseconds: micros);
   }
 }
 

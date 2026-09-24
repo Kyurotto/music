@@ -9,6 +9,7 @@ class SidebarNav extends StatelessWidget {
   final MusicPlayerController controller;
   final ValueChanged<String>? onPlaylistSelected;
   final VoidCallback? onCreatePlaylist;
+  final VoidCallback? onImportSpotify;
   final String? selectedPlaylistId;
 
   const SidebarNav({
@@ -16,6 +17,7 @@ class SidebarNav extends StatelessWidget {
     required this.controller,
     this.onPlaylistSelected,
     this.onCreatePlaylist,
+    this.onImportSpotify,
     this.selectedPlaylistId,
   });
 
@@ -147,23 +149,40 @@ class SidebarNav extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text(
-                  'PLAYLISTS',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 1.2,
-                    color: AppTheme.textMuted,
+                const Expanded(
+                  child: Text(
+                    'PLAYLISTS',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1.2,
+                      color: AppTheme.textMuted,
+                    ),
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                IconButton(
-                  icon: const Icon(Icons.add_rounded, size: 18, color: AppTheme.textSecondary),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                  splashRadius: 14,
-                  onPressed: onCreatePlaylist,
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.download_rounded, size: 18, color: AppTheme.textSecondary),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      splashRadius: 14,
+                      tooltip: 'Import Spotify link',
+                      onPressed: onImportSpotify,
+                    ),
+                    const SizedBox(width: 4),
+                    IconButton(
+                      icon: const Icon(Icons.add_rounded, size: 18, color: AppTheme.textSecondary),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      splashRadius: 14,
+                      tooltip: 'Create playlist',
+                      onPressed: onCreatePlaylist,
+                    ),
+                  ],
                 ),
               ],
             ),

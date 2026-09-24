@@ -63,6 +63,13 @@ class AuthService {
 
   Object? get currentUser => _currentUser;
 
+  String get currentUserId {
+    final user = _currentUser;
+    if (user is LocalUser) return user.id;
+    if (user is User) return user.uid;
+    return '1';
+  }
+
   String get userDisplayName {
     final user = _currentUser;
     if (user is LocalUser) return user.displayName;

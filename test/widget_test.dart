@@ -73,4 +73,42 @@ void main() {
       await tester.pump(const Duration(milliseconds: 350));
     }
   });
+
+  testWidgets('Starting playback automatically un-mutes and ensures audible volume', (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(1280, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(() => tester.view.resetPhysicalSize());
+
+    await tester.pumpWidget(const MusicApp(firebaseEnabled: false));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+
+    // Find and tap the volume button (size 20) in bottom player bar to mute
+    final muteBtn = find.byWidgetPredicate(
+      (w) => w is Icon && w.icon == Icons.volume_up_rounded && w.size == 20.0,
+    );
+    expect(muteBtn, findsOneWidget);
+    await tester.tap(muteBtn);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.byIcon(Icons.volume_off_rounded), findsAtLeastNWidgets(1));
+
+    // Now tap on 'Listen Now' to start playing music
+    final playBtn = find.text('Listen Now');
+    expect(playBtn, findsOneWidget);
+    await tester.tap(playBtn);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    // Dismiss lyrics sheet
+    final closeBtn = find.byTooltip('Close lyrics');
+    if (closeBtn.evaluate().isNotEmpty) {
+      await tester.tap(closeBtn);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+    }
+
+    // Verify muted icon is gone because starting music automatically un-muted the player
+    expect(find.byIcon(Icons.volume_off_rounded), findsNothing);
+  });
 }
