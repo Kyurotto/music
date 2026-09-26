@@ -261,6 +261,7 @@ void main() {
     controller.dispose();
   });
 
+
   test('signInWithProviderAuto creates and saves Google user in SQLite users table', () async {
     await AuthService.instance.signInWithProviderAuto(
       provider: 'google',
