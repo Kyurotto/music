@@ -213,14 +213,62 @@ class BottomPlayerBar extends StatelessWidget {
                                 overflow: TextOverflow.ellipsis,
                               ),
                               const SizedBox(height: 3),
-                              Text(
-                                song?.artist ?? 'Select a song to play',
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  color: AppTheme.textSecondary,
+                            Text(
+                              song?.artist ?? 'Select a song to play',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: AppTheme.textSecondary,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            if (song?.isPreview == true)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 2),
+                                child: const Text(
+                                  '30s PREVIEW • UPGRADING TO FULL…',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  softWrap: false,
+                                  style: TextStyle(
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: 0.5,
+                                    color: AppTheme.accentGreen,
+                                  ),
                                 ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
+                              ),
+                            if (song?.isFullTrack == true)
+                              const Padding(
+                                padding: EdgeInsets.only(top: 2),
+                                child: Text(
+                                  'FULL TRACK',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  softWrap: false,
+                                  style: TextStyle(
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: 0.5,
+                                    color: AppTheme.accentGreen,
+                                  ),
+                                ),
+                              ),
+                            if (song?.isSilentPlaceholder == true)
+                              const Padding(
+                                padding: EdgeInsets.only(top: 2),
+                                child: Text(
+                                  'LOCATING AUDIO…',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  softWrap: false,
+                                  style: TextStyle(
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: 0.5,
+                                    color: AppTheme.accentPink,
+                                  ),
+                                ),
                               ),
                             ],
                           ),
@@ -359,7 +407,9 @@ class BottomPlayerBar extends StatelessWidget {
                       ),
                     ),
                     Text(
-                      song != null ? song.formattedDuration : '0:00',
+                      song != null
+                          ? Song.formatTime(controller.displayDurationFor(song))
+                          : '0:00',
                       style: const TextStyle(fontSize: 11, color: AppTheme.textMuted),
                     ),
                   ],

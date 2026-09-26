@@ -7,6 +7,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'data/local_database.dart';
 import 'theme/app_theme.dart';
 import 'views/auth_gate.dart';
+import 'views/music_dashboard_view.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -45,9 +46,9 @@ class MusicApp extends StatelessWidget {
       title: 'Pulse Music Player & Dashboard',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.darkTheme,
-      // Always go through AuthGate: local session works on every platform
-      // (desktop included). Firebase is only used when initialized.
-      home: const AuthGate(),
+      // Always go through AuthGate when enabled (local session works on every platform).
+      // When disabled (e.g. in tests), mount MusicDashboardView directly.
+      home: firebaseEnabled ? const AuthGate() : const MusicDashboardView(),
     );
   }
 }

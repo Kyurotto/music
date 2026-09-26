@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import '../auth/auth_service.dart';
 import '../models/song_model.dart';
 import '../theme/app_theme.dart';
 import '../controllers/music_player_controller.dart';
@@ -9,6 +11,7 @@ import '../widgets/track_list_view.dart';
 import '../widgets/right_panel.dart';
 import '../widgets/bottom_player_bar.dart';
 import '../widgets/spotify_lyrics_sheet.dart';
+import '../widgets/spotify_import_dialog.dart';
 import 'settings_view.dart';
 
 class MusicDashboardView extends StatefulWidget {
@@ -23,12 +26,18 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
   final TextEditingController _searchTextController = TextEditingController();
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   String? _selectedPlaylistId;
+  StreamSubscription<Object?>? _authSub;
 
   @override
   void initState() {
     super.initState();
     _controller = MusicPlayerController();
     _controller.addListener(_onStateChange);
+    _authSub = AuthService.instance.authChanges.listen((_) {
+      if (mounted) {
+        _controller.loadSavedPlaylists();
+      }
+    });
   }
 
   void _onStateChange() {
@@ -37,6 +46,7 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
 
   @override
   void dispose() {
+    _authSub?.cancel();
     _controller.removeListener(_onStateChange);
     _controller.dispose();
     _searchTextController.dispose();
@@ -102,6 +112,20 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
         );
       }
     }
+  }
+
+  Future<void> _importFromSpotify() async {
+    final playlistId = await SpotifyImportDialog.show(context, controller: _controller);
+    if (playlistId == null || !mounted) return;
+    setState(() {
+      _controller.setNavIndex(2);
+      _selectedPlaylistId = playlistId;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+          content: Text(
+              'Spotify tracks imported. Full audio + lyrics load automatically.')),
+    );
   }
 
   Future<void> _showAddToPlaylistSheet(Song song) async {
@@ -178,6 +202,10 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                         Navigator.of(context).pop();
                         _showCreatePlaylistDialog();
                       },
+                      onImportSpotify: () {
+                        Navigator.of(context).pop();
+                        _importFromSpotify();
+                      },
                     ),
                   ),
                 )
@@ -196,6 +224,7 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                           selectedPlaylistId: _selectedPlaylistId,
                           onPlaylistSelected: _openPlaylist,
                           onCreatePlaylist: _showCreatePlaylistDialog,
+                          onImportSpotify: _importFromSpotify,
                         ),
 
                       // Main Content View
@@ -547,31 +576,46 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
     );
   }
 
+  /// Sizes playlist grid cells to fit [AlbumCard] content at any width.
+  ///
+  /// Mirrors [SliverGridDelegateWithMaxCrossAxisExtent]'s own column math
+  /// (count = ceil(width / (maxExtent + spacing))) so the fixed-height cell
+  /// always clears the card's square artwork plus title and subtitle.
+  SliverGridDelegate _albumGridDelegate(double gridWidth, {double maxExtent = 210}) {
+    const spacing = 16.0;
+    var count = (gridWidth / (maxExtent + spacing)).ceil();
+    if (count < 1) count = 1;
+    final cardWidth = (gridWidth - spacing * (count - 1)) / count;
+    return SliverGridDelegateWithMaxCrossAxisExtent(
+      maxCrossAxisExtent: maxExtent,
+      mainAxisExtent: cardWidth + 88,
+      crossAxisSpacing: spacing,
+      mainAxisSpacing: spacing,
+    );
+  }
+
   Widget _buildExploreTab() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _buildSectionHeader('Explore Playlists', 'Find soundscapes crafted for your day'),
         const SizedBox(height: 20),
-        GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          itemCount: _controller.playlists.length,
-          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-            maxCrossAxisExtent: 220,
-            mainAxisExtent: 230,
-            crossAxisSpacing: 16,
-            mainAxisSpacing: 16,
+        LayoutBuilder(
+          builder: (context, constraints) => GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: _controller.playlists.length,
+            gridDelegate: _albumGridDelegate(constraints.maxWidth, maxExtent: 220),
+            itemBuilder: (context, index) {
+              final playlist = _controller.playlists[index];
+              return AlbumCard(
+                playlist: playlist,
+                isSelected: playlist.id == _selectedPlaylistId,
+                onTap: () => _openPlaylist(playlist.id),
+                onPlay: () => _playPlaylistWithLyrics(playlist.id),
+              );
+            },
           ),
-          itemBuilder: (context, index) {
-            final playlist = _controller.playlists[index];
-            return AlbumCard(
-              playlist: playlist,
-              isSelected: playlist.id == _selectedPlaylistId,
-              onTap: () => _openPlaylist(playlist.id),
-              onPlay: () => _playPlaylistWithLyrics(playlist.id),
-            );
-          },
         ),
         const SizedBox(height: 32),
         _buildSectionHeader('All Available Catalog', 'Complete library tracks'),
@@ -593,6 +637,46 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
     );
   }
 
+  /// Section header plus action buttons. Stacks vertically below 560 px
+  /// instead of overflowing on narrow screens.
+  Widget _buildHeaderWithActions({
+    required String title,
+    required String subtitle,
+    required List<Widget> actions,
+  }) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final narrow = constraints.maxWidth < 560;
+        final header = _buildSectionHeader(title, subtitle);
+        final actionWrap = Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          alignment: narrow ? WrapAlignment.start : WrapAlignment.end,
+          children: actions,
+        );
+        if (narrow) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              header,
+              const SizedBox(height: 12),
+              actionWrap,
+            ],
+          );
+        }
+        return Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Flexible(child: header),
+            const SizedBox(width: 12),
+            Flexible(child: actionWrap),
+          ],
+        );
+      },
+    );
+  }
+
   Widget _buildLibraryTab() {
     final selectedPlaylist = _selectedPlaylistId == null
         ? null
@@ -601,12 +685,24 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            _buildSectionHeader(
-              'Your Library',
+        _buildHeaderWithActions(
+          title: 'Your Library',
+          subtitle:
               '${_controller.allSongs.length} saved songs across ${_controller.playlists.length} playlists',
+          actions: [
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.cardSurface,
+                foregroundColor: AppTheme.textPrimary,
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: const BorderSide(color: AppTheme.border),
+                ),
+              ),
+              onPressed: _importFromSpotify,
+              icon: const Icon(Icons.download_rounded, size: 18),
+              label: const Text('Import Spotify link'),
             ),
             ElevatedButton.icon(
               style: ElevatedButton.styleFrom(
@@ -622,35 +718,30 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
           ],
         ),
         const SizedBox(height: 20),
-        GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          itemCount: _controller.playlists.length,
-          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-            maxCrossAxisExtent: 210,
-            mainAxisExtent: 230,
-            crossAxisSpacing: 16,
-            mainAxisSpacing: 16,
+        LayoutBuilder(
+          builder: (context, constraints) => GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: _controller.playlists.length,
+            gridDelegate: _albumGridDelegate(constraints.maxWidth),
+            itemBuilder: (context, index) {
+              final playlist = _controller.playlists[index];
+              return AlbumCard(
+                playlist: playlist,
+                isSelected: playlist.id == _selectedPlaylistId,
+                onTap: () => _selectPlaylist(playlist.id),
+                onPlay: () => _playPlaylistWithLyrics(playlist.id),
+              );
+            },
           ),
-          itemBuilder: (context, index) {
-            final playlist = _controller.playlists[index];
-            return AlbumCard(
-              playlist: playlist,
-              isSelected: playlist.id == _selectedPlaylistId,
-              onTap: () => _selectPlaylist(playlist.id),
-              onPlay: () => _playPlaylistWithLyrics(playlist.id),
-            );
-          },
         ),
         const SizedBox(height: 32),
         if (selectedPlaylist != null) ...[
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              _buildSectionHeader(
-                selectedPlaylist.title,
+          _buildHeaderWithActions(
+            title: selectedPlaylist.title,
+            subtitle:
                 '${selectedPlaylist.trackCount} ${selectedPlaylist.trackCount == 1 ? 'song' : 'songs'}',
-              ),
+            actions: [
               if (_controller.songsForPlaylist(selectedPlaylist.id).isNotEmpty)
                 ElevatedButton.icon(
                   style: ElevatedButton.styleFrom(
@@ -708,10 +799,10 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            _buildSectionHeader('Favorite Songs', '${favorites.length} songs you love'),
+        _buildHeaderWithActions(
+          title: 'Favorite Songs',
+          subtitle: '${favorites.length} songs you love',
+          actions: [
             if (favorites.isNotEmpty)
               ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(

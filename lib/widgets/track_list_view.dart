@@ -320,6 +320,63 @@ class _TrackRowState extends State<_TrackRow> {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
+                      if (widget.song.isPreview ||
+                          widget.song.isSilentPlaceholder ||
+                          widget.song.isFullTrack) ...[
+                        const SizedBox(height: 4),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Flexible(
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: widget.song.hasAudio
+                                      ? AppTheme.accentGreen
+                                          .withValues(alpha: 0.15)
+                                      : AppTheme.accentPink
+                                          .withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(
+                                    color: widget.song.hasAudio
+                                        ? AppTheme.accentGreen
+                                            .withValues(alpha: 0.4)
+                                        : AppTheme.accentPink
+                                            .withValues(alpha: 0.4),
+                                  ),
+                                ),
+                                child: Text(
+                                  widget.song.isFullTrack
+                                      ? 'FULL TRACK'
+                                      : widget.song.hasAudio
+                                          ? 'PREVIEW'
+                                          : 'LOCATING AUDIO',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  softWrap: false,
+                                  style: TextStyle(
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: 0.6,
+                                    color: widget.song.hasAudio
+                                        ? AppTheme.accentGreen
+                                        : AppTheme.accentPink,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            if (widget.song.lyrics.isEmpty) ...[
+                              const SizedBox(width: 6),
+                              const Icon(
+                                Icons.lyrics_outlined,
+                                size: 13,
+                                color: AppTheme.textMuted,
+                              ),
+                            ],
+                          ],
+                        ),
+                      ],
                     ],
                   ),
                 ),

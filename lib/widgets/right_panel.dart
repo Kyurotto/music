@@ -304,20 +304,86 @@ class _RightActivityPanelState extends State<RightActivityPanel>
                               ],
                             ),
                             const SizedBox(height: 12),
-                        if (currentSong != null && currentSong.lyrics.isNotEmpty)
-                          ...currentSong.lyrics.take(3).map((line) {
-                            return Padding(
-                              padding: const EdgeInsets.only(bottom: 6),
-                              child: Text(
-                                line,
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                  color: AppTheme.textSecondary,
-                                  fontStyle: FontStyle.italic,
+                        if (currentSong != null &&
+                            currentSong.lyrics.isNotEmpty) ...[
+                          // Window of lines around the active one so the
+                          // panel tracks playback instead of showing a
+                          // frozen first-four preview.
+                          Builder(
+                            builder: (context) {
+                              final total = widget.controller
+                                  .displayDurationFor(currentSong);
+                              final active = Song.lyricsLineIndexForProgress(
+                                currentSong.lyrics,
+                                widget.controller.currentPosition,
+                                total,
+                              );
+                              final start = (active - 1)
+                                  .clamp(0, currentSong.lyrics.length - 1)
+                                  .toInt();
+                              final end = (active + 3)
+                                  .clamp(0, currentSong.lyrics.length)
+                                  .toInt();
+                              final window =
+                                  currentSong.lyrics.sublist(start, end);
+                              var offset = start;
+                              return Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: window.map((line) {
+                                  final i = offset++;
+                                  final isActive = i == active;
+                                  return Padding(
+                                    padding:
+                                        const EdgeInsets.only(bottom: 6),
+                                    child: Text(
+                                      line,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: isActive ? 14 : 13,
+                                        height: 1.3,
+                                        fontWeight: isActive
+                                            ? FontWeight.w800
+                                            : FontWeight.w600,
+                                        color: Colors.white,
+                                        shadows: const [
+                                          BoxShadow(
+                                            color: Colors.black54,
+                                            blurRadius: 6,
+                                            offset: Offset(0, 1),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  );
+                                }).toList(),
+                              );
+                            },
+                          ),
+                        ] else if (currentSong != null)
+                          const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white70,
                                 ),
                               ),
-                            );
-                          })
+                              SizedBox(width: 8),
+                              Flexible(
+                                child: Text(
+                                  'Loading white lyrics…',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    color: Colors.white70,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          )
                         else
                           const Text(
                             'No lyrics or active track loaded',
