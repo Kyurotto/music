@@ -1,4 +1,6 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:music/auth/auth_service.dart';
 import 'package:music/controllers/music_player_controller.dart';
 import 'package:music/data/local_database.dart';
 import 'package:music/services/spotify_import_service.dart';
@@ -248,7 +250,7 @@ void main() {
     // Give async database save a moment to complete
     await Future.delayed(const Duration(milliseconds: 100));
 
-    final userPlaylists = await LocalDatabase.instance.getImportedPlaylistsForUser('1');
+    final userPlaylists = await LocalDatabase.instance.getImportedPlaylistsForUser('default_user');
     expect(userPlaylists, isNotEmpty);
     final saved = userPlaylists.firstWhere((p) => p['id'] == result.playlistId);
     expect(saved['title'], 'Auto Saved Playlist');
@@ -257,5 +259,305 @@ void main() {
     expect((saved['songs'] as List).first['title'], 'Auto Saved Track');
 
     controller.dispose();
+  });
+
+  test('signInWithProviderAuto creates and saves Google user in SQLite users table', () async {
+    await AuthService.instance.signInWithProviderAuto(
+      provider: 'google',
+      preferredEmail: 'john.smith@gmail.com',
+      preferredName: 'John Smith',
+    );
+
+    final user = await LocalDatabase.instance.getUserByEmail('john.smith@gmail.com');
+    expect(user, isNotNull);
+    expect(user!['email'], 'john.smith@gmail.com');
+    expect(user['display_name'], 'John Smith');
+    expect(user['auth_provider'], 'google');
+    expect(user['role'], 'user');
+
+    final googleUsers = await LocalDatabase.instance.getUsersByProvider('google');
+    expect(googleUsers, isNotEmpty);
+    expect(googleUsers.any((u) => u['email'] == 'john.smith@gmail.com'), isTrue);
+  });
+
+  test('signInWithProviderAuto creates and saves Facebook user in SQLite users table', () async {
+    await AuthService.instance.signInWithProviderAuto(
+      provider: 'facebook',
+      preferredEmail: 'sarah.connor@facebook.com',
+      preferredName: 'Sarah Connor',
+    );
+
+    final user = await LocalDatabase.instance.getUserByEmail('sarah.connor@facebook.com');
+    expect(user, isNotNull);
+    expect(user!['email'], 'sarah.connor@facebook.com');
+    expect(user['display_name'], 'Sarah Connor');
+    expect(user['auth_provider'], 'facebook');
+
+    final fbUsers = await LocalDatabase.instance.getUsersByProvider('facebook');
+    expect(fbUsers, isNotEmpty);
+    expect(fbUsers.any((u) => u['email'] == 'sarah.connor@facebook.com'), isTrue);
+  });
+
+  test('register saves user to SQLite users table and sets active session', () async {
+    await AuthService.instance.register(
+      name: 'Elena Gilbert',
+      email: 'elena@gmail.com',
+      password: 'password123',
+    );
+
+    final user = await LocalDatabase.instance.getUserByEmail('elena@gmail.com');
+    expect(user, isNotNull);
+    expect(user!['email'], 'elena@gmail.com');
+    expect(user['display_name'], 'Elena Gilbert');
+    expect(user['auth_provider'], 'password');
+
+    final sessionUserId = await LocalDatabase.instance.getActiveSessionUserId();
+    expect(sessionUserId, user['id']);
+  });
+
+  test('register saves John Laurence to SQLite users table and removes default admin', () async {
+    await AuthService.instance.register(
+      name: 'John Laurence',
+      email: 'johnlaurencenovicio@gmail.com',
+      password: 'password123',
+    );
+
+    final user = await LocalDatabase.instance.getUserByEmail('johnlaurencenovicio@gmail.com');
+    expect(user, isNotNull);
+    expect(user!['email'], 'johnlaurencenovicio@gmail.com');
+    expect(user['display_name'], 'John Laurence');
+    expect(user['auth_provider'], 'password');
+
+    final allUsers = await LocalDatabase.instance.getAllUsers();
+    expect(allUsers.any((u) => u['email'] == 'admin@pulsemusic.app'), isFalse);
+    expect(allUsers.any((u) => u['email'] == 'johnlaurencenovicio@gmail.com'), isTrue);
+  });
+
+  test('register stores salted password hash, never plaintext', () async {
+    await AuthService.instance.register(
+      name: 'Elena Gilbert',
+      email: 'elena@gmail.com',
+      password: 'password123',
+    );
+
+    final user = await LocalDatabase.instance.getUserByEmail('elena@gmail.com');
+    expect(user, isNotNull);
+    final hash = user!['password_hash'] as String?;
+    expect(hash, isNotNull);
+    expect(hash, isNotEmpty);
+    expect(hash!.contains('password123'), isFalse);
+    expect(hash.contains(':'), isTrue);
+
+    // Correct password verifies, wrong password does not.
+    final ok = await LocalDatabase.instance.verifyLocalPassword(
+        'elena@gmail.com', 'password123');
+    expect(ok, isNotNull);
+    final bad = await LocalDatabase.instance.verifyLocalPassword(
+        'elena@gmail.com', 'wrongpass');
+    expect(bad, isNull);
+  });
+
+  test('hashPassword uses unique salts and verifies', () async {
+    final h1 = LocalDatabase.hashPassword('same-password');
+    final h2 = LocalDatabase.hashPassword('same-password');
+    expect(h1, isNot(equals(h2)));
+    expect(LocalDatabase.verifyPasswordHash('same-password', h1), isTrue);
+    expect(LocalDatabase.verifyPasswordHash('other-password', h1), isFalse);
+    expect(LocalDatabase.verifyPasswordHash('x', null), isFalse);
+    expect(LocalDatabase.verifyPasswordHash('x', ''), isFalse);
+  });
+
+  test('employees table has EMP-001 preserved and never removed', () async {
+    await LocalDatabase.instance.seedEmployeeIfNeeded();
+    final employees = await LocalDatabase.instance.getEmployees();
+    expect(employees, isNotEmpty);
+    expect(employees.any((e) => e['employee_code'] == 'EMP-001'), isTrue);
+
+    // Register a new user and ensure employees are still intact
+    await AuthService.instance.register(
+      name: 'Test Listener',
+      email: 'listener@test.com',
+      password: 'password123',
+    );
+    final employeesAfter = await LocalDatabase.instance.getEmployees();
+    expect(employeesAfter, isNotEmpty);
+    expect(employeesAfter.any((e) => e['employee_code'] == 'EMP-001'), isTrue);
+  });
+
+  test('creating new account with Google saves in SQLite users table', () async {
+    await AuthService.instance.signInWithProviderAuto(
+      provider: 'google',
+      preferredEmail: 'newgoogleuser@gmail.com',
+      preferredName: 'Google Pioneer',
+      forceNewAccount: true,
+    );
+
+    final user = await LocalDatabase.instance.getUserByEmail('newgoogleuser@gmail.com');
+    expect(user, isNotNull);
+    expect(user!['email'], 'newgoogleuser@gmail.com');
+    expect(user['display_name'], 'Google Pioneer');
+    expect(user['auth_provider'], 'google');
+    expect(user['role'], 'user');
+
+    final allUsers = await LocalDatabase.instance.getAllUsers();
+    expect(allUsers.any((u) => u['email'] == 'newgoogleuser@gmail.com'), isTrue);
+  });
+
+  test('creating new account with Facebook saves in SQLite users table', () async {
+    await AuthService.instance.signInWithProviderAuto(
+      provider: 'facebook',
+      preferredEmail: 'newfacebookuser@facebook.com',
+      preferredName: 'Facebook Pioneer',
+      forceNewAccount: true,
+    );
+
+    final user = await LocalDatabase.instance.getUserByEmail('newfacebookuser@facebook.com');
+    expect(user, isNotNull);
+    expect(user!['email'], 'newfacebookuser@facebook.com');
+    expect(user['display_name'], 'Facebook Pioneer');
+    expect(user['auth_provider'], 'facebook');
+    expect(user['role'], 'user');
+
+    final allUsers = await LocalDatabase.instance.getAllUsers();
+    expect(allUsers.any((u) => u['email'] == 'newfacebookuser@facebook.com'), isTrue);
+  });
+
+  test('Google taps reuse one account per email, never a different account', () async {
+    // First tap creates exactly one row for the real email.
+    await AuthService.instance.signInWithProviderAuto(
+      provider: 'google',
+      preferredEmail: 'same.person@gmail.com',
+      preferredName: 'Same Person',
+    );
+    final first = await LocalDatabase.instance.getUserByEmail('same.person@gmail.com');
+    expect(first, isNotNull);
+
+    // Second tap with the same email reuses the SAME row (same id), no duplicate.
+    await AuthService.instance.signInWithProviderAuto(
+      provider: 'google',
+      preferredEmail: 'same.person@gmail.com',
+      preferredName: 'Same Person',
+    );
+    final second = await LocalDatabase.instance.getUserByEmail('same.person@gmail.com');
+    expect(second, isNotNull);
+    expect(second!['id'], first!['id']);
+
+    final googleRows = await LocalDatabase.instance.getUsersByProvider('google');
+    final matches = googleRows.where((u) => u['email'] == 'same.person@gmail.com');
+    expect(matches, hasLength(1));
+
+    // A password account keeps its provider when Google uses the same email.
+    await AuthService.instance.register(
+      name: 'Pass User',
+      email: 'shared@example.com',
+      password: 'password123',
+    );
+    await AuthService.instance.signInWithRealProfile(
+      email: 'shared@example.com',
+      displayName: 'Shared Person',
+      provider: 'google',
+    );
+    final shared = await LocalDatabase.instance.getUserByEmail('shared@example.com');
+    expect(shared, isNotNull);
+    expect(shared!['auth_provider'], 'password');
+    expect(shared['display_name'], 'Shared Person');
+  });
+
+  test('Create mode with a different Google email creates that account', () async {
+    await AuthService.instance.signInWithProviderAuto(
+      provider: 'google',
+      preferredEmail: 'first.person@gmail.com',
+      preferredName: 'First Person',
+      forceNewAccount: true,
+    );
+    await AuthService.instance.signInWithProviderAuto(
+      provider: 'google',
+      preferredEmail: 'second.person@gmail.com',
+      preferredName: 'Second Person',
+      forceNewAccount: true,
+    );
+
+    final first = await LocalDatabase.instance.getUserByEmail('first.person@gmail.com');
+    final second = await LocalDatabase.instance.getUserByEmail('second.person@gmail.com');
+    expect(first, isNotNull);
+    expect(second, isNotNull);
+    expect(first!['id'], isNot(equals(second!['id'])));
+    expect(second['display_name'], 'Second Person');
+    expect(AuthService.instance.userEmail, 'second.person@gmail.com');
+  });
+
+  test('Google with no saved account and no email asks for email, creates nothing fake', () async {
+    try {
+      await AuthService.instance.signInWithProviderAuto(
+        provider: 'google',
+        forceNewAccount: true,
+      );
+      fail('Expected google-unavailable');
+    } on FirebaseAuthException catch (e) {
+      expect(e.code, 'google-unavailable');
+    }
+    final allUsers = await LocalDatabase.instance.getAllUsers();
+    expect(allUsers.any((u) => (u['email'] as String).startsWith('google.user')), isFalse);
+    expect(allUsers.any((u) => (u['display_name'] as String).startsWith('google.user')), isFalse);
+  });
+
+  test('LocalDatabase.removeGenericPlaceholderUsers removes any stray google.user or facebook.user rows', () async {
+    final db = await LocalDatabase.instance.database;
+    // Directly insert a fake placeholder row
+    await db.rawInsert('''
+      INSERT INTO users (id, email, display_name, role, auth_provider, created_at, last_login_at)
+      VALUES ('fake-1', 'google.user1790409015007@gmail.com', 'google.user1790409015007', 'user', 'google', 1000, 1000)
+    ''');
+    await db.rawInsert('''
+      INSERT INTO user_sessions (user_id, saved_at) VALUES ('fake-1', 1000)
+    ''');
+
+    await LocalDatabase.instance.removeGenericPlaceholderUsers();
+
+    final users = await LocalDatabase.instance.getAllUsers();
+    expect(users.any((u) => (u['email'] as String).startsWith('google.user')), isFalse);
+    expect(users.any((u) => (u['display_name'] as String).startsWith('google.user')), isFalse);
+  });
+
+  test('Real Google and Facebook account selection saves directly into users table and user_sessions', () async {
+    // 1. Save different Google account
+    await AuthService.instance.signInWithRealProfile(
+      email: 'arteezy0909@gmail.com',
+      displayName: 'Arteezy',
+      provider: 'google',
+    );
+    var user = await LocalDatabase.instance.getUserByEmail('arteezy0909@gmail.com');
+    expect(user, isNotNull);
+    expect(user!['email'], 'arteezy0909@gmail.com');
+    expect(user['display_name'], 'Arteezy');
+    expect(user['auth_provider'], 'google');
+    var activeSessionUserId = await LocalDatabase.instance.getActiveSessionUserId();
+    expect(activeSessionUserId, user['id']);
+
+    // 2. Save another different Google account
+    await AuthService.instance.signInWithRealProfile(
+      email: 'johnlaurencenovicio21@gmail.com',
+      displayName: 'John Laurence Novicio',
+      provider: 'google',
+    );
+    user = await LocalDatabase.instance.getUserByEmail('johnlaurencenovicio21@gmail.com');
+    expect(user, isNotNull);
+    expect(user!['email'], 'johnlaurencenovicio21@gmail.com');
+    expect(user['display_name'], 'John Laurence Novicio');
+    expect(user['auth_provider'], 'google');
+    activeSessionUserId = await LocalDatabase.instance.getActiveSessionUserId();
+    expect(activeSessionUserId, user['id']);
+
+    // 3. Save Facebook account
+    await AuthService.instance.signInWithRealProfile(
+      email: 'johnlaurencenovicio@gmail.com',
+      displayName: 'John Laurence Novicio',
+      provider: 'facebook',
+    );
+    user = await LocalDatabase.instance.getUserByEmail('johnlaurencenovicio@gmail.com');
+    expect(user, isNotNull);
+    expect(user!['display_name'], 'John Laurence Novicio');
+    activeSessionUserId = await LocalDatabase.instance.getActiveSessionUserId();
+    expect(activeSessionUserId, user['id']);
   });
 }

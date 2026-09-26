@@ -361,7 +361,10 @@ class MusicPlayerController extends ChangeNotifier {
               })
           .toList();
 
-      final currentUserId = AuthService.instance.currentUserId;
+      final rawUserId = AuthService.instance.currentUserId;
+      // No default admin anymore — anonymous saves go to 'default_user'
+      // and get claimed on next real sign-in (e.g. John Laurence).
+      final currentUserId = rawUserId.isEmpty ? 'default_user' : rawUserId;
       final gradientColors = playlist.gradient.map((c) => c.toARGB32()).toList();
 
       unawaited(

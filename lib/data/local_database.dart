@@ -1,9 +1,12 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:crypto/crypto.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -16,14 +19,89 @@ class LocalDatabase {
 
   static final LocalDatabase instance = LocalDatabase._();
   static const _databaseName = 'pulse_music.db';
-  static const _databaseVersion = 4;
+  static const _databaseVersion = 5;
 
   Database? _database;
+  String? _databaseFilePath;
+  String? get databaseFilePath => _databaseFilePath;
 
   @visibleForTesting
   static void setDatabaseForTesting(Database? db) {
     instance._database = db;
   }
+
+  Future<void> _syncToWorkspace() async {
+    if (kIsWeb) return;
+    if (Platform.isAndroid || Platform.isIOS) {
+      await _syncAndroidToHost();
+      return;
+    }
+    if (!(Platform.isWindows || Platform.isLinux || Platform.isMacOS)) return;
+    try {
+      final src = _databaseFilePath;
+      final db = _database;
+      if (src == null || db == null) return;
+      if (!File(src).existsSync()) return;
+      // Flush WAL so the copied .db actually contains the latest rows.
+      // Without this, the workspace copy looks stale and new users
+      // "don't appear in SQLite viewer".
+      try {
+        await db.execute('PRAGMA wal_checkpoint(TRUNCATE)');
+      } catch (_) {}
+      final targetDirs = {
+        Directory.current.path,
+        r'c:\Users\johnl\All Codes\music',
+      };
+      for (final targetDir in targetDirs) {
+        try {
+          final dest = path.join(targetDir, _databaseName);
+          if (src == dest) continue;
+          await File(src).copy(dest);
+          for (final suffix in ['-wal', '-shm']) {
+            final sidecar = File('$src$suffix');
+            if (await sidecar.exists()) {
+              await sidecar.copy('$dest$suffix');
+            }
+          }
+          debugPrint('[LocalDatabase] Workspace copy: $dest');
+        } catch (_) {}
+      }
+    } catch (e) {
+      debugPrint('[LocalDatabase] Workspace sync skipped: $e');
+    }
+  }
+
+  Future<void> _syncAndroidToHost() async {
+    try {
+      final db = _database;
+      if (db == null) return;
+      try {
+        await db.execute('PRAGMA wal_checkpoint(TRUNCATE)');
+      } catch (_) {}
+      final filePath = _databaseFilePath;
+      if (filePath == null) return;
+      final file = File(filePath);
+      if (!await file.exists()) return;
+      final bytes = await file.readAsBytes();
+      for (final host in ['127.0.0.1:58321', '10.0.2.2:58321']) {
+        try {
+          final response = await http.post(
+            Uri.parse('http://$host/sync-db'),
+            headers: {'Content-Type': 'application/octet-stream'},
+            body: bytes,
+          ).timeout(const Duration(milliseconds: 1000));
+          if (response.statusCode == 200) {
+            debugPrint('[LocalDatabase] Synced to workspace over $host');
+            break;
+          }
+        } catch (_) {}
+      }
+    } catch (e) {
+      debugPrint('[LocalDatabase] Android sync skipped: $e');
+    }
+  }
+
+  Future<void> syncToWorkspace() => _syncToWorkspace();
 
   FirebaseAuth? get _auth {
     try {
@@ -50,7 +128,50 @@ class LocalDatabase {
       )
     ''');
     await _createImportedPlaylistTables(db);
-    await seedAdminUserIfNeeded();
+    // No more default admin seed. New accounts (e.g. John Laurence) become
+    // the active user instead of "System Administrator".
+    await removeDefaultAdminIfSeeded();
+    await removeGenericPlaceholderUsers();
+    await seedEmployeeIfNeeded();
+    _syncToWorkspace();
+  }
+
+  /// Removes any fake auto-generated placeholder rows like 'google.user...' or 'facebook.user...'
+  /// so that only purely real accounts exist in SQLite.
+  Future<void> removeGenericPlaceholderUsers() async {
+    try {
+      final db = await database;
+      final placeholders = await db.query(
+        'users',
+        columns: ['id'],
+        where: "LOWER(email) LIKE 'google.user%' OR LOWER(email) LIKE 'facebook.user%' OR LOWER(display_name) LIKE 'google.user%' OR LOWER(display_name) LIKE 'facebook.user%'",
+      );
+      for (final row in placeholders) {
+        final id = row['id'] as String?;
+        if (id != null) {
+          await db.delete('user_sessions', where: 'user_id = ?', whereArgs: [id]);
+          await db.delete('users', where: 'id = ?', whereArgs: [id]);
+        }
+      }
+    } catch (_) {}
+  }
+
+  /// Deletes the legacy seeded default admin from users and sessions so the
+  /// users table only shows real created accounts, but preserves the employees table.
+  Future<void> removeDefaultAdminIfSeeded() async {
+    try {
+      final db = await database;
+      // Only delete by email — id '1' is now a valid sequential user ID.
+      final adminRows = await db.query('users',
+          where: 'LOWER(email) = ?', whereArgs: ['admin@pulsemusic.app']);
+      for (final row in adminRows) {
+        final adminId = row['id'] as String;
+        await db.delete('user_sessions',
+            where: 'user_id = ?', whereArgs: [adminId]);
+        await db.delete('users',
+            where: 'id = ?', whereArgs: [adminId]);
+      }
+    } catch (_) {}
   }
 
   Future<Database> get database async {
@@ -64,9 +185,13 @@ class LocalDatabase {
     final directory = await getApplicationSupportDirectory();
     await directory.create(recursive: true);
 
+    final dbPath = path.join(directory.path, _databaseName);
+    _databaseFilePath = dbPath;
+    debugPrint('[LocalDatabase] SQLite file: $dbPath');
+
     final factory = _databaseFactoryForPlatform();
     final openedDatabase = await factory.openDatabase(
-      path.join(directory.path, _databaseName),
+      dbPath,
       options: OpenDatabaseOptions(
         version: _databaseVersion,
         onCreate: _createDatabase,
@@ -74,6 +199,7 @@ class LocalDatabase {
       ),
     );
     _database = openedDatabase;
+    _syncToWorkspace();
     return openedDatabase;
   }
 
@@ -131,6 +257,12 @@ class LocalDatabase {
     if (oldVersion < 4) {
       await _createImportedPlaylistTables(database);
     }
+    if (oldVersion < 5) {
+      // Password hashes: never store plaintext passwords in SQLite.
+      try {
+        await database.execute('ALTER TABLE users ADD COLUMN password_hash TEXT');
+      } catch (_) {}
+    }
   }
 
   Future<void> _createImportedPlaylistTables(Database database) async {
@@ -183,6 +315,7 @@ class LocalDatabase {
         photo_url TEXT,
         role TEXT NOT NULL DEFAULT 'user',
         auth_provider TEXT NOT NULL,
+        password_hash TEXT,
         created_at INTEGER NOT NULL,
         last_login_at INTEGER NOT NULL
       )
@@ -224,37 +357,19 @@ class LocalDatabase {
   }
 
   Future<void> seedAdminUserIfNeeded() async {
-    final db = await database;
-    // Check if admin user with id 1 or email admin@pulsemusic.app exists
-    final existingUsers = await db.query(
-      'users',
-      where: 'id = ? OR LOWER(email) = ?',
-      whereArgs: ['1', 'admin@pulsemusic.app'],
-    );
-    final now = DateTime.now().millisecondsSinceEpoch;
-    if (existingUsers.isEmpty) {
-      await db.insert(
-        'users',
-        {
-          'id': '1',
-          'email': 'admin@pulsemusic.app',
-          'display_name': 'System Administrator',
-          'photo_url': null,
-          'role': 'admin',
-          'auth_provider': 'password',
-          'created_at': now,
-          'last_login_at': now,
-        },
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
-    }
+    await seedDefaultUserIfNeeded();
+    await seedEmployeeIfNeeded();
+  }
 
-    final existingEmp = await db.query(
+  Future<void> seedEmployeeIfNeeded() async {
+    final db = await database;
+    final existing = await db.query(
       'employees',
-      where: 'id = ? OR user_id = ? OR employee_code = ?',
-      whereArgs: ['1', '1', 'EMP-001'],
+      where: 'id = ? OR employee_code = ?',
+      whereArgs: ['1', 'EMP-001'],
     );
-    if (existingEmp.isEmpty) {
+    if (existing.isEmpty) {
+      final now = DateTime.now().millisecondsSinceEpoch;
       await db.insert(
         'employees',
         {
@@ -270,6 +385,37 @@ class LocalDatabase {
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
     }
+    _syncToWorkspace();
+  }
+
+  Future<void> seedDefaultUserIfNeeded() async {
+    final db = await database;
+    await removeDefaultAdminIfSeeded();
+
+    final existing = await db.query(
+      'users',
+      where: 'LOWER(email) = ?',
+      whereArgs: ['johnlaurencenovicio@gmail.com'],
+    );
+    if (existing.isEmpty) {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final nextId = await getNextUserId();
+      await db.insert(
+        'users',
+        {
+          'id': nextId,
+          'email': 'johnlaurencenovicio@gmail.com',
+          'display_name': 'John Laurence',
+          'photo_url': null,
+          'role': 'user',
+          'auth_provider': 'password',
+          'created_at': now,
+          'last_login_at': now,
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    }
+    _syncToWorkspace();
   }
 
   Future<Map<String, Object?>?> getUserByEmail(String email) async {
@@ -294,6 +440,72 @@ class LocalDatabase {
     return results.isNotEmpty ? results.first : null;
   }
 
+  /// Returns the next sequential integer user ID as a String (e.g. '1', '2', '3').
+  Future<String> getNextUserId() async {
+    final db = await database;
+    final result = await db.rawQuery(
+      "SELECT MAX(CAST(id AS INTEGER)) AS max_id FROM users WHERE id GLOB '[0-9]*'",
+    );
+    final maxId = result.first['max_id'];
+    if (maxId == null) return '1';
+    return '${(maxId as int) + 1}';
+  }
+
+  // ---------------------------------------------------------------------------
+  // Password hashing (salted SHA-256). Plaintext passwords are NEVER stored.
+  // Format: "saltHex$hashHex" where hash = SHA256(salt + password).
+  // Every query in this file uses bound parameters (whereArgs / insert maps),
+  // never string-interpolated SQL, so user input cannot break out into
+  // SQL injection.
+  // ---------------------------------------------------------------------------
+
+  /// Creates a salted hash for [password]. Returns e.g. "a1b2...$c3d4...".
+  static String hashPassword(String password, {String? saltHex}) {
+    final salt = saltHex ?? _randomSaltHex();
+    final digest = sha256.convert(utf8.encode('$salt:$password'));
+    return '$salt:$digest';
+  }
+
+  static String _randomSaltHex() {
+    final rng = Random.secure();
+    final bytes = List<int>.generate(16, (_) => rng.nextInt(256));
+    return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  }
+
+  /// Verifies [password] against a stored "salt:hash" value.
+  static bool verifyPasswordHash(String password, String? stored) {
+    if (stored == null || stored.isEmpty) return false;
+    final sep = stored.indexOf(':');
+    if (sep <= 0) return false;
+    final salt = stored.substring(0, sep);
+    final expected = hashPassword(password, saltHex: salt);
+    return _constantTimeEquals(expected, stored);
+  }
+
+  static bool _constantTimeEquals(String a, String b) {
+    if (a.length != b.length) return false;
+    var diff = 0;
+    for (var i = 0; i < a.length; i++) {
+      diff |= a.codeUnitAt(i) ^ b.codeUnitAt(i);
+    }
+    return diff == 0;
+  }
+
+  /// Checks [password] for the user with [email]. Returns the user row on
+  /// success, null when the account or password is wrong. Social accounts
+  /// (google/facebook, null hash) always return null — they have no password.
+  Future<Map<String, Object?>?> verifyLocalPassword(
+    String email,
+    String password,
+  ) async {
+    final user = await getUserByEmail(email);
+    if (user == null) return null;
+    if (!verifyPasswordHash(password, user['password_hash'] as String?)) {
+      return null;
+    }
+    return user;
+  }
+
   Future<void> saveUser({
     required String id,
     required String email,
@@ -301,23 +513,96 @@ class LocalDatabase {
     String? photoUrl,
     String role = 'user',
     String authProvider = 'password',
+    String? passwordHash,
   }) async {
     final db = await database;
     final now = DateTime.now().millisecondsSinceEpoch;
+    final cleanEmail = email.trim().toLowerCase();
+    var resolvedDisplayName = displayName.trim();
+
+    // Storage-layer guard: refuse placeholder/invalid emails instead of
+    // silently mapping them onto a different real account. Every caller
+    // validates first; this is defense in depth.
+    if (cleanEmail.isEmpty ||
+        !cleanEmail.contains('@') ||
+        cleanEmail.startsWith('google.user') ||
+        cleanEmail.startsWith('facebook.user') ||
+        cleanEmail.startsWith('fb-')) {
+      throw ArgumentError('saveUser requires a real email address');
+    }
+    if (resolvedDisplayName.isEmpty) {
+      resolvedDisplayName = cleanEmail.split('@').first;
+    }
+
+    // Preserve original created_at AND existing password hash on updates so
+    // SQLite viewer history stays stable; only bump last_login_at.
+    // A null [passwordHash] never wipes a stored hash (social sign-ins).
+    int createdAt = now;
+    String? resolvedHash = passwordHash;
+    try {
+      final byId = await db.query('users',
+          where: 'id = ?', whereArgs: [id], limit: 1);
+      final existing =
+          byId.isNotEmpty ? byId.first : await _rowByEmail(db, cleanEmail);
+      if (existing != null) {
+        if (existing['created_at'] is int) {
+          createdAt = existing['created_at'] as int;
+        }
+        resolvedHash ??= existing['password_hash'] as String?;
+      } else if (resolvedHash == null) {
+        final byEmail = await _rowByEmail(db, cleanEmail);
+        if (byEmail != null) {
+          if (byEmail['created_at'] is int) {
+            createdAt = byEmail['created_at'] as int;
+          }
+          resolvedHash ??= byEmail['password_hash'] as String?;
+        }
+      }
+    } catch (_) {}
     await db.insert(
       'users',
       {
         'id': id,
-        'email': email.trim().toLowerCase(),
-        'display_name': displayName.trim(),
+        'email': cleanEmail,
+        'display_name': resolvedDisplayName,
         'photo_url': photoUrl,
         'role': role,
         'auth_provider': authProvider,
-        'created_at': now,
+        'password_hash': resolvedHash,
+        'created_at': createdAt,
         'last_login_at': now,
       },
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+    try {
+      await db.execute('PRAGMA wal_checkpoint(TRUNCATE)');
+    } catch (_) {}
+    try {
+      final count =
+          await db.rawQuery('SELECT COUNT(*) AS c FROM users');
+      debugPrint(
+          '[LocalDatabase] saveUser $cleanEmail ($authProvider) -> total users: ${count.first['c']}');
+    } catch (_) {}
+    await _syncToWorkspace();
+  }
+
+  Future<Map<String, Object?>?> _rowByEmail(
+    Database db,
+    String cleanEmail,
+  ) async {
+    final rows = await db.query(
+      'users',
+      where: 'LOWER(email) = ?',
+      whereArgs: [cleanEmail],
+      limit: 1,
+    );
+    return rows.isNotEmpty ? rows.first : null;
+  }
+
+  /// Returns every local user — handy to verify SQLite viewer contents.
+  Future<List<Map<String, Object?>>> getAllUsers() async {
+    final db = await database;
+    return db.query('users', orderBy: 'created_at ASC');
   }
 
   Future<List<Map<String, Object?>>> getUsersByProvider(String provider) async {
@@ -335,6 +620,10 @@ class LocalDatabase {
     final db = await database;
     await db.delete('user_sessions', where: 'user_id = ?', whereArgs: [id]);
     await db.delete('users', where: 'id = ?', whereArgs: [id]);
+    try {
+      await db.execute('PRAGMA wal_checkpoint(TRUNCATE)');
+    } catch (_) {}
+    await _syncToWorkspace();
   }
 
   Future<void> saveActiveSession(String userId) async {
@@ -345,6 +634,10 @@ class LocalDatabase {
       {'user_id': userId, 'saved_at': now},
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+    try {
+      await db.execute('PRAGMA wal_checkpoint(TRUNCATE)');
+    } catch (_) {}
+    await _syncToWorkspace();
   }
 
   Future<String?> getActiveSessionUserId() async {
@@ -359,6 +652,10 @@ class LocalDatabase {
   Future<void> clearActiveSession() async {
     final db = await database;
     await db.delete('user_sessions');
+    try {
+      await db.execute('PRAGMA wal_checkpoint(TRUNCATE)');
+    } catch (_) {}
+    await _syncToWorkspace();
   }
 
   Future<int> saveTrack({
@@ -565,6 +862,7 @@ class LocalDatabase {
       spotifyUrl: spotifyUrl,
       songs: songs,
     );
+    _syncToWorkspace();
   }
 
   /// Updates an imported song when audio or lyrics enrichment finishes.
@@ -600,11 +898,17 @@ class LocalDatabase {
   /// Retrieves all imported playlists and their tracks belonging to [userId].
   Future<List<Map<String, dynamic>>> getImportedPlaylistsForUser(String userId) async {
     final db = await database;
-    final isDefaultUser = userId == '1' || userId == 'default_user';
+    final effectiveId = userId.isEmpty ? 'default_user' : userId;
+    final isDefaultUser =
+        effectiveId == '1' || effectiveId == 'default_user';
     final playlists = await db.query(
       'imported_playlists',
-      where: isDefaultUser ? 'user_id = ? OR user_id = ?' : 'user_id = ?',
-      whereArgs: isDefaultUser ? [userId, 'default_user'] : [userId],
+      where: isDefaultUser
+          ? 'user_id = ? OR user_id = ? OR user_id = ?'
+          : 'user_id = ?',
+      whereArgs: isDefaultUser
+          ? [effectiveId, 'default_user', '1']
+          : [effectiveId],
       orderBy: 'created_at ASC',
     );
 
@@ -691,7 +995,7 @@ class LocalDatabase {
 
   /// Reassigns any playlists imported anonymously to the newly signed-in user.
   Future<void> claimAnonymousPlaylists(String newUserId) async {
-    if (newUserId.isEmpty || newUserId == '1' || newUserId == 'default_user') return;
+    if (newUserId.isEmpty || newUserId == 'default_user') return;
     try {
       final db = await database;
       await db.update(

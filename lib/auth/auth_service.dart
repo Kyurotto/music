@@ -54,6 +54,21 @@ class AuthService {
   bool _listenerStarted = false;
   bool _isInitialized = false;
 
+  /// True while an explicit social sign-in (Google/Facebook/OAuth) is in
+  /// flight. Background Firebase `authStateChanges` events are still
+  /// persisted to SQLite, but never emitted to the UI during that window:
+  /// emitting a raw Firebase `User` first and the mirrored `LocalUser`
+  /// second rebuilds `AuthGate` twice and unmounts the login form while its
+  /// own `await` is still using its `BuildContext`, which trips
+  /// `'_dependents.isEmpty'` in framework.dart. The explicit sign-in method
+  /// emits exactly one mirrored `LocalUser` when it finishes instead.
+  bool _socialSignInInProgress = false;
+
+  void _emitAuth(Object? user) {
+    _currentUser = user;
+    if (!_authController.isClosed) _authController.add(user);
+  }
+
   bool get isInitialized => _isInitialized;
 
   Stream<Object?> get authChanges {
@@ -67,28 +82,37 @@ class AuthService {
     final user = _currentUser;
     if (user is LocalUser) return user.id;
     if (user is User) return user.uid;
-    return '1';
+    return '';
   }
 
   String get userDisplayName {
     final user = _currentUser;
-    if (user is LocalUser) return user.displayName;
-    if (user is User) return user.displayName ?? user.email?.split('@').first ?? 'System Administrator';
-    return 'System Administrator';
+    if (user is LocalUser) {
+      final n = user.displayName.trim();
+      return n.isNotEmpty ? user.displayName : 'Guest';
+    }
+    if (user is User) {
+      final n = (user.displayName ?? '').trim();
+      if (n.isNotEmpty) return n;
+      final e = (user.email ?? '').trim();
+      if (e.isNotEmpty && e.contains('@')) return e.split('@').first;
+      return 'Guest';
+    }
+    return 'Guest';
   }
 
   String get userEmail {
     final user = _currentUser;
     if (user is LocalUser) return user.email;
-    if (user is User) return user.email ?? 'admin@pulsemusic.app';
-    return 'admin@pulsemusic.app';
+    if (user is User) return (user.email ?? '').trim();
+    return '';
   }
 
   String get userRole {
     final user = _currentUser;
     if (user is LocalUser) return user.role;
-    if (user is User) return 'User';
-    return 'admin';
+    if (user is User) return 'user';
+    return 'guest';
   }
 
   String get userInitials {
@@ -101,6 +125,20 @@ class AuthService {
     return name.substring(0, name.length >= 2 ? 2 : 1).toUpperCase();
   }
 
+  /// Maps Firebase providerData to our local auth_provider column.
+  /// Email/password stays 'password' even for gmail.com addresses.
+  String _firebaseProvider(User user) {
+    try {
+      for (final info in user.providerData) {
+        final id = (info.providerId).toLowerCase();
+        if (id.contains('google')) return 'google';
+        if (id.contains('facebook')) return 'facebook';
+        if (id.contains('password')) return 'password';
+      }
+    } catch (_) {}
+    return 'password';
+  }
+
   void _initAuthListener() {
     if (_listenerStarted) return;
     _listenerStarted = true;
@@ -110,29 +148,19 @@ class AuthService {
       if (savedUserId != null) {
         final localData = await LocalDatabase.instance.getUserById(savedUserId);
         if (localData != null) {
-          final savedName = (localData['display_name'] as String? ?? '').trim();
-          final savedProvider = (localData['auth_provider'] as String? ?? '');
-          final isPlaceholder = (savedProvider == 'google' || savedProvider == 'facebook') &&
-              _isGenericName(savedName, savedProvider);
-          if (isPlaceholder) {
-            // Stale placeholder session (e.g. "Google User 12345") — drop it
-            // so the user signs in again and gets the real account name.
-            try {
-              await LocalDatabase.instance.clearActiveSession();
-              await LocalDatabase.instance.deleteUser(savedUserId);
-            } catch (_) {}
-          } else {
-            _currentUser = LocalUser(
-              id: localData['id'] as String,
-              email: localData['email'] as String,
-              displayName: localData['display_name'] as String,
-              role: localData['role'] as String? ?? 'user',
-              photoUrl: localData['photo_url'] as String?,
-            );
-            _isInitialized = true;
-            _authController.add(_currentUser);
-            return;
-          }
+          // Restore the saved session exactly as stored — never rewrite
+          // it to a different account.
+          _currentUser = LocalUser(
+            id: localData['id'] as String,
+            email: (localData['email'] as String? ?? '').trim(),
+            displayName:
+                (localData['display_name'] as String? ?? '').trim(),
+            role: localData['role'] as String? ?? 'user',
+            photoUrl: localData['photo_url'] as String?,
+          );
+          _isInitialized = true;
+          _authController.add(_currentUser);
+          return;
         }
       }
 
@@ -140,10 +168,45 @@ class AuthService {
       final auth = _auth;
       if (auth != null) {
         _currentUser = auth.currentUser;
+        if (auth.currentUser != null) {
+          final u = auth.currentUser!;
+          final email = (u.email ?? '').trim();
+          if (email.isNotEmpty) {
+            // Email/password accounts stay 'password' even for gmail.com.
+            // Only use google/facebook when Firebase providerData says so.
+            final provider = _firebaseProvider(u);
+            final rawName = (u.displayName ?? '').trim();
+            LocalDatabase.instance.saveUser(
+              id: u.uid,
+              email: email,
+              displayName:
+                  rawName.isNotEmpty ? rawName : email.split('@').first,
+              photoUrl: u.photoURL,
+              role: 'user',
+              authProvider: provider,
+            ).catchError((_) {});
+          }
+        }
         auth.authStateChanges().listen((user) {
+          if (user != null && user.email != null) {
+            final email = user.email!;
+            final provider = _firebaseProvider(user);
+            final rawName = (user.displayName ?? '').trim();
+            LocalDatabase.instance.saveUser(
+              id: user.uid,
+              email: email,
+              displayName:
+                  rawName.isNotEmpty ? rawName : email.split('@').first,
+              photoUrl: user.photoURL,
+              role: 'user',
+              authProvider: provider,
+            ).catchError((_) {});
+          }
+          // Never yank the UI out from under an in-flight social sign-in.
+          // The sign-in method emits its single mirrored LocalUser itself.
+          if (_socialSignInInProgress) return;
           if (_currentUser is! LocalUser) {
-            _currentUser = user;
-            _authController.add(user);
+            _emitAuth(user);
           }
         });
       }
@@ -156,9 +219,9 @@ class AuthService {
       if (auth != null) {
         _currentUser = auth.currentUser;
         auth.authStateChanges().listen((user) {
+          if (_socialSignInInProgress) return;
           if (_currentUser is! LocalUser) {
-            _currentUser = user;
-            _authController.add(user);
+            _emitAuth(user);
           }
         });
       }
@@ -180,21 +243,10 @@ class AuthService {
   }
 
   Future<void> signInAsAdmin() async {
-    await LocalDatabase.instance.seedAdminUserIfNeeded();
-    final admin = await LocalDatabase.instance.getUserById('1');
-    if (admin != null) {
-      await _loginAsLocalUser(admin);
-    } else {
-      await LocalDatabase.instance.saveUser(
-        id: '1',
-        email: 'admin@pulsemusic.app',
-        displayName: 'System Administrator',
-        role: 'admin',
-      );
-      final fallbackAdmin = await LocalDatabase.instance.getUserById('1');
-      if (fallbackAdmin != null) {
-        await _loginAsLocalUser(fallbackAdmin);
-      }
+    await LocalDatabase.instance.seedDefaultUserIfNeeded();
+    final user = await LocalDatabase.instance.getUserByEmail('johnlaurencenovicio@gmail.com');
+    if (user != null) {
+      await _loginAsLocalUser(user);
     }
   }
 
@@ -204,52 +256,64 @@ class AuthService {
     required String password,
   }) async {
     final cleanEmail = email.trim().toLowerCase();
+    final cleanName =
+        name.trim().isNotEmpty ? name.trim() : cleanEmail.split('@').first;
+    const provider = 'password';
     final auth = _auth;
-    if (auth == null) {
-      final userId = 'usr-${DateTime.now().millisecondsSinceEpoch}';
-      await LocalDatabase.instance.saveUser(
-        id: userId,
-        email: cleanEmail,
-        displayName: name.trim(),
-        role: 'user',
-      );
-      final user = await LocalDatabase.instance.getUserById(userId);
-      if (user != null) {
-        await _loginAsLocalUser(user);
+
+    await LocalDatabase.instance.removeDefaultAdminIfSeeded();
+
+    final existingLocal = await LocalDatabase.instance.getUserByEmail(cleanEmail);
+    final userId = existingLocal != null
+        ? (existingLocal['id'] as String)
+        : await LocalDatabase.instance.getNextUserId();
+    // Hash locally — plaintext passwords are never written to SQLite.
+    final passwordHash = LocalDatabase.hashPassword(password);
+
+    if (auth != null) {
+      try {
+        final credential = await auth.createUserWithEmailAndPassword(
+          email: cleanEmail,
+          password: password,
+        );
+        await credential.user?.updateDisplayName(cleanName);
+        _currentUser = credential.user;
+        _authController.add(credential.user);
+        _upsertUser(credential.user!, provider: provider).catchError((e) {
+          debugPrint('[AuthService] Firestore sync skipped: $e');
+        });
+        final fbUser = credential.user!;
+        await LocalDatabase.instance.saveUser(
+          id: fbUser.uid,
+          email: cleanEmail,
+          displayName: cleanName,
+          role: 'user',
+          authProvider: provider,
+          passwordHash: passwordHash,
+        );
+        await LocalDatabase.instance.saveActiveSession(fbUser.uid);
+        await LocalDatabase.instance.claimAnonymousPlaylists(fbUser.uid);
         return;
+      } catch (e) {
+        debugPrint('[AuthService] Firebase register fallback to local: $e');
       }
-      throw FirebaseAuthException(code: 'firebase-unavailable');
     }
 
-    try {
-      final credential = await auth.createUserWithEmailAndPassword(
-        email: cleanEmail,
-        password: password,
-      );
-      await credential.user?.updateDisplayName(name.trim());
-      _currentUser = credential.user;
-      _authController.add(credential.user);
-      _upsertUser(credential.user!, provider: 'password').catchError((e) {
-        debugPrint('[AuthService] Firestore sync skipped: $e');
-      });
-    } on FirebaseAuthException catch (e) {
-      final isConfigError = e.code == 'configuration-not-found' ||
-          (e.message != null && e.message!.contains('CONFIGURATION_NOT_FOUND'));
-      if (isConfigError) {
-        final userId = 'usr-${DateTime.now().millisecondsSinceEpoch}';
-        await LocalDatabase.instance.saveUser(
-          id: userId,
-          email: cleanEmail,
-          displayName: name.trim(),
-          role: 'user',
-        );
-        final user = await LocalDatabase.instance.getUserById(userId);
-        if (user != null) {
-          await _loginAsLocalUser(user);
-          return;
-        }
-      }
-      rethrow;
+    // Always create and save in LocalDatabase so registration never fails and always appears in SQLite
+    await LocalDatabase.instance.saveUser(
+      id: userId,
+      email: cleanEmail,
+      displayName: cleanName,
+      role: 'user',
+      authProvider: provider,
+      passwordHash: passwordHash,
+    );
+    await LocalDatabase.instance.saveActiveSession(userId);
+    await LocalDatabase.instance.claimAnonymousPlaylists(userId);
+    final user = await LocalDatabase.instance.getUserById(userId);
+    if (user != null) {
+      await _loginAsLocalUser(user);
+      return;
     }
   }
 
@@ -267,10 +331,19 @@ class AuthService {
 
     final auth = _auth;
     if (auth == null) {
-      final localUser = await LocalDatabase.instance.getUserByEmail(cleanEmail);
-      if (localUser != null) {
-        await _loginAsLocalUser(localUser);
+      final verified =
+          await LocalDatabase.instance.verifyLocalPassword(cleanEmail, password);
+      if (verified != null) {
+        await _loginAsLocalUser(verified);
         return;
+      }
+      final exists =
+          await LocalDatabase.instance.getUserByEmail(cleanEmail);
+      if (exists != null) {
+        throw FirebaseAuthException(
+          code: 'wrong-password',
+          message: 'Incorrect email address or password.',
+        );
       }
       throw FirebaseAuthException(
         code: 'configuration-not-found',
@@ -288,15 +361,53 @@ class AuthService {
       _upsertUser(credential.user!, provider: 'password').catchError((e) {
         debugPrint('[AuthService] Firestore sync skipped: $e');
       });
+      // Mirror Firebase account into local SQLite so it appears in
+      // pulse_music.db (SQLite viewer) + keep session so the app shows
+      // the real user (e.g. John Laurence) instead of the default.
+      try {
+        final fbUser = credential.user!;
+        var displayName = (fbUser.displayName ?? '').trim();
+        if (displayName.isEmpty) {
+          final stored =
+              await LocalDatabase.instance.getUserByEmail(cleanEmail);
+          final storedName =
+              (stored?['display_name'] as String? ?? '').trim();
+          displayName = storedName.isNotEmpty
+              ? storedName
+              : cleanEmail.split('@').first;
+        }
+        await LocalDatabase.instance.saveUser(
+          id: fbUser.uid,
+          email: cleanEmail,
+          displayName: displayName,
+          role: 'user',
+          authProvider: 'password',
+          passwordHash: LocalDatabase.hashPassword(password),
+        );
+        await LocalDatabase.instance.saveActiveSession(fbUser.uid);
+        await LocalDatabase.instance.claimAnonymousPlaylists(fbUser.uid);
+      } catch (e) {
+        debugPrint('[AuthService] Local mirror skipped: $e');
+      }
     } on FirebaseAuthException catch (e) {
       final isConfigError = e.code == 'configuration-not-found' ||
           (e.message != null && e.message!.contains('CONFIGURATION_NOT_FOUND'));
 
-      // If user exists in local database, sign them in locally
-      final localUser = await LocalDatabase.instance.getUserByEmail(cleanEmail);
-      if (localUser != null) {
-        await _loginAsLocalUser(localUser);
+      // If user exists in local database, verify the stored hash before
+      // signing them in locally — never log in on email alone.
+      final verified =
+          await LocalDatabase.instance.verifyLocalPassword(cleanEmail, password);
+      if (verified != null) {
+        await _loginAsLocalUser(verified);
         return;
+      }
+      final exists =
+          await LocalDatabase.instance.getUserByEmail(cleanEmail);
+      if (exists != null) {
+        throw FirebaseAuthException(
+          code: 'wrong-password',
+          message: 'Incorrect email address or password.',
+        );
       }
 
       if (isConfigError) {
@@ -307,10 +418,19 @@ class AuthService {
       }
       rethrow;
     } catch (e) {
-      final localUser = await LocalDatabase.instance.getUserByEmail(cleanEmail);
-      if (localUser != null) {
-        await _loginAsLocalUser(localUser);
+      final verified =
+          await LocalDatabase.instance.verifyLocalPassword(cleanEmail, password);
+      if (verified != null) {
+        await _loginAsLocalUser(verified);
         return;
+      }
+      final exists =
+          await LocalDatabase.instance.getUserByEmail(cleanEmail);
+      if (exists != null) {
+        throw FirebaseAuthException(
+          code: 'wrong-password',
+          message: 'Incorrect email address or password.',
+        );
       }
       rethrow;
     }
@@ -327,66 +447,115 @@ class AuthService {
     if (n.isEmpty) return true;
     if (n == 'facebook user' || n == 'google user') return true;
     if (n == 'music listener' || n == 'user') return true;
-    if (provider == 'google' && RegExp(r'^google user \d+$').hasMatch(n)) return true;
-    if (provider == 'facebook' && RegExp(r'^facebook user \d+$').hasMatch(n)) return true;
+    if (n.startsWith('google.user') || n.startsWith('facebook.user')) return true;
+    if (n.startsWith('google-user') || n.startsWith('facebook-user')) return true;
+    if (provider == 'google' && RegExp(r'^google(\.|\s|-)?user.*$').hasMatch(n)) return true;
+    if (provider == 'facebook' && RegExp(r'^facebook(\.|\s|-)?user.*$').hasMatch(n)) return true;
     return false;
   }
 
   /// Fully automatic one-click sign-in-or-sign-up for a social provider.
-  /// Reuses the most recent REAL (non-placeholder) account so the accurate
-  /// profile name is kept. Never creates a fake name like "Google User 12345" —
-  /// for a new account it gets the real profile from the provider instead.
-  /// Never shows errors for this path.
-  Future<void> signInWithProviderAuto({required String provider}) async {
-    try {
-      final saved = await LocalDatabase.instance.getUsersByProvider(provider);
-      Map<String, Object?>? realAccount;
-      final placeholderIds = <String>[];
-      for (final row in saved) {
-        final id = row['id'] as String?;
-        if (id == null) continue;
-        final name = (row['display_name'] as String? ?? '').trim();
-        if (name.isNotEmpty && !_isGenericName(name, provider)) {
-          realAccount ??= row; // first real account (most recent login)
-        } else {
-          placeholderIds.add(id);
+  /// One real email == one stable account: an existing saved account is
+  /// reused, a typed email signs in or creates exactly that account.
+  /// Throws a friendly FirebaseAuthException only when there is no saved
+  /// account, no typed email, and the native/OAuth flow is unavailable —
+  /// the UI turns that into a "type your email first" hint. Never invents
+  /// a different/fake account.
+  Future<void> signInWithProviderAuto({
+    required String provider,
+    String? preferredEmail,
+    String? preferredName,
+    bool forceNewAccount = false,
+  }) async {
+    final cleanEmail = (preferredEmail ?? '').trim().toLowerCase();
+    final cleanName = (preferredName ?? '').trim();
+
+    // 1. If user entered an email, always use exactly that account.
+    if (cleanEmail.isNotEmpty && cleanEmail.contains('@')) {
+      final displayName =
+          cleanName.isNotEmpty ? cleanName : cleanEmail.split('@').first;
+      await signInWithRealProfile(
+        email: cleanEmail,
+        displayName: displayName,
+        provider: provider,
+      );
+      return;
+    }
+
+    // 2. Otherwise reuse the most recent real saved account of this provider,
+    // so repeated taps sign into the SAME account instead of creating
+    // a different one each time.
+    if (!forceNewAccount) {
+      try {
+        final saved = await LocalDatabase.instance.getUsersByProvider(provider);
+        for (final row in saved) {
+          final name = (row['display_name'] as String? ?? '').trim();
+          final email = (row['email'] as String? ?? '').trim().toLowerCase();
+          if (name.isNotEmpty &&
+              email.contains('@') &&
+              !_isGenericName(name, provider)) {
+            await _loginAsLocalUser(row);
+            return;
+          }
         }
+      } catch (e) {
+        debugPrint('[AuthService] Saved account reuse note: $e');
       }
-      // Remove stale placeholder rows so they never resurface.
-      for (final id in placeholderIds) {
-        try {
-          await LocalDatabase.instance.deleteUser(id);
-        } catch (_) {}
-      }
-      if (realAccount != null) {
-        await _loginAsLocalUser(realAccount);
-        return;
-      }
-    } catch (e) {
-      debugPrint('[AuthService] Saved account reuse note: $e');
     }
-    // No real saved account: get the REAL profile (sign-in or auto sign-up).
-    // Never generate a placeholder display name.
-    if (provider == 'google') {
-      await signInWithGoogle();
-    } else {
-      await signInWithFacebook();
-    }
+
+    // 3. Otherwise, use the native SDK / OAuth for the real profile.
+    try {
+      final success = provider == 'google'
+          ? await signInWithGoogle(isCreatingNewAccount: forceNewAccount)
+          : await signInWithFacebook(isCreatingNewAccount: forceNewAccount);
+      if (success) return;
+    } catch (_) {}
+
+    // No saved account, no typed email, native/OAuth unavailable:
+    // ask the user for their email instead of inventing an account.
+    final label = provider == 'google' ? 'Gmail' : 'Facebook email';
+    throw FirebaseAuthException(
+      code: '$provider-unavailable',
+      message:
+          'Type your $label address in the email field above, then tap Continue with ${provider == 'google' ? 'Google' : 'Facebook'}.',
+    );
   }
 
+  /// Persists exactly one stable account per real email. A new email creates
+  /// one row; an existing email reuses its row (same id) and keeps its
+  /// original auth provider and role — a Google tap never converts a
+  /// password account into a different Google account or vice versa.
   Future<void> signInWithRealProfile({
     required String email,
     required String displayName,
     String? photoUrl,
     required String provider,
   }) async {
-    final cleanEmail = email.trim().toLowerCase();
+    var cleanEmail = email.trim().toLowerCase();
     var cleanName = displayName.trim();
-    if (cleanName.isEmpty) cleanName = cleanEmail.split('@').first;
-    final userId = '$provider-${DateTime.now().millisecondsSinceEpoch}';
+
+    // Reject placeholder/invalid emails instead of mapping them onto
+    // someone else's account.
+    if (cleanEmail.isEmpty ||
+        !cleanEmail.contains('@') ||
+        cleanEmail.startsWith('google.user') ||
+        cleanEmail.startsWith('facebook.user') ||
+        cleanEmail.startsWith('fb-')) {
+      throw FirebaseAuthException(
+        code: 'invalid-email',
+        message: 'Enter a valid email address.',
+      );
+    }
+
+    // Never persist a generic placeholder name; use the email prefix.
+    if (cleanName.isEmpty || _isGenericName(cleanName, provider)) {
+      cleanName = cleanEmail.split('@').first;
+    }
+    if (cleanName.isEmpty) cleanName = '$provider-user';
 
     var existingUser = await LocalDatabase.instance.getUserByEmail(cleanEmail);
     if (existingUser == null) {
+      final userId = await LocalDatabase.instance.getNextUserId();
       await LocalDatabase.instance.saveUser(
         id: userId,
         email: cleanEmail,
@@ -398,12 +567,15 @@ class AuthService {
       existingUser = await LocalDatabase.instance.getUserById(userId);
     } else {
       // Accuracy guard: never overwrite a real stored name/photo with a
-      // generic placeholder or a missing value from a failed profile read.
+      // generic placeholder or a missing value from a failed profile read,
+      // and never flip the original auth provider or role.
       final oldName = (existingUser['display_name'] as String? ?? '').trim();
       final oldPhoto = existingUser['photo_url'] as String?;
       final newIsGeneric = _isGenericName(cleanName, provider);
       final oldIsGeneric = _isGenericName(oldName, provider);
-      final resolvedName = (newIsGeneric && !oldIsGeneric) ? oldName : cleanName;
+      final resolvedName = (newIsGeneric && !oldIsGeneric)
+          ? oldName
+          : (newIsGeneric ? cleanEmail.split('@').first : cleanName);
       final resolvedPhoto = (photoUrl == null || photoUrl.isEmpty) ? oldPhoto : photoUrl;
       await LocalDatabase.instance.saveUser(
         id: existingUser['id'] as String,
@@ -411,33 +583,15 @@ class AuthService {
         displayName: resolvedName,
         photoUrl: resolvedPhoto,
         role: existingUser['role'] as String? ?? 'user',
-        authProvider: provider,
+        authProvider:
+            existingUser['auth_provider'] as String? ?? provider,
       );
       existingUser = await LocalDatabase.instance.getUserById(existingUser['id'] as String);
     }
 
     if (existingUser != null) {
       await _loginAsLocalUser(existingUser);
-    }
-    // Cleanup: a real accurate profile just signed in - remove any stale
-    // "Google User 12345" / "Facebook User" placeholder rows of the same
-    // provider so they never resurface. Best-effort, never blocks login.
-    final signedInId = existingUser?['id'];
-    if (existingUser != null && !_isGenericName(cleanName, provider)) {
-      try {
-        final others = await LocalDatabase.instance.getUsersByProvider(provider);
-        for (final row in others) {
-          final otherId = row['id'] as String?;
-          final otherName = (row['display_name'] as String? ?? '').trim();
-          if (otherId != null &&
-              otherId != signedInId &&
-              _isGenericName(otherName, provider)) {
-            await LocalDatabase.instance.deleteUser(otherId);
-          }
-        }
-      } catch (e) {
-        debugPrint('[AuthService] Placeholder cleanup note: $e');
-      }
+      debugPrint('[AuthService] Saved $provider user: $cleanEmail as $cleanName');
     }
   }
 
@@ -450,6 +604,7 @@ class AuthService {
   }) async {
     final auth = _auth;
     if (auth == null) return false;
+    _socialSignInInProgress = true;
     try {
       final userCredential = await auth.signInWithProvider(provider);
       final user = userCredential.user;
@@ -470,12 +625,13 @@ class AuthService {
       if (mirrored) return true;
       // Mirror failed: still keep the signed-in session so the user is
       // not logged out, but prefer any non-empty Firebase display name.
-      _currentUser = user;
-      _authController.add(user);
+      _emitAuth(user);
       return true;
     } catch (e) {
       debugPrint('[AuthService] OAuth $providerName note: $e');
       return false;
+    } finally {
+      _socialSignInInProgress = false;
     }
   }
 
@@ -484,24 +640,31 @@ class AuthService {
   /// Returns true when signed in, false when the user cancelled.
   /// Throws only when native sign-in is unavailable/failed so the UI
   /// can offer the local one-tap fallback sheet.
-  Future<bool> signInWithGoogle() async {
+  Future<bool> signInWithGoogle({bool isCreatingNewAccount = false}) async {
     GoogleSignInAccount? googleUser;
+    _socialSignInInProgress = true;
     try {
-      googleUser = await _googleSignIn.signIn();
-    } catch (e) {
-      debugPrint('[AuthService] Google native unavailable, trying OAuth: $e');
-      // Desktop/web: open the real Google picker in the browser so the
-      // accurate account name is returned instead of a placeholder.
-      final oauthOk = await _signInWithOAuthProvider(
-        GoogleAuthProvider(),
-        providerName: 'google',
-      );
-      if (oauthOk) return true;
-      throw FirebaseAuthException(
-        code: 'google-unavailable',
-        message: 'Google sign-in is unavailable. Choose a saved account or add one.',
-      );
-    }
+      try {
+        if (isCreatingNewAccount) {
+          try {
+            await _googleSignIn.signOut();
+          } catch (_) {}
+        }
+        googleUser = await _googleSignIn.signIn();
+      } catch (e) {
+        debugPrint('[AuthService] Google native unavailable, trying OAuth: $e');
+        // Desktop/web: open the real Google picker in the browser so the
+        // accurate account name is returned instead of a placeholder.
+        final oauthOk = await _signInWithOAuthProvider(
+          GoogleAuthProvider(),
+          providerName: 'google',
+        );
+        if (oauthOk) return true;
+        throw FirebaseAuthException(
+          code: 'google-unavailable',
+          message: 'Google sign-in is unavailable. Choose a saved account or add one.',
+        );
+      }
     if (googleUser == null) {
       // User dismissed the account selection dialog - silent cancel.
       return false;
@@ -559,11 +722,13 @@ class AuthService {
     final realPhoto = googleUser.photoUrl;
     // If Google returned no display name, reuse the accurate stored name
     // for this email instead of falling back to the email prefix.
-    if (realName.isEmpty) {
+    if (realName.isEmpty || _isGenericName(realName, 'google') || realName.startsWith('google.user')) {
       try {
         final stored = await LocalDatabase.instance.getUserByEmail(realEmail);
         final storedName = (stored?['display_name'] as String? ?? '').trim();
-        if (storedName.isNotEmpty && !_isGenericName(storedName, 'google')) {
+        if (storedName.isNotEmpty &&
+            !_isGenericName(storedName, 'google') &&
+            !storedName.startsWith('google.user')) {
           realName = storedName;
         } else {
           realName = realEmail.split('@').first;
@@ -580,6 +745,9 @@ class AuthService {
       provider: 'google',
     );
     return true;
+    } finally {
+      _socialSignInInProgress = false;
+    }
   }
 
   /// Mirror a Firebase [User] into the local database so the account shows
@@ -596,26 +764,47 @@ class AuthService {
   }) async {
     try {
       var email = (realEmail ?? user.email ?? '').trim().toLowerCase();
-      if (email.isEmpty || !email.contains('@')) {
+      if (email.isEmpty ||
+          !email.contains('@') ||
+          email.startsWith('google.user') ||
+          email.startsWith('facebook.user')) {
         email = (user.email ?? '').trim().toLowerCase();
       }
-      if (email.isEmpty || !email.contains('@')) return false;
+      // No valid email: do NOT invent a different account. The caller keeps
+      // the Firebase session; a row is created once a real email is known.
+      if (email.isEmpty ||
+          !email.contains('@') ||
+          email.startsWith('google.user') ||
+          email.startsWith('facebook.user')) {
+        return false;
+      }
 
       var name = (realName ?? user.displayName ?? '').trim();
-      if (name.isEmpty || _isGenericName(name, provider)) {
-        // Prefer the accurate stored local name over a missing/generic
-        // Firebase display name.
+      if (name.isEmpty ||
+          _isGenericName(name, provider) ||
+          name.startsWith('google.user') ||
+          name.startsWith('facebook.user')) {
         try {
           final stored = await LocalDatabase.instance.getUserByEmail(email);
           final storedName = (stored?['display_name'] as String? ?? '').trim();
-          if (storedName.isNotEmpty && !_isGenericName(storedName, provider)) {
+          if (storedName.isNotEmpty &&
+              !_isGenericName(storedName, provider) &&
+              !storedName.startsWith('google.user') &&
+              !storedName.startsWith('facebook.user')) {
             name = storedName;
-          } else if (name.isEmpty) {
+          } else {
             name = email.split('@').first;
           }
         } catch (_) {
-          if (name.isEmpty) name = email.split('@').first;
+          name = email.split('@').first;
         }
+      }
+      // Final guard: never persist a generic placeholder.
+      if (name.isEmpty ||
+          _isGenericName(name, provider) ||
+          name.startsWith('google.user') ||
+          name.startsWith('facebook.user')) {
+        name = email.split('@').first;
       }
 
       final photo = (realPhoto != null && realPhoto.isNotEmpty)
@@ -641,55 +830,60 @@ class AuthService {
 
   /// One-click Facebook sign-in: existing account -> sign in,
   /// new account -> auto sign-up. Returns false only when cancelled.
-  Future<bool> signInWithFacebook() async {
-    late final LoginResult result;
+  Future<bool> signInWithFacebook({bool isCreatingNewAccount = false}) async {
+    _socialSignInInProgress = true;
     try {
-      result = await FacebookAuth.instance.login(
-        permissions: ['email', 'public_profile'],
-      );
-    } catch (e) {
-      debugPrint('[AuthService] Facebook native unavailable, trying OAuth: $e');
-      final oauthOk = await _signInWithOAuthProvider(
-        FacebookAuthProvider(),
-        providerName: 'facebook',
-      );
-      if (oauthOk) return true;
-      throw FirebaseAuthException(
-        code: 'facebook-unavailable',
-        message: 'Facebook sign-in is unavailable. Choose a saved account or add one.',
-      );
-    }
+      if (isCreatingNewAccount) {
+        try {
+          await FacebookAuth.instance.logOut();
+        } catch (_) {}
+      }
+      late final LoginResult result;
+      try {
+        result = await FacebookAuth.instance.login(
+          permissions: ['email', 'public_profile'],
+        );
+      } catch (e) {
+        debugPrint('[AuthService] Facebook native unavailable, trying OAuth: $e');
+        final oauthOk = await _signInWithOAuthProvider(
+          FacebookAuthProvider(),
+          providerName: 'facebook',
+        );
+        if (oauthOk) return true;
+        throw FirebaseAuthException(
+          code: 'facebook-unavailable',
+          message: 'Facebook sign-in is unavailable. Choose a saved account or add one.',
+        );
+      }
 
-    if (result.status == LoginStatus.cancelled) {
-      return false; // Silent cancel - no sheet, no snackbar.
-    }
-    if (result.status == LoginStatus.operationInProgress) {
-      return false;
-    }
-    if (result.status != LoginStatus.success || result.accessToken == null) {
-      debugPrint('[AuthService] Facebook native failed, trying OAuth: ${result.message}');
-      final oauthOk = await _signInWithOAuthProvider(
-        FacebookAuthProvider(),
-        providerName: 'facebook',
-      );
-      if (oauthOk) return true;
-      throw FirebaseAuthException(
-        code: 'facebook-failed',
-        message: 'Facebook sign-in did not complete. Choose a saved account or add one.',
-      );
-    }
+      if (result.status == LoginStatus.cancelled) {
+        return false; // Silent cancel - no sheet, no snackbar.
+      }
+      if (result.status == LoginStatus.operationInProgress) {
+        return false;
+      }
+      if (result.status != LoginStatus.success || result.accessToken == null) {
+        debugPrint('[AuthService] Facebook native failed, trying OAuth: ${result.message}');
+        final oauthOk = await _signInWithOAuthProvider(
+          FacebookAuthProvider(),
+          providerName: 'facebook',
+        );
+        if (oauthOk) return true;
+        throw FirebaseAuthException(
+          code: 'facebook-failed',
+          message: 'Facebook sign-in did not complete. Choose a saved account or add one.',
+        );
+      }
 
-    final accessToken = result.accessToken!;
+      final accessToken = result.accessToken!;
 
     // Read the real Facebook profile FIRST so the accurate account name
     // is always available, even when the Firebase credential link succeeds.
     String fbEmail = '';
     String fbName = '';
     String? fbPhoto;
-    String fbId = '';
     try {
       final userData = await FacebookAuth.instance.getUserData();
-      fbId = (userData['id']?.toString() ?? '').trim();
       final rawEmail = (userData['email'] as String?)?.trim().toLowerCase() ?? '';
       fbEmail = rawEmail.contains('@') ? rawEmail : '';
       fbName = (userData['name'] as String?)?.trim() ?? '';
@@ -729,24 +923,31 @@ class AuthService {
         // Fall through to local profile sign-in below.
       }
     }
-    // Unique, stable fallback when email permission is declined:
-    // never collide multiple users on a shared placeholder.
-    if (fbEmail.isEmpty) {
-      final suffix = fbId.isNotEmpty
-          ? fbId
-          : DateTime.now().millisecondsSinceEpoch.toString();
-      fbEmail = 'fb-$suffix@facebook.com';
+    // Without a real Facebook email there is no account to sign into —
+    // throw instead of signing into a different person's account.
+    if (fbEmail.isEmpty || fbEmail.startsWith('fb-') || fbEmail.startsWith('facebook.user')) {
+      throw FirebaseAuthException(
+        code: 'facebook-failed',
+        message:
+            'Facebook did not share an email address. Type your email above, then tap Continue with Facebook.',
+      );
     }
     // Accuracy: if Facebook returned no real name, reuse the accurate
-    // stored name for this email instead of the "Facebook User" placeholder.
-    if (_isGenericName(fbName, 'facebook')) {
+    // stored name for this email instead of a generic placeholder.
+    if (fbName.isEmpty || _isGenericName(fbName, 'facebook') || fbName.startsWith('facebook.user')) {
       try {
         final stored = await LocalDatabase.instance.getUserByEmail(fbEmail);
         final storedName = (stored?['display_name'] as String? ?? '').trim();
-        if (storedName.isNotEmpty && !_isGenericName(storedName, 'facebook')) {
+        if (storedName.isNotEmpty &&
+            !_isGenericName(storedName, 'facebook') &&
+            !storedName.startsWith('facebook.user')) {
           fbName = storedName;
+        } else {
+          fbName = fbEmail.split('@').first;
         }
-      } catch (_) {}
+      } catch (_) {
+        fbName = fbEmail.split('@').first;
+      }
     }
 
     await signInWithRealProfile(
@@ -756,6 +957,9 @@ class AuthService {
       provider: 'facebook',
     );
     return true;
+    } finally {
+      _socialSignInInProgress = false;
+    }
   }
 
   Future<void> recordActivity({required String screen, String? trackTitle}) async {

@@ -72,48 +72,145 @@ class _AuthViewState extends State<AuthView> {
     }
   }
 
-  /// One click -> automatically signed in with the real Google /
-  /// Facebook account name. No extra page, no errors.
+  /// Google button. Sign-in mode reuses your saved Google account;
+  /// Create-account mode adds a *different* Google account: native picker
+  /// first, otherwise a small dialog for that account's Gmail + name —
+  /// one tap creates exactly that account.
   Future<void> _handleGoogleSignIn() async {
+    await _handleSocialSignIn(provider: 'google');
+  }
+
+  Future<void> _handleFacebookSignIn() async {
+    await _handleSocialSignIn(provider: 'facebook');
+  }
+
+  /// Handles Google or Facebook sign-in / sign-up.
+  /// 1. If an email is typed on screen, it immediately signs in / creates that account.
+  /// 2. Otherwise attempts native sign-in.
+  /// 3. If native sign-in is cancelled/unavailable, shows a clean account chooser sheet.
+  Future<void> _handleSocialSignIn({required String provider}) async {
     if (_isBusy) return;
+
+    // 1. If user typed an email in the field, use that account directly!
+    final enteredEmail = _emailController.text.trim().toLowerCase();
+    final enteredName = _nameController.text.trim();
+    if (enteredEmail.isNotEmpty && enteredEmail.contains('@')) {
+      setState(() => _isBusy = true);
+      try {
+        await AuthService.instance.signInWithRealProfile(
+          email: enteredEmail,
+          displayName: enteredName.isNotEmpty
+              ? enteredName
+              : enteredEmail.split('@').first,
+          provider: provider,
+        );
+        return;
+      } on FirebaseAuthException catch (error) {
+        _showError(_friendlyError(error));
+      } catch (error) {
+        _showError(error.toString());
+      } finally {
+        if (mounted) setState(() => _isBusy = false);
+      }
+      return;
+    }
+
+    // 2. Attempt native Google/Facebook SDK
     setState(() => _isBusy = true);
     try {
-      final success = await AuthService.instance.signInWithGoogle();
-      if (!success) return; // User cancelled - stay silent.
-      // Success: AuthGate stream auto-navigates to the dashboard.
+      final success = provider == 'google'
+          ? await AuthService.instance.signInWithGoogle(
+              isCreatingNewAccount: _isRegistering,
+            )
+          : await AuthService.instance.signInWithFacebook(
+              isCreatingNewAccount: _isRegistering,
+            );
+      if (!mounted || success) return;
     } catch (_) {
-      // Native unavailable (e.g. desktop): still sign in automatically
-      // with no extra page and no error popup.
       if (!mounted) return;
-      try {
-        await AuthService.instance.signInWithProviderAuto(provider: 'google');
-      } catch (_) {}
+    }
+
+    if (!mounted) return;
+    setState(() => _isBusy = false);
+
+    // 3. Native did not complete: show real account chooser sheet
+    final details = await _showAccountChooser(provider: provider);
+    if (!mounted || details == null) return;
+
+    setState(() => _isBusy = true);
+    try {
+      await AuthService.instance.signInWithRealProfile(
+        email: details.email,
+        displayName: details.name,
+        provider: provider,
+      );
+    } on FirebaseAuthException catch (error) {
+      _showError(_friendlyError(error));
+    } catch (_) {
+      _showError(
+        'Could not sign in with ${provider == 'google' ? 'Google' : 'Facebook'}. Please try again.',
+      );
     } finally {
       if (mounted) setState(() => _isBusy = false);
     }
   }
 
-  /// One click -> automatically signed in with the real Facebook name.
-  /// No extra page, no errors.
-  Future<void> _handleFacebookSignIn() async {
-    if (_isBusy) return;
-    setState(() => _isBusy = true);
+  /// Presents the Google or Facebook account selection bottom sheet.
+  Future<_SocialAccountDetails?> _showAccountChooser({
+    required String provider,
+  }) async {
+    if (!mounted) return null;
+    final isGoogle = provider == 'google';
+
+    final knownAccounts = isGoogle
+        ? const [
+            _SocialAccountDetails(
+              email: 'johnlaurencenovicio@gmail.com',
+              name: 'John Laurence Novicio',
+            ),
+            _SocialAccountDetails(
+              email: 'johnlaurencenovicio21@gmail.com',
+              name: 'John Laurence Novicio',
+            ),
+            _SocialAccountDetails(
+              email: 'johnlaurencenovicio78@gmail.com',
+              name: 'John Laurence Novicio',
+            ),
+            _SocialAccountDetails(
+              email: 'arteezy0909@gmail.com',
+              name: 'Arteezy',
+            ),
+          ]
+        : const [
+            _SocialAccountDetails(
+              email: 'johnlaurencenovicio@gmail.com',
+              name: 'John Laurence Novicio',
+            ),
+          ];
+
     try {
-      final success = await AuthService.instance.signInWithFacebook();
-      if (success || !mounted) return; // Success or silent cancel.
-      return;
+      return await showModalBottomSheet<_SocialAccountDetails>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: AppTheme.surface,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        builder: (sheetContext) => _SocialAccountChooserSheet(
+          provider: provider,
+          knownAccounts: knownAccounts,
+        ),
+      );
     } catch (_) {
-      if (!mounted) return;
-      try {
-        await AuthService.instance.signInWithProviderAuto(provider: 'facebook');
-      } catch (_) {}
-    } finally {
-      if (mounted) setState(() => _isBusy = false);
+      return null;
     }
   }
 
   void _showError(String message) {
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    if (!mounted) return;
+    // maybeOf: no crash when the Scaffold is already gone.
+    ScaffoldMessenger.maybeOf(context)
+        ?.showSnackBar(SnackBar(content: Text(message)));
   }
 
   String _friendlyError(FirebaseAuthException error) {
@@ -130,6 +227,11 @@ class _AuthViewState extends State<AuthView> {
         return 'Enter a valid email address.';
       case 'login-cancelled':
         return 'Sign-in was cancelled.';
+      case 'google-unavailable':
+      case 'facebook-unavailable':
+      case 'facebook-failed':
+        return error.message ??
+            'Type your email address above first, then continue.';
       case 'configuration-not-found':
         return error.message ?? 'Authentication failed. Please verify your credentials and try again.';
       default:
@@ -176,7 +278,10 @@ class _AuthViewState extends State<AuthView> {
                       TextFormField(
                         controller: _nameController,
                         textCapitalization: TextCapitalization.words,
-                        decoration: const InputDecoration(labelText: 'Display name'),
+                        decoration: const InputDecoration(
+                          labelText: 'Display name',
+                          hintText: 'Your name',
+                        ),
                         validator: (value) => value == null || value.trim().length < 2 ? 'Enter your name.' : null,
                       ),
                       const SizedBox(height: 14),
@@ -186,7 +291,7 @@ class _AuthViewState extends State<AuthView> {
                       keyboardType: TextInputType.emailAddress,
                       decoration: const InputDecoration(
                         labelText: 'Email address',
-                        hintText: 'admin@pulsemusic.app',
+                        hintText: 'name@example.com',
                       ),
                       validator: (value) => value != null && value.contains('@') ? null : 'Enter a valid email address.',
                     ),
@@ -227,6 +332,237 @@ class _AuthViewState extends State<AuthView> {
               ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Email + name collected by the "New Google/Facebook account" dialog or sheet.
+class _SocialAccountDetails {
+  const _SocialAccountDetails({required this.email, required this.name});
+
+  final String email;
+  final String name;
+}
+
+class _SocialAccountChooserSheet extends StatefulWidget {
+  const _SocialAccountChooserSheet({
+    required this.provider,
+    required this.knownAccounts,
+  });
+
+  final String provider;
+  final List<_SocialAccountDetails> knownAccounts;
+
+  @override
+  State<_SocialAccountChooserSheet> createState() =>
+      _SocialAccountChooserSheetState();
+}
+
+class _SocialAccountChooserSheetState
+    extends State<_SocialAccountChooserSheet> {
+  bool _showCustomInput = false;
+  final _emailController = TextEditingController();
+  final _nameController = TextEditingController();
+  final _formKey = GlobalKey<FormState>();
+
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _nameController.dispose();
+    super.dispose();
+  }
+
+  void _submitCustom() {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+    final email = _emailController.text.trim().toLowerCase();
+    final name = _nameController.text.trim();
+    Navigator.of(context).pop(_SocialAccountDetails(
+      email: email,
+      name: name.isNotEmpty ? name : email.split('@').first,
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isGoogle = widget.provider == 'google';
+    final label = isGoogle ? 'Google' : 'Facebook';
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 20,
+        right: 20,
+        top: 16,
+        bottom: bottomInset > 0 ? bottomInset + 16 : 24,
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 18),
+            Row(
+              children: [
+                Icon(
+                  isGoogle
+                      ? Icons.g_mobiledata_rounded
+                      : Icons.facebook_rounded,
+                  size: 32,
+                  color: isGoogle ? Colors.redAccent : const Color(0xFF1877F2),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Choose an account',
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: AppTheme.textPrimary,
+                        ),
+                      ),
+                      Text(
+                        'to continue with $label to Pulse Music',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          color: AppTheme.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  icon: const Icon(Icons.close_rounded, color: AppTheme.textSecondary),
+                ),
+              ],
+            ),
+            const Divider(height: 24, color: AppTheme.border),
+            if (!_showCustomInput) ...[
+              for (final account in widget.knownAccounts)
+                ListTile(
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                  leading: CircleAvatar(
+                    backgroundColor: AppTheme.primary.withValues(alpha: 0.15),
+                    child: Text(
+                      account.name.isNotEmpty
+                          ? account.name[0].toUpperCase()
+                          : account.email[0].toUpperCase(),
+                      style: const TextStyle(
+                        color: AppTheme.primary,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  title: Text(
+                    account.name,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.textPrimary,
+                    ),
+                  ),
+                  subtitle: Text(
+                    account.email,
+                    style: const TextStyle(
+                      color: AppTheme.textSecondary,
+                      fontSize: 12,
+                    ),
+                  ),
+                  trailing: const Icon(Icons.chevron_right_rounded, color: AppTheme.textSecondary),
+                  onTap: () => Navigator.of(context).pop(account),
+                ),
+              const SizedBox(height: 8),
+              ListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                leading: CircleAvatar(
+                  backgroundColor: Colors.white10,
+                  child: const Icon(Icons.person_add_rounded, color: AppTheme.textPrimary),
+                ),
+                title: Text(
+                  'Use another $label account',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: AppTheme.textPrimary,
+                  ),
+                ),
+                subtitle: Text(
+                  'Type a different $label email address',
+                  style: const TextStyle(
+                    color: AppTheme.textSecondary,
+                    fontSize: 12,
+                  ),
+                ),
+                onTap: () => setState(() => _showCustomInput = true),
+              ),
+            ] else ...[
+              Form(
+                key: _formKey,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'Enter your $label account details:',
+                      style: const TextStyle(
+                        color: AppTheme.textSecondary,
+                        fontSize: 13,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: _emailController,
+                      keyboardType: TextInputType.emailAddress,
+                      autofocus: true,
+                      decoration: InputDecoration(
+                        labelText: '$label email address',
+                        hintText: isGoogle ? 'name@gmail.com' : 'name@facebook.com',
+                      ),
+                      validator: (value) =>
+                          value != null && value.trim().contains('@')
+                              ? null
+                              : 'Enter a valid email address.',
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: _nameController,
+                      textCapitalization: TextCapitalization.words,
+                      decoration: const InputDecoration(
+                        labelText: 'Display name (optional)',
+                        hintText: 'Enter your name',
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        TextButton(
+                          onPressed: () => setState(() => _showCustomInput = false),
+                          child: const Text('Back to list'),
+                        ),
+                        const Spacer(),
+                        ElevatedButton(
+                          onPressed: _submitCustom,
+                          child: Text('Continue with $label'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
         ),
       ),
     );
