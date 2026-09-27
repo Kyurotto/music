@@ -1,8 +1,13 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../auth/auth_service.dart';
+import '../auth/email_config.dart';
+import '../auth/otp_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/otp_verification_dialog.dart';
 import 'music_dashboard_view.dart';
 
 class AuthGate extends StatelessWidget {
@@ -35,7 +40,9 @@ class _AuthViewState extends State<AuthView> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _emailController = TextEditingController();
+  final _phoneController = TextEditingController(text: '+63 ');
   final _passwordController = TextEditingController();
+  String _otpMethod = 'email'; // 'email' or 'sms'
   bool _isRegistering = false;
   bool _isBusy = false;
 
@@ -43,32 +50,172 @@ class _AuthViewState extends State<AuthView> {
   void dispose() {
     _nameController.dispose();
     _emailController.dispose();
+    _phoneController.dispose();
     _passwordController.dispose();
     super.dispose();
   }
 
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
-    setState(() => _isBusy = true);
-    try {
-      if (_isRegistering) {
-        await AuthService.instance.register(
-          name: _nameController.text,
-          email: _emailController.text,
-          password: _passwordController.text,
+    final email = _emailController.text.trim();
+    final phone = _phoneController.text.trim();
+    final name = _nameController.text.trim();
+    final password = _passwordController.text;
+
+    if (_isRegistering) {
+      if (_otpMethod == 'email') {
+        // Send 6-digit Email OTP to user's chosen email
+        if (!EmailConfig.isConfigured) {
+          await EmailConfig.loadSavedCredentials();
+          if (!mounted) return;
+          if (!EmailConfig.isConfigured) {
+            final configured = await _showGmailSetupSheet(email);
+            if (!configured || !EmailConfig.isConfigured) return;
+          }
+        }
+
+        setState(() => _isBusy = true);
+        final otpResult = await OtpService.instance.sendEmailOtp(email: email);
+        setState(() => _isBusy = false);
+
+        if (!otpResult.success) {
+          _showError(otpResult.message);
+          return;
+        }
+
+        if (!mounted) return;
+        final verified = await OtpVerificationDialog.show(
+          context: context,
+          title: 'Verify Email OTP',
+          destination: email,
+          type: 'email',
+          onVerify: (code) =>
+              OtpService.instance.verifyEmailOtp(email: email, code: code),
+          onResend: () async {
+            await OtpService.instance.sendEmailOtp(email: email);
+          },
+          onSwitchMethod: () {
+            setState(() => _otpMethod = 'sms');
+          },
+          switchMethodLabel: 'Send code via SMS instead',
         );
+
+        if (verified != true) return;
+
+        setState(() => _isBusy = true);
+        try {
+          await AuthService.instance.register(
+            name: name,
+            email: email,
+            phoneNumber: phone.length > 5 ? phone : null,
+            password: password,
+          );
+        } on FirebaseAuthException catch (error) {
+          _showError(_friendlyError(error));
+        } catch (error) {
+          _showError(error.toString());
+        } finally {
+          if (mounted) setState(() => _isBusy = false);
+        }
       } else {
-        await AuthService.instance.signInWithEmail(
-          email: _emailController.text,
-          password: _passwordController.text,
+        // Send 6-digit SMS OTP to user's chosen phone number
+        setState(() => _isBusy = true);
+        String? verificationId;
+        String? sendError;
+
+        final completer = Completer<bool>();
+        await OtpService.instance.sendSmsOtp(
+          phoneNumber: phone,
+          onCodeSent: (vId, _) {
+            verificationId = vId;
+            if (!completer.isCompleted) completer.complete(true);
+          },
+          onError: (err) {
+            sendError = err;
+            if (!completer.isCompleted) completer.complete(false);
+          },
         );
+
+        final sent = await completer.future.timeout(
+          const Duration(seconds: 15),
+          onTimeout: () => false,
+        );
+        if (!mounted) return;
+        setState(() => _isBusy = false);
+
+        if (!sent || verificationId == null) {
+          _showError(sendError ?? 'Could not send SMS verification code.');
+          return;
+        }
+
+        final verified = await OtpVerificationDialog.show(
+          context: context,
+          title: 'Verify SMS OTP',
+          destination: phone,
+          type: 'sms',
+          onVerify: (smsCode) async {
+            return await OtpService.instance.verifySmsOtp(
+              verificationId: verificationId!,
+              smsCode: smsCode,
+              phoneNumber: phone,
+              displayName: name,
+            );
+          },
+          onResend: () async {
+            final resendCompleter = Completer<void>();
+            await OtpService.instance.sendSmsOtp(
+              phoneNumber: phone,
+              onCodeSent: (newVId, _) {
+                verificationId = newVId;
+                if (!resendCompleter.isCompleted) resendCompleter.complete();
+              },
+              onError: (err) {
+                if (!resendCompleter.isCompleted) resendCompleter.complete();
+              },
+            );
+            await resendCompleter.future.timeout(
+              const Duration(seconds: 15),
+              onTimeout: () {},
+            );
+          },
+          onSwitchMethod: () {
+            setState(() => _otpMethod = 'email');
+          },
+          switchMethodLabel: 'Send code via Email instead',
+        );
+
+        if (verified != true) return;
+
+        setState(() => _isBusy = true);
+        try {
+          await AuthService.instance.registerWithPhone(
+            name: name,
+            phoneNumber: phone,
+            email: email.isNotEmpty ? email : null,
+            password: password,
+          );
+        } on FirebaseAuthException catch (error) {
+          _showError(_friendlyError(error));
+        } catch (error) {
+          _showError(error.toString());
+        } finally {
+          if (mounted) setState(() => _isBusy = false);
+        }
       }
-    } on FirebaseAuthException catch (error) {
-      _showError(_friendlyError(error));
-    } catch (error) {
-      _showError(error.toString());
-    } finally {
-      if (mounted) setState(() => _isBusy = false);
+    } else {
+      setState(() => _isBusy = true);
+      try {
+        await AuthService.instance.signInWithEmail(
+          email: email,
+          password: password,
+        );
+      } on FirebaseAuthException catch (error) {
+        _showError(_friendlyError(error));
+      } catch (error) {
+        _showError(error.toString());
+      } finally {
+        if (mounted) setState(() => _isBusy = false);
+      }
     }
   }
 
@@ -88,6 +235,8 @@ class _AuthViewState extends State<AuthView> {
   /// 1. If an email is typed on screen, it immediately signs in / creates that account.
   /// 2. Otherwise attempts native sign-in.
   /// 3. If native sign-in is cancelled/unavailable, shows a clean account chooser sheet.
+  /// In both modes, OTP verification happens before proceeding.
+  /// Sign-in mode: verifies then signs in. Create-account mode: verifies then creates.
   Future<void> _handleSocialSignIn({required String provider}) async {
     if (_isBusy) return;
 
@@ -95,23 +244,25 @@ class _AuthViewState extends State<AuthView> {
     final enteredEmail = _emailController.text.trim().toLowerCase();
     final enteredName = _nameController.text.trim();
     if (enteredEmail.isNotEmpty && enteredEmail.contains('@')) {
-      setState(() => _isBusy = true);
-      try {
-        await AuthService.instance.signInWithRealProfile(
+      if (_isRegistering) {
+        final created = await _verifyOtpAndCreateAccount(
           email: enteredEmail,
-          displayName: enteredName.isNotEmpty
+          name: enteredName.isNotEmpty
               ? enteredName
               : enteredEmail.split('@').first,
           provider: provider,
         );
+        if (!created) return;
         return;
-      } on FirebaseAuthException catch (error) {
-        _showError(_friendlyError(error));
-      } catch (error) {
-        _showError(error.toString());
-      } finally {
-        if (mounted) setState(() => _isBusy = false);
       }
+      final signedIn = await _verifyOtpAndSignIn(
+        email: enteredEmail,
+        name: enteredName.isNotEmpty
+            ? enteredName
+            : enteredEmail.split('@').first,
+        provider: provider,
+      );
+      if (!signedIn) return;
       return;
     }
 
@@ -137,19 +288,281 @@ class _AuthViewState extends State<AuthView> {
     final details = await _showAccountChooser(provider: provider);
     if (!mounted || details == null) return;
 
+    if (_isRegistering) {
+      final created = await _verifyOtpAndCreateAccount(
+        email: details.email,
+        name: details.name,
+        provider: provider,
+      );
+      if (!created) return;
+      return;
+    }
+
+    final signedIn = await _verifyOtpAndSignIn(
+      email: details.email,
+      name: details.name,
+      provider: provider,
+    );
+    if (!signedIn) return;
+  }
+
+  /// Sign-in mode: prompts for OTP delivery method (Gmail or SMS),
+  /// verifies the 6-digit code, then signs in with the Google/Facebook profile.
+  Future<bool> _verifyOtpAndSignIn({
+    required String email,
+    required String name,
+    required String provider,
+  }) async {
+    if (!mounted) return false;
+
+    final method = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppTheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (sheetContext) => _OtpMethodSheet(defaultEmail: email),
+    );
+
+    if (!mounted || method == null) return false;
+
+    if (method == 'email') {
+      return await _runEmailOtpFlow(
+        email: email,
+        name: name,
+        provider: provider,
+        isCreatingAccount: false,
+      );
+    } else {
+      return await _runSmsOtpFlow(
+        email: email,
+        name: name,
+        provider: provider,
+        isCreatingAccount: false,
+      );
+    }
+  }
+
+  /// In create-account mode: prompts for OTP delivery method (Gmail or SMS),
+  /// verifies the 6-digit code, then creates/signs in the account with the Google/Facebook profile.
+  Future<bool> _verifyOtpAndCreateAccount({
+    required String email,
+    required String name,
+    required String provider,
+  }) async {
+    if (!mounted) return false;
+
+    final method = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppTheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (sheetContext) => _OtpMethodSheet(defaultEmail: email),
+    );
+
+    if (!mounted || method == null) return false;
+
+    if (method == 'email') {
+      return await _runEmailOtpFlow(
+        email: email,
+        name: name,
+        provider: provider,
+        isCreatingAccount: true,
+      );
+    } else {
+      return await _runSmsOtpFlow(
+        email: email,
+        name: name,
+        provider: provider,
+        isCreatingAccount: true,
+      );
+    }
+  }
+
+  /// Sends a 6-digit OTP code to the Gmail/email address and verifies it.
+  Future<bool> _runEmailOtpFlow({
+    required String email,
+    required String name,
+    required String provider,
+    required bool isCreatingAccount,
+  }) async {
+    if (!EmailConfig.isConfigured) {
+      await EmailConfig.loadSavedCredentials();
+      if (!mounted) return false;
+      if (!EmailConfig.isConfigured) {
+        final configured = await _showGmailSetupSheet(email);
+        if (!configured || !EmailConfig.isConfigured) return false;
+      }
+    }
+
+    setState(() => _isBusy = true);
+    final otpResult = await OtpService.instance.sendEmailOtp(email: email);
+    if (!mounted) return false;
+    setState(() => _isBusy = false);
+
+    if (!otpResult.success) {
+      _showError(otpResult.message);
+      return false;
+    }
+
+    final providerLabel = provider == 'google'
+        ? 'Google'
+        : (provider == 'facebook' ? 'Facebook' : 'Account');
+    final verified = await OtpVerificationDialog.show(
+      context: context,
+      title: 'Verify $providerLabel OTP',
+      destination: email,
+      type: 'email',
+      onVerify: (code) =>
+          OtpService.instance.verifyEmailOtp(email: email, code: code),
+      onResend: () async {
+        await OtpService.instance.sendEmailOtp(email: email);
+      },
+      onSwitchMethod: () {
+        _runSmsOtpFlow(
+          email: email,
+          name: name,
+          provider: provider,
+          isCreatingAccount: isCreatingAccount,
+        );
+      },
+      switchMethodLabel: 'Send code via SMS instead',
+    );
+
+    if (verified != true) return false;
+
     setState(() => _isBusy = true);
     try {
       await AuthService.instance.signInWithRealProfile(
-        email: details.email,
-        displayName: details.name,
+        email: email,
+        displayName: name,
         provider: provider,
       );
+      return true;
     } on FirebaseAuthException catch (error) {
       _showError(_friendlyError(error));
-    } catch (_) {
-      _showError(
-        'Could not sign in with ${provider == 'google' ? 'Google' : 'Facebook'}. Please try again.',
+      return false;
+    } catch (error) {
+      _showError(error.toString());
+      return false;
+    } finally {
+      if (mounted) setState(() => _isBusy = false);
+    }
+  }
+
+  /// Prompts for phone number, sends a 6-digit SMS OTP code, and verifies it.
+  Future<bool> _runSmsOtpFlow({
+    required String email,
+    required String name,
+    required String provider,
+    required bool isCreatingAccount,
+  }) async {
+    final phone = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppTheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (sheetContext) => const _PhoneNumberSheet(),
+    );
+
+    if (!mounted || phone == null) return false;
+
+    setState(() => _isBusy = true);
+    String? verificationId;
+    String? sendError;
+
+    final completer = Completer<bool>();
+    await OtpService.instance.sendSmsOtp(
+      phoneNumber: phone,
+      onCodeSent: (vId, _) {
+        verificationId = vId;
+        if (!completer.isCompleted) completer.complete(true);
+      },
+      onError: (err) {
+        sendError = err;
+        if (!completer.isCompleted) completer.complete(false);
+      },
+    );
+
+    final sent = await completer.future.timeout(
+      const Duration(seconds: 15),
+      onTimeout: () {
+        sendError = 'SMS verification timed out. Please try again.';
+        return false;
+      },
+    );
+
+    if (!mounted) return false;
+    setState(() => _isBusy = false);
+
+    if (!sent || verificationId == null) {
+      _showError(sendError ?? 'Could not send SMS verification code.');
+      return false;
+    }
+
+    final verified = await OtpVerificationDialog.show(
+      context: context,
+      title: 'Verify SMS OTP',
+      destination: phone,
+      type: 'sms',
+      onVerify: (smsCode) async {
+        return await OtpService.instance.verifySmsOtp(
+          verificationId: verificationId!,
+          smsCode: smsCode,
+          phoneNumber: phone,
+          displayName: name,
+          autoSignIn: false,
+        );
+      },
+      onResend: () async {
+        final resendCompleter = Completer<void>();
+        await OtpService.instance.sendSmsOtp(
+          phoneNumber: phone,
+          onCodeSent: (newVId, _) {
+            verificationId = newVId;
+            if (!resendCompleter.isCompleted) resendCompleter.complete();
+          },
+          onError: (err) {
+            if (!resendCompleter.isCompleted) resendCompleter.complete();
+          },
+        );
+        await resendCompleter.future.timeout(
+          const Duration(seconds: 15),
+          onTimeout: () {},
+        );
+      },
+      onSwitchMethod: () {
+        _runEmailOtpFlow(
+          email: email,
+          name: name,
+          provider: provider,
+          isCreatingAccount: isCreatingAccount,
+        );
+      },
+      switchMethodLabel: 'Send code via Email instead',
+    );
+
+    if (verified != true) return false;
+
+    setState(() => _isBusy = true);
+    try {
+      await AuthService.instance.signInWithRealProfile(
+        email: email,
+        displayName: name,
+        provider: provider,
       );
+      return true;
+    } on FirebaseAuthException catch (error) {
+      _showError(_friendlyError(error));
+      return false;
+    } catch (error) {
+      _showError(error.toString());
+      return false;
     } finally {
       if (mounted) setState(() => _isBusy = false);
     }
@@ -204,6 +617,20 @@ class _AuthViewState extends State<AuthView> {
     } catch (_) {
       return null;
     }
+  }
+
+  Future<bool> _showGmailSetupSheet(String targetEmail) async {
+    if (!mounted) return false;
+    final result = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppTheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (sheetContext) => _GmailSetupSheet(targetEmail: targetEmail),
+    );
+    return result ?? false;
   }
 
   void _showError(String message) {
@@ -284,17 +711,49 @@ class _AuthViewState extends State<AuthView> {
                         ),
                         validator: (value) => value == null || value.trim().length < 2 ? 'Enter your name.' : null,
                       ),
+                      const SizedBox(height: 16),
                       const SizedBox(height: 14),
                     ],
-                    TextFormField(
-                      controller: _emailController,
-                      keyboardType: TextInputType.emailAddress,
-                      decoration: const InputDecoration(
-                        labelText: 'Email address',
-                        hintText: 'name@example.com',
+                    if (_isRegistering && _otpMethod == 'sms') ...[
+                      TextFormField(
+                        controller: _phoneController,
+                        keyboardType: TextInputType.phone,
+                        decoration: const InputDecoration(
+                          labelText: 'Phone number (receives 6-digit SMS)',
+                          hintText: '+63 912 345 6789',
+                          prefixIcon: Icon(Icons.phone_rounded, color: AppTheme.textSecondary),
+                        ),
+                        validator: (value) {
+                          final clean = (value ?? '').trim().replaceAll(' ', '');
+                          if (clean.length < 8) return 'Enter a valid phone number with country code.';
+                          return null;
+                        },
                       ),
-                      validator: (value) => value != null && value.contains('@') ? null : 'Enter a valid email address.',
-                    ),
+                      const SizedBox(height: 14),
+                      TextFormField(
+                        controller: _emailController,
+                        keyboardType: TextInputType.emailAddress,
+                        decoration: const InputDecoration(
+                          labelText: 'Email address (optional)',
+                          hintText: 'name@example.com',
+                          prefixIcon: Icon(Icons.email_outlined, color: AppTheme.textSecondary),
+                        ),
+                      ),
+                    ] else ...[
+                      TextFormField(
+                        controller: _emailController,
+                        keyboardType: TextInputType.emailAddress,
+                        decoration: InputDecoration(
+                          labelText: _isRegistering
+                              ? 'Email address'
+                              : 'Email address',
+                          hintText: 'name@example.com',
+                          prefixIcon: const Icon(Icons.email_outlined, color: AppTheme.textSecondary),
+                        ),
+                        validator: (value) =>
+                            value != null && value.contains('@') ? null : 'Enter a valid email address.',
+                      ),
+                    ],
                     const SizedBox(height: 14),
                     TextFormField(
                       controller: _passwordController,
@@ -307,9 +766,9 @@ class _AuthViewState extends State<AuthView> {
                       onPressed: _isBusy ? null : _submit,
                       child: Text(_isRegistering ? 'Create account' : 'Sign in'),
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 14),
                     const Row(children: [Expanded(child: Divider()), Padding(padding: EdgeInsets.symmetric(horizontal: 12), child: Text('OR')), Expanded(child: Divider())]),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 14),
                     OutlinedButton.icon(
                       onPressed: _isBusy ? null : _handleGoogleSignIn,
                       icon: const Icon(Icons.g_mobiledata_rounded, size: 28),
@@ -568,3 +1027,453 @@ class _SocialAccountChooserSheetState
     );
   }
 }
+
+class _OtpMethodSheet extends StatelessWidget {
+  final String defaultEmail;
+
+  const _OtpMethodSheet({required this.defaultEmail});
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 20,
+        right: 20,
+        top: 16,
+        bottom: bottomInset > 0 ? bottomInset + 16 : 28,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Center(
+            child: Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.white24,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          const SizedBox(height: 18),
+          const Text(
+            'Verify your account',
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+              color: AppTheme.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'Choose where to receive your 6-digit OTP verification code',
+            style: TextStyle(
+              fontSize: 13,
+              color: AppTheme.textSecondary,
+            ),
+          ),
+          const SizedBox(height: 18),
+          Card(
+            color: AppTheme.cardSurface,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: const BorderSide(color: AppTheme.border),
+            ),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(16),
+              onTap: () => Navigator.of(context).pop('email'),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: AppTheme.primary.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(
+                        Icons.mark_email_read_rounded,
+                        color: AppTheme.primary,
+                        size: 24,
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Send OTP to Gmail',
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.textPrimary,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            defaultEmail.isNotEmpty
+                                ? defaultEmail
+                                : 'Receive code in your Gmail inbox',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: AppTheme.textSecondary,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Icon(Icons.chevron_right_rounded, color: AppTheme.textSecondary),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Card(
+            color: AppTheme.cardSurface,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: const BorderSide(color: AppTheme.border),
+            ),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(16),
+              onTap: () => Navigator.of(context).pop('sms'),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: AppTheme.secondary.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(
+                        Icons.sms_rounded,
+                        color: AppTheme.secondary,
+                        size: 24,
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Send OTP via SMS',
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.textPrimary,
+                            ),
+                          ),
+                          SizedBox(height: 2),
+                          Text(
+                            'Receive 6-digit SMS message on your phone',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: AppTheme.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Icon(Icons.chevron_right_rounded, color: AppTheme.textSecondary),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PhoneNumberSheet extends StatefulWidget {
+  const _PhoneNumberSheet();
+
+  @override
+  State<_PhoneNumberSheet> createState() => _PhoneNumberSheetState();
+}
+
+class _PhoneNumberSheetState extends State<_PhoneNumberSheet> {
+  final _phoneController = TextEditingController(text: '+63 ');
+  final _formKey = GlobalKey<FormState>();
+
+  @override
+  void dispose() {
+    _phoneController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 24,
+        right: 24,
+        top: 20,
+        bottom: bottomInset > 0 ? bottomInset + 20 : 32,
+      ),
+      child: Form(
+        key: _formKey,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Center(
+              child: Container(
+                width: 44,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            const Text(
+              'Enter your phone number',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: AppTheme.textPrimary,
+              ),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'We will send a 6-digit SMS OTP code',
+              style: TextStyle(
+                fontSize: 13,
+                color: AppTheme.textSecondary,
+              ),
+            ),
+            const SizedBox(height: 20),
+            TextFormField(
+              controller: _phoneController,
+              keyboardType: TextInputType.phone,
+              style: const TextStyle(color: AppTheme.textPrimary),
+              decoration: const InputDecoration(
+                labelText: 'Phone Number',
+                hintText: '+63 912 345 6789',
+                prefixIcon: Icon(Icons.phone_rounded, color: AppTheme.textSecondary),
+              ),
+              validator: (val) {
+                final clean = (val ?? '').trim().replaceAll(' ', '');
+                if (clean.length < 8) return 'Enter a valid phone number with country code.';
+                return null;
+              },
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
+              onPressed: () {
+                if (!(_formKey.currentState?.validate() ?? false)) return;
+                Navigator.of(context).pop(_phoneController.text.trim());
+              },
+              icon: const Icon(Icons.send_rounded, size: 18),
+              label: const Text('Send 6-Digit SMS Code'),
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _GmailSetupSheet extends StatefulWidget {
+  final String targetEmail;
+
+  const _GmailSetupSheet({required this.targetEmail});
+
+  @override
+  State<_GmailSetupSheet> createState() => _GmailSetupSheetState();
+}
+
+class _GmailSetupSheetState extends State<_GmailSetupSheet> {
+  final _senderController =
+      TextEditingController(text: EmailConfig.senderEmail);
+  final _passwordController =
+      TextEditingController(text: EmailConfig.cleanAppPassword);
+  final _formKey = GlobalKey<FormState>();
+  bool _obscurePassword = true;
+
+  @override
+  void dispose() {
+    _senderController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+    final sender = _senderController.text.trim();
+    final pass = _passwordController.text.trim();
+    await EmailConfig.saveCredentials(sender: sender, password: pass);
+    if (!mounted) return;
+    Navigator.of(context).pop(true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 24,
+        right: 24,
+        top: 20,
+        bottom: bottomInset > 0 ? bottomInset + 20 : 32,
+      ),
+      child: Form(
+        key: _formKey,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Center(
+              child: Container(
+                width: 44,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: AppTheme.primary.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Icon(
+                    Icons.mark_email_read_rounded,
+                    color: AppTheme.primary,
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Connect Gmail for OTP',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: AppTheme.textPrimary,
+                        ),
+                      ),
+                      SizedBox(height: 2),
+                      Text(
+                        'One-time setup to deliver real OTP emails',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: AppTheme.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Enter your 16-character Google App Password so Pulse Music can send real verification codes to ${widget.targetEmail}:',
+              style: const TextStyle(
+                fontSize: 13,
+                color: AppTheme.textSecondary,
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextFormField(
+              controller: _senderController,
+              keyboardType: TextInputType.emailAddress,
+              style: const TextStyle(color: AppTheme.textPrimary),
+              decoration: const InputDecoration(
+                labelText: 'Sender Gmail Address',
+                hintText: 'yourname@gmail.com',
+                prefixIcon: Icon(Icons.email_outlined, color: AppTheme.textSecondary),
+              ),
+              validator: (val) {
+                final clean = (val ?? '').trim();
+                if (clean.isEmpty || !clean.contains('@')) {
+                  return 'Enter a valid Gmail address.';
+                }
+                return null;
+              },
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: _passwordController,
+              obscureText: _obscurePassword,
+              style: const TextStyle(
+                color: AppTheme.textPrimary,
+                fontFamily: 'monospace',
+                letterSpacing: 2,
+              ),
+              decoration: InputDecoration(
+                labelText: '16-Character App Password',
+                hintText: 'xxxx xxxx xxxx xxxx',
+                prefixIcon: const Icon(Icons.key_rounded, color: AppTheme.textSecondary),
+                suffixIcon: IconButton(
+                  icon: Icon(
+                    _obscurePassword ? Icons.visibility_off_rounded : Icons.visibility_rounded,
+                    color: AppTheme.textSecondary,
+                  ),
+                  onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                ),
+              ),
+              validator: (val) {
+                final clean = (val ?? '').replaceAll(' ', '').trim();
+                if (clean.length < 16) {
+                  return 'Enter your 16-character Google App Password.';
+                }
+                return null;
+              },
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'To generate: myaccount.google.com -> Security -> 2-Step Verification -> App Passwords',
+              style: TextStyle(
+                fontSize: 11,
+                color: AppTheme.textMuted,
+              ),
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
+              onPressed: _submit,
+              icon: const Icon(Icons.send_rounded, size: 18),
+              label: const Text('Save & Send OTP Code'),
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+

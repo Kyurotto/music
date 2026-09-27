@@ -10,6 +10,7 @@ import '../data/local_database.dart';
 class LocalUser {
   final String id;
   final String email;
+  final String? phoneNumber;
   final String displayName;
   final String role;
   final String? photoUrl;
@@ -17,13 +18,15 @@ class LocalUser {
   const LocalUser({
     required this.id,
     required this.email,
+    this.phoneNumber,
     required this.displayName,
     required this.role,
     this.photoUrl,
   });
 
   @override
-  String toString() => 'LocalUser(id: $id, email: $email, name: $displayName, role: $role)';
+  String toString() =>
+      'LocalUser(id: $id, email: $email, phone: $phoneNumber, name: $displayName, role: $role)';
 }
 
 class AuthService {
@@ -108,6 +111,13 @@ class AuthService {
     return '';
   }
 
+  String get userPhoneNumber {
+    final user = _currentUser;
+    if (user is LocalUser) return user.phoneNumber ?? '';
+    if (user is User) return user.phoneNumber ?? '';
+    return '';
+  }
+
   String get userRole {
     final user = _currentUser;
     if (user is LocalUser) return user.role;
@@ -153,6 +163,7 @@ class AuthService {
           _currentUser = LocalUser(
             id: localData['id'] as String,
             email: (localData['email'] as String? ?? '').trim(),
+            phoneNumber: localData['phone_number'] as String?,
             displayName:
                 (localData['display_name'] as String? ?? '').trim(),
             role: localData['role'] as String? ?? 'user',
@@ -233,6 +244,7 @@ class AuthService {
     final localUser = LocalUser(
       id: userData['id'] as String,
       email: userData['email'] as String,
+      phoneNumber: userData['phone_number'] as String?,
       displayName: userData['display_name'] as String,
       role: userData['role'] as String? ?? 'user',
       photoUrl: userData['photo_url'] as String?,
@@ -253,6 +265,7 @@ class AuthService {
   Future<void> register({
     required String name,
     required String email,
+    String? phoneNumber,
     required String password,
   }) async {
     final cleanEmail = email.trim().toLowerCase();
@@ -286,6 +299,7 @@ class AuthService {
         await LocalDatabase.instance.saveUser(
           id: fbUser.uid,
           email: cleanEmail,
+          phoneNumber: phoneNumber,
           displayName: cleanName,
           role: 'user',
           authProvider: provider,
@@ -303,6 +317,7 @@ class AuthService {
     await LocalDatabase.instance.saveUser(
       id: userId,
       email: cleanEmail,
+      phoneNumber: phoneNumber,
       displayName: cleanName,
       role: 'user',
       authProvider: provider,
@@ -314,6 +329,46 @@ class AuthService {
     if (user != null) {
       await _loginAsLocalUser(user);
       return;
+    }
+  }
+
+  /// Registers a new user verified via 6-digit SMS OTP
+  Future<void> registerWithPhone({
+    required String name,
+    required String phoneNumber,
+    String? email,
+    required String password,
+  }) async {
+    final cleanPhone = phoneNumber.trim().replaceAll(' ', '');
+    final cleanEmail = (email != null && email.trim().contains('@'))
+        ? email.trim().toLowerCase()
+        : '${cleanPhone.replaceAll('+', '')}@phone.pulsemusic.app';
+    final cleanName =
+        name.trim().isNotEmpty ? name.trim() : 'User ($cleanPhone)';
+    const provider = 'phone';
+    final passwordHash = LocalDatabase.hashPassword(password);
+
+    await LocalDatabase.instance.removeDefaultAdminIfSeeded();
+    final existingLocal = await LocalDatabase.instance.getUserByEmail(cleanEmail);
+    final userId = existingLocal != null
+        ? (existingLocal['id'] as String)
+        : await LocalDatabase.instance.getNextUserId();
+
+    await LocalDatabase.instance.saveUser(
+      id: userId,
+      email: cleanEmail,
+      phoneNumber: cleanPhone,
+      displayName: cleanName,
+      role: 'user',
+      authProvider: provider,
+      passwordHash: passwordHash,
+    );
+    await LocalDatabase.instance.saveActiveSession(userId);
+    await LocalDatabase.instance.claimAnonymousPlaylists(userId);
+
+    final user = await LocalDatabase.instance.getUserById(userId);
+    if (user != null) {
+      await _loginAsLocalUser(user);
     }
   }
 
@@ -959,6 +1014,83 @@ class AuthService {
     return true;
     } finally {
       _socialSignInInProgress = false;
+    }
+  }
+
+  /// Completes sign-in for a phone user verified via SMS OTP
+  Future<void> signInWithPhoneSuccess({
+    required String phoneNumber,
+    String? displayName,
+    User? firebaseUser,
+  }) async {
+    final cleanPhone = phoneNumber.trim().replaceAll(' ', '');
+    final synthEmail = '${cleanPhone.replaceAll('+', '')}@phone.pulsemusic.app';
+    final name = (displayName != null && displayName.trim().isNotEmpty)
+        ? displayName.trim()
+        : 'Phone ($cleanPhone)';
+    const provider = 'phone';
+
+    final existing = await LocalDatabase.instance.getUserByEmail(synthEmail);
+    final userId = firebaseUser?.uid ??
+        (existing != null ? existing['id'] as String : await LocalDatabase.instance.getNextUserId());
+
+    if (firebaseUser != null) {
+      _currentUser = firebaseUser;
+      _authController.add(firebaseUser);
+      _upsertUser(firebaseUser, provider: provider).catchError((e) {
+        debugPrint('[AuthService] Firestore phone sync skipped: $e');
+      });
+    }
+
+    await LocalDatabase.instance.saveUser(
+      id: userId,
+      email: synthEmail,
+      phoneNumber: cleanPhone,
+      displayName: name,
+      photoUrl: null,
+      role: 'user',
+      authProvider: provider,
+    );
+    await LocalDatabase.instance.saveActiveSession(userId);
+    await LocalDatabase.instance.claimAnonymousPlaylists(userId);
+
+    final user = await LocalDatabase.instance.getUserById(userId);
+    if (user != null) {
+      await _loginAsLocalUser(user);
+    }
+  }
+
+  /// Completes sign-in for an email user verified via 6-digit Email OTP
+  Future<void> signInWithEmailOtpSuccess({
+    required String email,
+    String? displayName,
+  }) async {
+    final cleanEmail = email.trim().toLowerCase();
+    final cleanName = (displayName != null && displayName.trim().isNotEmpty)
+        ? displayName.trim()
+        : cleanEmail.split('@').first;
+    const provider = 'email_otp';
+
+    var existingUser = await LocalDatabase.instance.getUserByEmail(cleanEmail);
+    final userId = existingUser != null
+        ? existingUser['id'] as String
+        : await LocalDatabase.instance.getNextUserId();
+
+    await LocalDatabase.instance.saveUser(
+      id: userId,
+      email: cleanEmail,
+      displayName: cleanName,
+      photoUrl: existingUser?['photo_url'] as String?,
+      role: existingUser?['role'] as String? ?? 'user',
+      authProvider: existingUser?['auth_provider'] as String? ?? provider,
+      passwordHash: existingUser?['password_hash'] as String?,
+    );
+    await LocalDatabase.instance.saveActiveSession(userId);
+    await LocalDatabase.instance.claimAnonymousPlaylists(userId);
+
+    final user = await LocalDatabase.instance.getUserById(userId);
+    if (user != null) {
+      await _loginAsLocalUser(user);
     }
   }
 

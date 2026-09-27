@@ -1,3 +1,32 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -19,7 +48,7 @@ class LocalDatabase {
 
   static final LocalDatabase instance = LocalDatabase._();
   static const _databaseName = 'pulse_music.db';
-  static const _databaseVersion = 5;
+  static const _databaseVersion = 6;
 
   Database? _database;
   String? _databaseFilePath;
@@ -128,6 +157,9 @@ class LocalDatabase {
       )
     ''');
     await _createImportedPlaylistTables(db);
+    try {
+      await db.execute('ALTER TABLE users ADD COLUMN phone_number TEXT');
+    } catch (_) {}
     // No more default admin seed. New accounts (e.g. John Laurence) become
     // the active user instead of "System Administrator".
     await removeDefaultAdminIfSeeded();
@@ -135,6 +167,7 @@ class LocalDatabase {
     await seedEmployeeIfNeeded();
     _syncToWorkspace();
   }
+
 
   /// Removes any fake auto-generated placeholder rows like 'google.user...' or 'facebook.user...'
   /// so that only purely real accounts exist in SQLite.
@@ -263,6 +296,11 @@ class LocalDatabase {
         await database.execute('ALTER TABLE users ADD COLUMN password_hash TEXT');
       } catch (_) {}
     }
+    if (oldVersion < 6) {
+      try {
+        await database.execute('ALTER TABLE users ADD COLUMN phone_number TEXT');
+      } catch (_) {}
+    }
   }
 
   Future<void> _createImportedPlaylistTables(Database database) async {
@@ -311,6 +349,7 @@ class LocalDatabase {
       CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
         email TEXT NOT NULL UNIQUE,
+        phone_number TEXT,
         display_name TEXT NOT NULL,
         photo_url TEXT,
         role TEXT NOT NULL DEFAULT 'user',
@@ -509,6 +548,7 @@ class LocalDatabase {
   Future<void> saveUser({
     required String id,
     required String email,
+    String? phoneNumber,
     required String displayName,
     String? photoUrl,
     String role = 'user',
@@ -518,6 +558,9 @@ class LocalDatabase {
     final db = await database;
     final now = DateTime.now().millisecondsSinceEpoch;
     final cleanEmail = email.trim().toLowerCase();
+    final cleanPhone = (phoneNumber != null && phoneNumber.trim().isNotEmpty)
+        ? phoneNumber.trim().replaceAll(' ', '')
+        : null;
     var resolvedDisplayName = displayName.trim();
 
     // Storage-layer guard: refuse placeholder/invalid emails instead of
@@ -534,11 +577,10 @@ class LocalDatabase {
       resolvedDisplayName = cleanEmail.split('@').first;
     }
 
-    // Preserve original created_at AND existing password hash on updates so
-    // SQLite viewer history stays stable; only bump last_login_at.
-    // A null [passwordHash] never wipes a stored hash (social sign-ins).
+    // Preserve original created_at, existing password hash, and phone number on updates
     int createdAt = now;
     String? resolvedHash = passwordHash;
+    String? resolvedPhone = cleanPhone;
     try {
       final byId = await db.query('users',
           where: 'id = ?', whereArgs: [id], limit: 1);
@@ -549,6 +591,7 @@ class LocalDatabase {
           createdAt = existing['created_at'] as int;
         }
         resolvedHash ??= existing['password_hash'] as String?;
+        resolvedPhone ??= existing['phone_number'] as String?;
       } else if (resolvedHash == null) {
         final byEmail = await _rowByEmail(db, cleanEmail);
         if (byEmail != null) {
@@ -556,6 +599,7 @@ class LocalDatabase {
             createdAt = byEmail['created_at'] as int;
           }
           resolvedHash ??= byEmail['password_hash'] as String?;
+          resolvedPhone ??= byEmail['phone_number'] as String?;
         }
       }
     } catch (_) {}
@@ -564,6 +608,7 @@ class LocalDatabase {
       {
         'id': id,
         'email': cleanEmail,
+        'phone_number': resolvedPhone,
         'display_name': resolvedDisplayName,
         'photo_url': photoUrl,
         'role': role,
@@ -594,6 +639,19 @@ class LocalDatabase {
       'users',
       where: 'LOWER(email) = ?',
       whereArgs: [cleanEmail],
+      limit: 1,
+    );
+    return rows.isNotEmpty ? rows.first : null;
+  }
+
+  /// Queries user by saved phone number
+  Future<Map<String, Object?>?> getUserByPhone(String phoneNumber) async {
+    final db = await database;
+    final cleanPhone = phoneNumber.trim().replaceAll(' ', '');
+    final rows = await db.query(
+      'users',
+      where: 'phone_number = ?',
+      whereArgs: [cleanPhone],
       limit: 1,
     );
     return rows.isNotEmpty ? rows.first : null;
