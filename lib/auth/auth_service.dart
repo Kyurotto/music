@@ -238,16 +238,9 @@ class AuthService {
       photoUrl: userData['photo_url'] as String?,
     );
     await LocalDatabase.instance.saveActiveSession(localUser.id);
+    await LocalDatabase.instance.claimAnonymousPlaylists(localUser.id);
     _currentUser = localUser;
     _authController.add(localUser);
-  }
-
-  Future<void> signInAsAdmin() async {
-    await LocalDatabase.instance.seedDefaultUserIfNeeded();
-    final user = await LocalDatabase.instance.getUserByEmail('johnlaurencenovicio@gmail.com');
-    if (user != null) {
-      await _loginAsLocalUser(user);
-    }
   }
 
   Future<void> register({
@@ -264,9 +257,13 @@ class AuthService {
     await LocalDatabase.instance.removeDefaultAdminIfSeeded();
 
     final existingLocal = await LocalDatabase.instance.getUserByEmail(cleanEmail);
-    final userId = existingLocal != null
-        ? (existingLocal['id'] as String)
-        : await LocalDatabase.instance.getNextUserId();
+    if (existingLocal != null) {
+      throw FirebaseAuthException(
+        code: 'email-already-in-use',
+        message: 'The email address is already in use by another account.',
+      );
+    }
+
     // Hash locally — plaintext passwords are never written to SQLite.
     final passwordHash = LocalDatabase.hashPassword(password);
 
@@ -294,23 +291,34 @@ class AuthService {
         await LocalDatabase.instance.saveActiveSession(fbUser.uid);
         await LocalDatabase.instance.claimAnonymousPlaylists(fbUser.uid);
         return;
-      } catch (e) {
-        debugPrint('[AuthService] Firebase register fallback to local: $e');
+      } on FirebaseAuthException catch (e) {
+        if (e.code == 'email-already-in-use' ||
+            e.code == 'invalid-email' ||
+            e.code == 'weak-password' ||
+            e.code == 'operation-not-allowed') {
+          rethrow;
+        }
+        final isConfigError = e.code == 'configuration-not-found' ||
+            (e.message != null && e.message!.contains('CONFIGURATION_NOT_FOUND'));
+        if (!isConfigError) {
+          rethrow;
+        }
+        debugPrint('[AuthService] Firebase config error, using local registration: $e');
       }
     }
 
-    // Always create and save in LocalDatabase so registration never fails and always appears in SQLite
+    final newUserId = await LocalDatabase.instance.getNextUserId();
     await LocalDatabase.instance.saveUser(
-      id: userId,
+      id: newUserId,
       email: cleanEmail,
       displayName: cleanName,
       role: 'user',
       authProvider: provider,
       passwordHash: passwordHash,
     );
-    await LocalDatabase.instance.saveActiveSession(userId);
-    await LocalDatabase.instance.claimAnonymousPlaylists(userId);
-    final user = await LocalDatabase.instance.getUserById(userId);
+    await LocalDatabase.instance.saveActiveSession(newUserId);
+    await LocalDatabase.instance.claimAnonymousPlaylists(newUserId);
+    final user = await LocalDatabase.instance.getUserById(newUserId);
     if (user != null) {
       await _loginAsLocalUser(user);
       return;
@@ -322,12 +330,6 @@ class AuthService {
     required String password,
   }) async {
     final cleanEmail = email.trim().toLowerCase();
-
-    // If logging in as admin directly
-    if (cleanEmail == 'admin@pulsemusic.app' || cleanEmail == '1') {
-      await signInAsAdmin();
-      return;
-    }
 
     final auth = _auth;
     if (auth == null) {
@@ -622,6 +624,7 @@ class AuthService {
         realPhoto: user.photoURL,
         realEmail: user.email,
       );
+      await LocalDatabase.instance.claimAnonymousPlaylists(user.uid);
       if (mirrored) return true;
       // Mirror failed: still keep the signed-in session so the user is
       // not logged out, but prefer any non-empty Firebase display name.
@@ -696,6 +699,7 @@ class AuthService {
             realPhoto: googleUser.photoUrl,
             realEmail: googleUser.email,
           );
+          await LocalDatabase.instance.claimAnonymousPlaylists(userCredential.user!.uid);
           if (mirrored) return true;
           // Mirror failed (e.g. no email): fall back to local profile sign-in
           // using the real Google account data below.
@@ -916,6 +920,7 @@ class AuthService {
           realPhoto: fbPhoto,
           realEmail: fbEmail.isNotEmpty ? fbEmail : userCredential.user?.email,
         );
+        await LocalDatabase.instance.claimAnonymousPlaylists(userCredential.user!.uid);
         if (mirrored) return true;
         // Mirror failed: fall through to local profile sign-in below.
       } catch (e) {

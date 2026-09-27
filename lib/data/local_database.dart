@@ -6,7 +6,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:crypto/crypto.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -31,74 +30,9 @@ class LocalDatabase {
   }
 
   Future<void> _syncToWorkspace() async {
-    if (kIsWeb) return;
-    if (Platform.isAndroid || Platform.isIOS) {
-      await _syncAndroidToHost();
-      return;
-    }
-    if (!(Platform.isWindows || Platform.isLinux || Platform.isMacOS)) return;
-    try {
-      final src = _databaseFilePath;
-      final db = _database;
-      if (src == null || db == null) return;
-      if (!File(src).existsSync()) return;
-      // Flush WAL so the copied .db actually contains the latest rows.
-      // Without this, the workspace copy looks stale and new users
-      // "don't appear in SQLite viewer".
-      try {
-        await db.execute('PRAGMA wal_checkpoint(TRUNCATE)');
-      } catch (_) {}
-      final targetDirs = {
-        Directory.current.path,
-        r'c:\Users\johnl\All Codes\music',
-      };
-      for (final targetDir in targetDirs) {
-        try {
-          final dest = path.join(targetDir, _databaseName);
-          if (src == dest) continue;
-          await File(src).copy(dest);
-          for (final suffix in ['-wal', '-shm']) {
-            final sidecar = File('$src$suffix');
-            if (await sidecar.exists()) {
-              await sidecar.copy('$dest$suffix');
-            }
-          }
-          debugPrint('[LocalDatabase] Workspace copy: $dest');
-        } catch (_) {}
-      }
-    } catch (e) {
-      debugPrint('[LocalDatabase] Workspace sync skipped: $e');
-    }
-  }
-
-  Future<void> _syncAndroidToHost() async {
-    try {
-      final db = _database;
-      if (db == null) return;
-      try {
-        await db.execute('PRAGMA wal_checkpoint(TRUNCATE)');
-      } catch (_) {}
-      final filePath = _databaseFilePath;
-      if (filePath == null) return;
-      final file = File(filePath);
-      if (!await file.exists()) return;
-      final bytes = await file.readAsBytes();
-      for (final host in ['127.0.0.1:58321', '10.0.2.2:58321']) {
-        try {
-          final response = await http.post(
-            Uri.parse('http://$host/sync-db'),
-            headers: {'Content-Type': 'application/octet-stream'},
-            body: bytes,
-          ).timeout(const Duration(milliseconds: 1000));
-          if (response.statusCode == 200) {
-            debugPrint('[LocalDatabase] Synced to workspace over $host');
-            break;
-          }
-        } catch (_) {}
-      }
-    } catch (e) {
-      debugPrint('[LocalDatabase] Android sync skipped: $e');
-    }
+    // Synchronization of database files to external/workspace destinations or cleartext HTTP
+    // has been removed for security: database files containing password hashes and sessions
+    // must remain strictly isolated within the app's sandboxed storage.
   }
 
   Future<void> syncToWorkspace() => _syncToWorkspace();
@@ -794,6 +728,22 @@ class LocalDatabase {
     final db = await database;
     final now = DateTime.now().millisecondsSinceEpoch;
 
+    // Verify existing playlist ownership before modifying
+    final existingPlaylists = await db.query(
+      'imported_playlists',
+      columns: ['id', 'user_id'],
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    if (existingPlaylists.isNotEmpty) {
+      final existingOwner = existingPlaylists.first['user_id'] as String;
+      final isGuestOwner = existingOwner == 'default_user' || existingOwner == '1';
+      if (!isGuestOwner && existingOwner != userId) {
+        throw StateError('Cannot modify playlist owned by another user');
+      }
+    }
+
     await db.transaction((txn) async {
       await txn.insert(
         'imported_playlists',
@@ -979,8 +929,27 @@ class LocalDatabase {
   }
 
   /// Deletes an imported playlist and its track associations.
-  Future<void> deleteImportedPlaylist(String playlistId) async {
+  /// If [userId] is specified, verifies the playlist belongs to the user before deletion.
+  Future<void> deleteImportedPlaylist(String playlistId, {String? userId}) async {
     final db = await database;
+    if (userId != null && userId.isNotEmpty && userId != 'default_user' && userId != '1') {
+      final rows = await db.query(
+        'imported_playlists',
+        columns: ['id', 'user_id'],
+        where: 'id = ?',
+        whereArgs: [playlistId],
+        limit: 1,
+      );
+      if (rows.isNotEmpty) {
+        final owner = rows.first['user_id'] as String;
+        final isGuest = owner == 'default_user' || owner == '1';
+        if (!isGuest && owner != userId) {
+          debugPrint('[LocalDatabase] Refusing to delete playlist owned by $owner');
+          return;
+        }
+      }
+    }
+
     await db.delete(
       'imported_playlist_songs',
       where: 'playlist_id = ?',
@@ -995,16 +964,14 @@ class LocalDatabase {
 
   /// Reassigns any playlists imported anonymously to the newly signed-in user.
   Future<void> claimAnonymousPlaylists(String newUserId) async {
-    if (newUserId.isEmpty || newUserId == 'default_user') return;
-    try {
-      final db = await database;
-      await db.update(
-        'imported_playlists',
-        {'user_id': newUserId},
-        where: 'user_id = ? OR user_id = ?',
-        whereArgs: ['1', 'default_user'],
-      );
-    } catch (_) {}
+    if (newUserId.isEmpty || newUserId == 'default_user' || newUserId == '1') return;
+    final db = await database;
+    await db.update(
+      'imported_playlists',
+      {'user_id': newUserId},
+      where: 'user_id = ? OR user_id = ?',
+      whereArgs: ['1', 'default_user'],
+    );
   }
 
   void _syncImportedPlaylistToFirestore({

@@ -491,7 +491,10 @@ class MusicPlayerController extends ChangeNotifier {
     _playlists.removeAt(index);
     notifyListeners();
     try {
-      unawaited(LocalDatabase.instance.deleteImportedPlaylist(playlistId).catchError((_) {}));
+      unawaited(LocalDatabase.instance.deleteImportedPlaylist(
+        playlistId,
+        userId: AuthService.instance.currentUserId,
+      ).catchError((_) {}));
     } catch (_) {}
     return true;
   }
