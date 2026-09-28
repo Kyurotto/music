@@ -20,6 +20,10 @@ class LocalDatabase {
   static const _databaseName = 'pulse_music.db';
   static const _databaseVersion = 5;
 
+  /// Sentinel user IDs that represent anonymous / guest ownership.
+  /// Real user IDs must never collide with these values.
+  static const guestUserIds = {'default_user', '1'};
+
   Database? _database;
   String? _databaseFilePath;
   String? get databaseFilePath => _databaseFilePath;
@@ -374,15 +378,18 @@ class LocalDatabase {
     return results.isNotEmpty ? results.first : null;
   }
 
-  /// Returns the next sequential integer user ID as a String (e.g. '1', '2', '3').
+  /// Returns the next sequential integer user ID as a String (e.g. '2', '3', '4').
+  /// Starts at 2 so that '1' is never assigned — '1' is reserved as a guest
+  /// sentinel alongside 'default_user' (see [guestUserIds]).
   Future<String> getNextUserId() async {
     final db = await database;
     final result = await db.rawQuery(
       "SELECT MAX(CAST(id AS INTEGER)) AS max_id FROM users WHERE id GLOB '[0-9]*'",
     );
     final maxId = result.first['max_id'];
-    if (maxId == null) return '1';
-    return '${(maxId as int) + 1}';
+    if (maxId == null) return '2';
+    final next = (maxId as int) + 1;
+    return '${next < 2 ? 2 : next}';
   }
 
   // ---------------------------------------------------------------------------
@@ -738,7 +745,7 @@ class LocalDatabase {
     );
     if (existingPlaylists.isNotEmpty) {
       final existingOwner = existingPlaylists.first['user_id'] as String;
-      final isGuestOwner = existingOwner == 'default_user' || existingOwner == '1';
+      final isGuestOwner = guestUserIds.contains(existingOwner);
       if (!isGuestOwner && existingOwner != userId) {
         throw StateError('Cannot modify playlist owned by another user');
       }
@@ -849,15 +856,14 @@ class LocalDatabase {
   Future<List<Map<String, dynamic>>> getImportedPlaylistsForUser(String userId) async {
     final db = await database;
     final effectiveId = userId.isEmpty ? 'default_user' : userId;
-    final isDefaultUser =
-        effectiveId == '1' || effectiveId == 'default_user';
+    final isGuest = guestUserIds.contains(effectiveId);
     final playlists = await db.query(
       'imported_playlists',
-      where: isDefaultUser
-          ? 'user_id = ? OR user_id = ? OR user_id = ?'
+      where: isGuest
+          ? 'user_id = ? OR user_id = ?'
           : 'user_id = ?',
-      whereArgs: isDefaultUser
-          ? [effectiveId, 'default_user', '1']
+      whereArgs: isGuest
+          ? ['default_user', '1']
           : [effectiveId],
       orderBy: 'created_at ASC',
     );
@@ -929,24 +935,32 @@ class LocalDatabase {
   }
 
   /// Deletes an imported playlist and its track associations.
-  /// If [userId] is specified, verifies the playlist belongs to the user before deletion.
+  /// Always verifies ownership: a guest caller may only delete guest-owned
+  /// playlists; a signed-in caller may only delete their own.
   Future<void> deleteImportedPlaylist(String playlistId, {String? userId}) async {
     final db = await database;
-    if (userId != null && userId.isNotEmpty && userId != 'default_user' && userId != '1') {
-      final rows = await db.query(
-        'imported_playlists',
-        columns: ['id', 'user_id'],
-        where: 'id = ?',
-        whereArgs: [playlistId],
-        limit: 1,
-      );
-      if (rows.isNotEmpty) {
-        final owner = rows.first['user_id'] as String;
-        final isGuest = owner == 'default_user' || owner == '1';
-        if (!isGuest && owner != userId) {
-          debugPrint('[LocalDatabase] Refusing to delete playlist owned by $owner');
-          return;
-        }
+    final callerId = (userId ?? '').isEmpty ? 'default_user' : userId!;
+    final callerIsGuest = guestUserIds.contains(callerId);
+
+    final rows = await db.query(
+      'imported_playlists',
+      columns: ['id', 'user_id'],
+      where: 'id = ?',
+      whereArgs: [playlistId],
+      limit: 1,
+    );
+    if (rows.isNotEmpty) {
+      final owner = rows.first['user_id'] as String;
+      final ownerIsGuest = guestUserIds.contains(owner);
+      // Guest callers may only delete guest-owned playlists.
+      // Signed-in callers may only delete playlists they own.
+      if (callerIsGuest && !ownerIsGuest) {
+        debugPrint('[LocalDatabase] Guest cannot delete playlist owned by $owner');
+        return;
+      }
+      if (!callerIsGuest && !ownerIsGuest && owner != callerId) {
+        debugPrint('[LocalDatabase] Refusing to delete playlist owned by $owner');
+        return;
       }
     }
 
@@ -962,15 +976,35 @@ class LocalDatabase {
     );
   }
 
-  /// Reassigns any playlists imported anonymously to the newly signed-in user.
+  /// Reassigns anonymous playlists created during the *current* anonymous
+  /// session to the newly signed-in user. Only playlists created after the
+  /// most recent session-clear are adopted — this prevents Person B from
+  /// inheriting Person A's anonymous playlists on a shared device.
   Future<void> claimAnonymousPlaylists(String newUserId) async {
-    if (newUserId.isEmpty || newUserId == 'default_user' || newUserId == '1') return;
+    if (newUserId.isEmpty || guestUserIds.contains(newUserId)) return;
     final db = await database;
+
+    // Determine the boundary: only claim playlists created after the
+    // last time sessions were cleared (i.e. last sign-out). Playlists
+    // from earlier anonymous sessions are left as 'default_user'.
+    int sessionBoundary = 0;
+    try {
+      final sessions = await db.query(
+        'user_sessions',
+        columns: ['saved_at'],
+        orderBy: 'saved_at DESC',
+        limit: 1,
+      );
+      if (sessions.isNotEmpty) {
+        sessionBoundary = sessions.first['saved_at'] as int? ?? 0;
+      }
+    } catch (_) {}
+
     await db.update(
       'imported_playlists',
       {'user_id': newUserId},
-      where: 'user_id = ? OR user_id = ?',
-      whereArgs: ['1', 'default_user'],
+      where: '(user_id = ? OR user_id = ?) AND created_at >= ?',
+      whereArgs: ['1', 'default_user', sessionBoundary],
     );
   }
 

@@ -392,27 +392,48 @@ class AuthService {
         debugPrint('[AuthService] Local mirror skipped: $e');
       }
     } on FirebaseAuthException catch (e) {
+      // Firebase rejected the credentials authoritatively (wrong-password,
+      // invalid-credential, user-disabled). These are NOT config errors —
+      // the user's password was changed remotely, or the account was
+      // disabled. Do NOT fall back to a potentially stale local hash.
+      final isCredentialError = e.code == 'wrong-password' ||
+          e.code == 'invalid-credential' ||
+          e.code == 'user-disabled' ||
+          e.code == 'user-not-found';
+      if (isCredentialError) {
+        // Re-hash with the current password attempt and check locally
+        // only to give a friendlier error message — never sign in.
+        final exists =
+            await LocalDatabase.instance.getUserByEmail(cleanEmail);
+        if (exists != null) {
+          throw FirebaseAuthException(
+            code: 'wrong-password',
+            message: 'Incorrect email address or password.',
+          );
+        }
+        rethrow;
+      }
+
       final isConfigError = e.code == 'configuration-not-found' ||
           (e.message != null && e.message!.contains('CONFIGURATION_NOT_FOUND'));
 
-      // If user exists in local database, verify the stored hash before
-      // signing them in locally — never log in on email alone.
-      final verified =
-          await LocalDatabase.instance.verifyLocalPassword(cleanEmail, password);
-      if (verified != null) {
-        await _loginAsLocalUser(verified);
-        return;
-      }
-      final exists =
-          await LocalDatabase.instance.getUserByEmail(cleanEmail);
-      if (exists != null) {
-        throw FirebaseAuthException(
-          code: 'wrong-password',
-          message: 'Incorrect email address or password.',
-        );
-      }
-
+      // Only fall back to local password when Firebase is *unavailable*
+      // (config error), not when it *rejected* the credentials.
       if (isConfigError) {
+        final verified =
+            await LocalDatabase.instance.verifyLocalPassword(cleanEmail, password);
+        if (verified != null) {
+          await _loginAsLocalUser(verified);
+          return;
+        }
+        final exists =
+            await LocalDatabase.instance.getUserByEmail(cleanEmail);
+        if (exists != null) {
+          throw FirebaseAuthException(
+            code: 'wrong-password',
+            message: 'Incorrect email address or password.',
+          );
+        }
         throw FirebaseAuthException(
           code: 'configuration-not-found',
           message: 'Account not found. Please register to create an account.',
@@ -420,6 +441,8 @@ class AuthService {
       }
       rethrow;
     } catch (e) {
+      // Non-Firebase error (network, platform): fall back to local only
+      // for config/availability failures, same logic as above.
       final verified =
           await LocalDatabase.instance.verifyLocalPassword(cleanEmail, password);
       if (verified != null) {
@@ -781,6 +804,22 @@ class AuthService {
           email.startsWith('google.user') ||
           email.startsWith('facebook.user')) {
         return false;
+      }
+
+      // Reject unverified emails from Firebase to prevent account takeover.
+      // When the email came directly from the native SDK (realEmail != null)
+      // the provider has already verified ownership. When we fall back to
+      // user.email, Firebase's emailVerified flag must be true.
+      if (realEmail == null || realEmail.isEmpty) {
+        try {
+          if (!user.emailVerified) {
+            debugPrint('[AuthService] Rejecting unverified email from Firebase: $email');
+            return false;
+          }
+        } catch (_) {
+          // emailVerified unavailable — conservative: reject.
+          return false;
+        }
       }
 
       var name = (realName ?? user.displayName ?? '').trim();
