@@ -17,6 +17,7 @@ void main() {
     LocalDatabase.setDatabaseForTesting(db);
     await LocalDatabase.instance.createAllTables(db);
     await LocalDatabase.instance.initialize();
+    await AuthService.instance.signOut();
   });
 
   tearDown(() async {
@@ -560,5 +561,139 @@ void main() {
     expect(user!['display_name'], 'John Laurence Novicio');
     activeSessionUserId = await LocalDatabase.instance.getActiveSessionUserId();
     expect(activeSessionUserId, user['id']);
+  });
+
+  test('admin email or alias 1 requires password and does not bypass credentials', () async {
+    // Attempting to sign in with admin email and invalid password fails with wrong-password or config-not-found
+    expect(
+      () => AuthService.instance.signInWithEmail(
+        email: 'admin@pulsemusic.app',
+        password: 'wrong_password',
+      ),
+      throwsA(isA<FirebaseAuthException>()),
+    );
+
+    expect(
+      () => AuthService.instance.signInWithEmail(
+        email: '1',
+        password: 'wrong_password',
+      ),
+      throwsA(isA<FirebaseAuthException>()),
+    );
+  });
+
+  test('registering an already existing email throws email-already-in-use and never overwrites password hash', () async {
+    const email = 'victim@example.com';
+    await AuthService.instance.register(
+      name: 'Original User',
+      email: email,
+      password: 'OriginalPassword123!',
+    );
+
+    final originalUser = await LocalDatabase.instance.getUserByEmail(email);
+    expect(originalUser, isNotNull);
+    final originalHash = originalUser!['password_hash'] as String;
+    final originalId = originalUser['id'] as String;
+
+    // Attacker attempts to register the same email with a new password
+    expect(
+      () => AuthService.instance.register(
+        name: 'Attacker',
+        email: email,
+        password: 'AttackerPassword123!',
+      ),
+      throwsA(isA<FirebaseAuthException>().having((e) => e.code, 'code', 'email-already-in-use')),
+    );
+
+    // Verify existing user ID and password hash were NOT changed
+    final preservedUser = await LocalDatabase.instance.getUserByEmail(email);
+    expect(preservedUser!['id'], originalId);
+    expect(preservedUser['password_hash'], originalHash);
+    expect(LocalDatabase.verifyPasswordHash('OriginalPassword123!', preservedUser['password_hash'] as String?), isTrue);
+    expect(LocalDatabase.verifyPasswordHash('AttackerPassword123!', preservedUser['password_hash'] as String?), isFalse);
+  });
+
+  test('registering with an already existing phone number throws email-already-in-use and never overwrites', () async {
+    const phone = '+639999999999';
+    await AuthService.instance.registerWithPhone(
+      name: 'Phone User 1',
+      phoneNumber: phone,
+      password: 'InitialPassword123!',
+    );
+
+    // Second registration with the same phone must be rejected
+    expect(
+      () => AuthService.instance.registerWithPhone(
+        name: 'Phone Impersonator',
+        phoneNumber: phone,
+        password: 'HijackPassword456!',
+      ),
+      throwsA(isA<FirebaseAuthException>().having((e) => e.code, 'code', 'email-already-in-use')),
+    );
+  });
+
+  test('saveImportedPlaylist prevents cross-account playlist overwrites', () async {
+    const userA = 'user-alice';
+    const userB = 'user-bob';
+    const playlistId = 'shared-playlist-id-123';
+
+    await LocalDatabase.instance.saveImportedPlaylist(
+      id: playlistId,
+      userId: userA,
+      title: "Alice's Mix",
+      songs: [
+        {'id': 'song-1', 'title': 'Track 1', 'artist': 'Artist 1'},
+      ],
+    );
+
+    // Bob attempts to overwrite Alice's playlist
+    expect(
+      () => LocalDatabase.instance.saveImportedPlaylist(
+        id: playlistId,
+        userId: userB,
+        title: "Bob's Takeover",
+        songs: [
+          {'id': 'song-2', 'title': 'Track 2', 'artist': 'Artist 2'},
+        ],
+      ),
+      throwsA(isA<StateError>()),
+    );
+
+    // Verify Alice's playlist was not overwritten
+    final db = await LocalDatabase.instance.database;
+    final row = await db.query('imported_playlists', where: 'id = ?', whereArgs: [playlistId]);
+    expect(row.first['user_id'], userA);
+    expect(row.first['title'], "Alice's Mix");
+  });
+
+  test('deleteImportedPlaylist respects owner predicate and rejects unauthorized deletion', () async {
+    const ownerId = 'user-owner';
+    const unauthorizedId = 'user-unauthorized';
+    const playlistId = 'protected-playlist-id-456';
+
+    await LocalDatabase.instance.saveImportedPlaylist(
+      id: playlistId,
+      userId: ownerId,
+      title: "Protected Mix",
+      songs: [],
+    );
+
+    // Guest attempts deletion of registered user's playlist
+    await LocalDatabase.instance.deleteImportedPlaylist(playlistId, userId: 'default_user');
+
+    // Playlist should still exist
+    final db = await LocalDatabase.instance.database;
+    var rows = await db.query('imported_playlists', where: 'id = ?', whereArgs: [playlistId]);
+    expect(rows, isNotEmpty);
+
+    // Unauthorized registered user attempts deletion
+    await LocalDatabase.instance.deleteImportedPlaylist(playlistId, userId: unauthorizedId);
+    rows = await db.query('imported_playlists', where: 'id = ?', whereArgs: [playlistId]);
+    expect(rows, isNotEmpty);
+
+    // Legitimate owner deletes playlist
+    await LocalDatabase.instance.deleteImportedPlaylist(playlistId, userId: ownerId);
+    rows = await db.query('imported_playlists', where: 'id = ?', whereArgs: [playlistId]);
+    expect(rows, isEmpty);
   });
 }

@@ -159,6 +159,7 @@ class _AuthViewState extends State<AuthView> {
               smsCode: smsCode,
               phoneNumber: phone,
               displayName: name,
+              autoSignIn: false,
             );
           },
           onResend: () async {
@@ -306,80 +307,34 @@ class _AuthViewState extends State<AuthView> {
     if (!signedIn) return;
   }
 
-  /// Sign-in mode: prompts for OTP delivery method (Gmail or SMS),
-  /// verifies the 6-digit code, then signs in with the Google/Facebook profile.
+  /// Sign-in mode: verifies the 6-digit code sent to the account's email,
+  /// then signs in with the Google/Facebook profile.
   Future<bool> _verifyOtpAndSignIn({
     required String email,
     required String name,
     required String provider,
   }) async {
-    if (!mounted) return false;
-
-    final method = await showModalBottomSheet<String>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: AppTheme.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (sheetContext) => _OtpMethodSheet(defaultEmail: email),
+    return await _runEmailOtpFlow(
+      email: email,
+      name: name,
+      provider: provider,
+      isCreatingAccount: false,
     );
-
-    if (!mounted || method == null) return false;
-
-    if (method == 'email') {
-      return await _runEmailOtpFlow(
-        email: email,
-        name: name,
-        provider: provider,
-        isCreatingAccount: false,
-      );
-    } else {
-      return await _runSmsOtpFlow(
-        email: email,
-        name: name,
-        provider: provider,
-        isCreatingAccount: false,
-      );
-    }
   }
 
-  /// In create-account mode: prompts for OTP delivery method (Gmail or SMS),
-  /// verifies the 6-digit code, then creates/signs in the account with the Google/Facebook profile.
+  /// In create-account mode: verifies the 6-digit code sent to the account's email,
+  /// then creates/signs in the account with the Google/Facebook profile.
   Future<bool> _verifyOtpAndCreateAccount({
     required String email,
     required String name,
     required String provider,
   }) async {
-    if (!mounted) return false;
-
-    final method = await showModalBottomSheet<String>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: AppTheme.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (sheetContext) => _OtpMethodSheet(defaultEmail: email),
+    return await _runEmailOtpFlow(
+      email: email,
+      name: name,
+      provider: provider,
+      isCreatingAccount: true,
     );
-
-    if (!mounted || method == null) return false;
-
-    if (method == 'email') {
-      return await _runEmailOtpFlow(
-        email: email,
-        name: name,
-        provider: provider,
-        isCreatingAccount: true,
-      );
-    } else {
-      return await _runSmsOtpFlow(
-        email: email,
-        name: name,
-        provider: provider,
-        isCreatingAccount: true,
-      );
-    }
   }
 
   /// Sends a 6-digit OTP code to the Gmail/email address and verifies it.
@@ -421,130 +376,6 @@ class _AuthViewState extends State<AuthView> {
       onResend: () async {
         await OtpService.instance.sendEmailOtp(email: email);
       },
-      onSwitchMethod: () {
-        _runSmsOtpFlow(
-          email: email,
-          name: name,
-          provider: provider,
-          isCreatingAccount: isCreatingAccount,
-        );
-      },
-      switchMethodLabel: 'Send code via SMS instead',
-    );
-
-    if (verified != true) return false;
-
-    setState(() => _isBusy = true);
-    try {
-      await AuthService.instance.signInWithRealProfile(
-        email: email,
-        displayName: name,
-        provider: provider,
-      );
-      return true;
-    } on FirebaseAuthException catch (error) {
-      _showError(_friendlyError(error));
-      return false;
-    } catch (error) {
-      _showError(error.toString());
-      return false;
-    } finally {
-      if (mounted) setState(() => _isBusy = false);
-    }
-  }
-
-  /// Prompts for phone number, sends a 6-digit SMS OTP code, and verifies it.
-  Future<bool> _runSmsOtpFlow({
-    required String email,
-    required String name,
-    required String provider,
-    required bool isCreatingAccount,
-  }) async {
-    final phone = await showModalBottomSheet<String>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: AppTheme.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (sheetContext) => const _PhoneNumberSheet(),
-    );
-
-    if (!mounted || phone == null) return false;
-
-    setState(() => _isBusy = true);
-    String? verificationId;
-    String? sendError;
-
-    final completer = Completer<bool>();
-    await OtpService.instance.sendSmsOtp(
-      phoneNumber: phone,
-      onCodeSent: (vId, _) {
-        verificationId = vId;
-        if (!completer.isCompleted) completer.complete(true);
-      },
-      onError: (err) {
-        sendError = err;
-        if (!completer.isCompleted) completer.complete(false);
-      },
-    );
-
-    final sent = await completer.future.timeout(
-      const Duration(seconds: 15),
-      onTimeout: () {
-        sendError = 'SMS verification timed out. Please try again.';
-        return false;
-      },
-    );
-
-    if (!mounted) return false;
-    setState(() => _isBusy = false);
-
-    if (!sent || verificationId == null) {
-      _showError(sendError ?? 'Could not send SMS verification code.');
-      return false;
-    }
-
-    final verified = await OtpVerificationDialog.show(
-      context: context,
-      title: 'Verify SMS OTP',
-      destination: phone,
-      type: 'sms',
-      onVerify: (smsCode) async {
-        return await OtpService.instance.verifySmsOtp(
-          verificationId: verificationId!,
-          smsCode: smsCode,
-          phoneNumber: phone,
-          displayName: name,
-          autoSignIn: false,
-        );
-      },
-      onResend: () async {
-        final resendCompleter = Completer<void>();
-        await OtpService.instance.sendSmsOtp(
-          phoneNumber: phone,
-          onCodeSent: (newVId, _) {
-            verificationId = newVId;
-            if (!resendCompleter.isCompleted) resendCompleter.complete();
-          },
-          onError: (err) {
-            if (!resendCompleter.isCompleted) resendCompleter.complete();
-          },
-        );
-        await resendCompleter.future.timeout(
-          const Duration(seconds: 15),
-          onTimeout: () {},
-        );
-      },
-      onSwitchMethod: () {
-        _runEmailOtpFlow(
-          email: email,
-          name: name,
-          provider: provider,
-          isCreatingAccount: isCreatingAccount,
-        );
-      },
-      switchMethodLabel: 'Send code via Email instead',
     );
 
     if (verified != true) return false;
@@ -1028,271 +859,6 @@ class _SocialAccountChooserSheetState
   }
 }
 
-class _OtpMethodSheet extends StatelessWidget {
-  final String defaultEmail;
-
-  const _OtpMethodSheet({required this.defaultEmail});
-
-  @override
-  Widget build(BuildContext context) {
-    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
-
-    return Padding(
-      padding: EdgeInsets.only(
-        left: 20,
-        right: 20,
-        top: 16,
-        bottom: bottomInset > 0 ? bottomInset + 16 : 28,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Center(
-            child: Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.white24,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-          ),
-          const SizedBox(height: 18),
-          const Text(
-            'Verify your account',
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-              color: AppTheme.textPrimary,
-            ),
-          ),
-          const SizedBox(height: 4),
-          const Text(
-            'Choose where to receive your 6-digit OTP verification code',
-            style: TextStyle(
-              fontSize: 13,
-              color: AppTheme.textSecondary,
-            ),
-          ),
-          const SizedBox(height: 18),
-          Card(
-            color: AppTheme.cardSurface,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-              side: const BorderSide(color: AppTheme.border),
-            ),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(16),
-              onTap: () => Navigator.of(context).pop('email'),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: AppTheme.primary.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: const Icon(
-                        Icons.mark_email_read_rounded,
-                        color: AppTheme.primary,
-                        size: 24,
-                      ),
-                    ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Send OTP to Gmail',
-                            style: TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.bold,
-                              color: AppTheme.textPrimary,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            defaultEmail.isNotEmpty
-                                ? defaultEmail
-                                : 'Receive code in your Gmail inbox',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: AppTheme.textSecondary,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ],
-                      ),
-                    ),
-                    const Icon(Icons.chevron_right_rounded, color: AppTheme.textSecondary),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          Card(
-            color: AppTheme.cardSurface,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-              side: const BorderSide(color: AppTheme.border),
-            ),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(16),
-              onTap: () => Navigator.of(context).pop('sms'),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: AppTheme.secondary.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: const Icon(
-                        Icons.sms_rounded,
-                        color: AppTheme.secondary,
-                        size: 24,
-                      ),
-                    ),
-                    const SizedBox(width: 14),
-                    const Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Send OTP via SMS',
-                            style: TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.bold,
-                              color: AppTheme.textPrimary,
-                            ),
-                          ),
-                          SizedBox(height: 2),
-                          Text(
-                            'Receive 6-digit SMS message on your phone',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: AppTheme.textSecondary,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const Icon(Icons.chevron_right_rounded, color: AppTheme.textSecondary),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _PhoneNumberSheet extends StatefulWidget {
-  const _PhoneNumberSheet();
-
-  @override
-  State<_PhoneNumberSheet> createState() => _PhoneNumberSheetState();
-}
-
-class _PhoneNumberSheetState extends State<_PhoneNumberSheet> {
-  final _phoneController = TextEditingController(text: '+63 ');
-  final _formKey = GlobalKey<FormState>();
-
-  @override
-  void dispose() {
-    _phoneController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
-
-    return Padding(
-      padding: EdgeInsets.only(
-        left: 24,
-        right: 24,
-        top: 20,
-        bottom: bottomInset > 0 ? bottomInset + 20 : 32,
-      ),
-      child: Form(
-        key: _formKey,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Center(
-              child: Container(
-                width: 44,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Colors.white24,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-            ),
-            const SizedBox(height: 20),
-            const Text(
-              'Enter your phone number',
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-                color: AppTheme.textPrimary,
-              ),
-            ),
-            const SizedBox(height: 4),
-            const Text(
-              'We will send a 6-digit SMS OTP code',
-              style: TextStyle(
-                fontSize: 13,
-                color: AppTheme.textSecondary,
-              ),
-            ),
-            const SizedBox(height: 20),
-            TextFormField(
-              controller: _phoneController,
-              keyboardType: TextInputType.phone,
-              style: const TextStyle(color: AppTheme.textPrimary),
-              decoration: const InputDecoration(
-                labelText: 'Phone Number',
-                hintText: '+63 912 345 6789',
-                prefixIcon: Icon(Icons.phone_rounded, color: AppTheme.textSecondary),
-              ),
-              validator: (val) {
-                final clean = (val ?? '').trim().replaceAll(' ', '');
-                if (clean.length < 8) return 'Enter a valid phone number with country code.';
-                return null;
-              },
-            ),
-            const SizedBox(height: 20),
-            ElevatedButton.icon(
-              onPressed: () {
-                if (!(_formKey.currentState?.validate() ?? false)) return;
-                Navigator.of(context).pop(_phoneController.text.trim());
-              },
-              icon: const Icon(Icons.send_rounded, size: 18),
-              label: const Text('Send 6-Digit SMS Code'),
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
 
 class _GmailSetupSheet extends StatefulWidget {
   final String targetEmail;

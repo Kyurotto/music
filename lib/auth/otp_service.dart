@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:crypto/crypto.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:mailer/mailer.dart';
@@ -99,6 +101,10 @@ class OtpService {
   @visibleForTesting
   static Future<void> Function(String email, String code)? emailSenderForTesting;
 
+  /// Hook for enabling simulated SMS OTP in unit tests without live cellular service
+  @visibleForTesting
+  static bool enableMockSmsForTesting = false;
+
   /// Returns active OTP code for unit testing or diagnostics
   @visibleForTesting
   String? getActiveCodeForTesting(String target) {
@@ -147,9 +153,10 @@ class OtpService {
     try {
       final firestore = _firestore;
       if (firestore != null) {
+        final otpHash = sha256.convert(utf8.encode(code)).toString();
         await firestore.collection('email_otps').doc(cleanEmail).set({
           'email': cleanEmail,
-          'otp': code,
+          'otp_hash': otpHash,
           'createdAt': FieldValue.serverTimestamp(),
           'expiresAt': Timestamp.fromDate(expiresAt),
         }, SetOptions(merge: true)).timeout(const Duration(seconds: 3));
@@ -159,7 +166,7 @@ class OtpService {
           await firestore.collection('mail').add({
             'to': [cleanEmail],
             'message': {
-              'subject': 'Your Pulse Music Verification Code: $code',
+              'subject': 'Your Pulse Music Verification Code',
               'text': 'Your 6-digit verification code is: $code. This code is valid for 10 minutes.',
               'html': '''
                 <div style="font-family: Arial, sans-serif; padding: 20px; color: #111;">
@@ -243,8 +250,6 @@ class OtpService {
       );
     }
 
-    debugPrint('[OtpService] 6-digit OTP for $cleanEmail is: $code');
-
     return OtpResult(
       success: true,
       message: 'Verification code sent to $cleanEmail',
@@ -261,11 +266,18 @@ class OtpService {
 
     if (cleanCode.length != otpLength) return false;
 
+    void deleteFirestoreOtp() {
+      try {
+        _firestore?.collection('email_otps').doc(cleanEmail).delete().catchError((_) {});
+      } catch (_) {}
+    }
+
     // 1. Check local session
     final session = _emailSessions[cleanEmail];
     if (session != null) {
       if (!session.isExpired && session.code == cleanCode) {
         _emailSessions.remove(cleanEmail);
+        deleteFirestoreOtp();
         return true;
       }
     }
@@ -281,15 +293,15 @@ class OtpService {
             .timeout(const Duration(seconds: 3));
         if (doc.exists) {
           final data = doc.data();
+          final storedHash = data?['otp_hash']?.toString();
           final storedOtp = data?['otp']?.toString();
+          final inputHash = sha256.convert(utf8.encode(cleanCode)).toString();
+          final isMatch = (storedHash != null && storedHash == inputHash) ||
+              (storedOtp != null && storedOtp == cleanCode);
           final expiresAt = (data?['expiresAt'] as Timestamp?)?.toDate();
-          if (storedOtp == cleanCode) {
+          if (isMatch) {
             if (expiresAt == null || DateTime.now().isBefore(expiresAt)) {
-              await firestore
-                  .collection('email_otps')
-                  .doc(cleanEmail)
-                  .delete()
-                  .timeout(const Duration(seconds: 2));
+              deleteFirestoreOtp();
               return true;
             }
           }
@@ -337,13 +349,17 @@ class OtpService {
           if (callbackFired) return;
           callbackFired = true;
           timeoutTimer?.cancel();
-          _sendFallbackSmsOtp(cleanPhone, onCodeSent);
+          if (enableMockSmsForTesting) {
+            _sendFallbackSmsOtp(cleanPhone, onCodeSent);
+          } else {
+            onError('SMS verification timed out. Please try again or use email verification.');
+          }
         }
 
         // Safety timer: if Firebase Phone Auth hangs on Play Integrity / SafetyNet or network,
-        // fallback after 10 seconds so the user is NEVER stuck!
-        timeoutTimer = Timer(const Duration(seconds: 10), () {
-          debugPrint('[OtpService] Firebase Phone Auth verification timed out after 10s, activating fallback SMS code.');
+        // fail gracefully after 15 seconds so the user is informed
+        timeoutTimer = Timer(const Duration(seconds: 15), () {
+          debugPrint('[OtpService] Firebase Phone Auth verification timed out after 15s.');
           triggerFallback();
         });
 
@@ -360,15 +376,18 @@ class OtpService {
           },
           verificationFailed: (FirebaseAuthException e) {
             debugPrint('[OtpService] Firebase Phone Auth error: ${e.code} - ${e.message}');
+            if (callbackFired) return;
+            callbackFired = true;
+            timeoutTimer?.cancel();
             if (e.code == 'invalid-phone-number') {
-              if (callbackFired) return;
-              callbackFired = true;
-              timeoutTimer?.cancel();
               onError(e.message ?? 'Invalid phone number format.');
               return;
             }
-            // For configuration, quota, network, or environment issues, fallback seamlessly
-            triggerFallback();
+            if (enableMockSmsForTesting) {
+              _sendFallbackSmsOtp(cleanPhone, onCodeSent);
+              return;
+            }
+            onError(e.message ?? 'SMS delivery failed. Please use email verification.');
           },
           codeSent: (String verificationId, int? resendToken) {
             if (callbackFired) return;
@@ -394,13 +413,22 @@ class OtpService {
         return;
       } catch (e) {
         debugPrint('[OtpService] verifyPhoneNumber exception: $e');
-        _sendFallbackSmsOtp(cleanPhone, onCodeSent);
+        if (enableMockSmsForTesting) {
+          _sendFallbackSmsOtp(cleanPhone, onCodeSent);
+          return;
+        }
+        onError('SMS verification error: $e');
         return;
       }
     }
 
-    // Desktop/Web/Fallback mode: provides seamless 6-digit test code so testing NEVER fails
-    _sendFallbackSmsOtp(cleanPhone, onCodeSent);
+    // In unit testing environment when mock is enabled
+    if (enableMockSmsForTesting) {
+      _sendFallbackSmsOtp(cleanPhone, onCodeSent);
+      return;
+    }
+
+    onError('SMS verification is unavailable on this platform. Please use email verification.');
   }
 
   void _sendFallbackSmsOtp(
@@ -421,7 +449,6 @@ class OtpService {
       expiresAt: now.add(otpValidity),
     );
 
-    debugPrint('[OtpService] Fallback 6-digit SMS OTP for $cleanPhone generated (check device messages).');
     onCodeSent(mockVerificationId, null);
   }
 

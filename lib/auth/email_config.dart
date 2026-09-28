@@ -19,7 +19,9 @@ class EmailConfig {
 
   /// The 16-character Google App Password (e.g., "abcd efgh ijkl mnop").
   /// Spaces will be automatically stripped before connecting to Gmail SMTP.
-  static String appPassword = 'edvx tkph khnc soyc';
+  /// NEVER commit a real App Password to source control. Configure at runtime
+  /// via the in-app dialog or Firestore 'app_config/smtp'.
+  static String appPassword = '';
 
   /// Sender display name that appears in the recipient's inbox.
   static String senderDisplayName = 'Pulse Music';

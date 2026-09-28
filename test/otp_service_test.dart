@@ -60,23 +60,28 @@ void main() {
     });
 
     test('sends simulated/fallback SMS OTP and generates 6 digits', () async {
-      String? verificationId;
+      OtpService.enableMockSmsForTesting = true;
+      try {
+        String? verificationId;
 
-      await OtpService.instance.sendSmsOtp(
-        phoneNumber: testPhone,
-        onCodeSent: (vId, _) {
-          verificationId = vId;
-        },
-        onError: (err) {
-          fail('SMS OTP send failed: $err');
-        },
-      );
+        await OtpService.instance.sendSmsOtp(
+          phoneNumber: testPhone,
+          onCodeSent: (vId, _) {
+            verificationId = vId;
+          },
+          onError: (err) {
+            fail('SMS OTP send failed: $err');
+          },
+        );
 
-      expect(verificationId, isNotNull);
-      final activeCode = OtpService.instance.getActiveCodeForTesting(testPhone);
-      expect(activeCode, isNotNull);
-      expect(activeCode!.length, equals(6));
-      expect(int.tryParse(activeCode), isNotNull);
+        expect(verificationId, isNotNull);
+        final activeCode = OtpService.instance.getActiveCodeForTesting(testPhone);
+        expect(activeCode, isNotNull);
+        expect(activeCode!.length, equals(6));
+        expect(int.tryParse(activeCode), isNotNull);
+      } finally {
+        OtpService.enableMockSmsForTesting = false;
+      }
     });
 
     test('LocalDatabase persists both email and phone_number without errors', () async {

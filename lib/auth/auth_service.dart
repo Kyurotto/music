@@ -254,13 +254,6 @@ class AuthService {
     _authController.add(localUser);
   }
 
-  Future<void> signInAsAdmin() async {
-    await LocalDatabase.instance.seedDefaultUserIfNeeded();
-    final user = await LocalDatabase.instance.getUserByEmail('johnlaurencenovicio@gmail.com');
-    if (user != null) {
-      await _loginAsLocalUser(user);
-    }
-  }
 
   Future<void> register({
     required String name,
@@ -277,9 +270,14 @@ class AuthService {
     await LocalDatabase.instance.removeDefaultAdminIfSeeded();
 
     final existingLocal = await LocalDatabase.instance.getUserByEmail(cleanEmail);
-    final userId = existingLocal != null
-        ? (existingLocal['id'] as String)
-        : await LocalDatabase.instance.getNextUserId();
+    if (existingLocal != null) {
+      throw FirebaseAuthException(
+        code: 'email-already-in-use',
+        message: 'The email address is already in use by another account.',
+      );
+    }
+
+    final userId = await LocalDatabase.instance.getNextUserId();
     // Hash locally — plaintext passwords are never written to SQLite.
     final passwordHash = LocalDatabase.hashPassword(password);
 
@@ -332,7 +330,8 @@ class AuthService {
     }
   }
 
-  /// Registers a new user verified via 6-digit SMS OTP
+  /// Registers a new user verified via 6-digit SMS OTP.
+  /// Throws if the phone number (synthetic email) is already registered.
   Future<void> registerWithPhone({
     required String name,
     required String phoneNumber,
@@ -349,10 +348,17 @@ class AuthService {
     final passwordHash = LocalDatabase.hashPassword(password);
 
     await LocalDatabase.instance.removeDefaultAdminIfSeeded();
+
+    // Prevent overwriting an existing account's password.
     final existingLocal = await LocalDatabase.instance.getUserByEmail(cleanEmail);
-    final userId = existingLocal != null
-        ? (existingLocal['id'] as String)
-        : await LocalDatabase.instance.getNextUserId();
+    if (existingLocal != null) {
+      throw FirebaseAuthException(
+        code: 'email-already-in-use',
+        message: 'An account with this phone number already exists. Please sign in instead.',
+      );
+    }
+
+    final userId = await LocalDatabase.instance.getNextUserId();
 
     await LocalDatabase.instance.saveUser(
       id: userId,
@@ -378,11 +384,7 @@ class AuthService {
   }) async {
     final cleanEmail = email.trim().toLowerCase();
 
-    // If logging in as admin directly
-    if (cleanEmail == 'admin@pulsemusic.app' || cleanEmail == '1') {
-      await signInAsAdmin();
-      return;
-    }
+    // If logging in, require password — no admin shortcuts.
 
     final auth = _auth;
     if (auth == null) {
@@ -445,27 +447,44 @@ class AuthService {
         debugPrint('[AuthService] Local mirror skipped: $e');
       }
     } on FirebaseAuthException catch (e) {
+      // Firebase rejected the credentials authoritatively (wrong-password,
+      // invalid-credential, user-disabled). Do NOT fall back to a potentially
+      // stale local hash.
+      final isCredentialError = e.code == 'wrong-password' ||
+          e.code == 'invalid-credential' ||
+          e.code == 'user-disabled' ||
+          e.code == 'user-not-found';
+      if (isCredentialError) {
+        final exists =
+            await LocalDatabase.instance.getUserByEmail(cleanEmail);
+        if (exists != null) {
+          throw FirebaseAuthException(
+            code: 'wrong-password',
+            message: 'Incorrect email address or password.',
+          );
+        }
+        rethrow;
+      }
+
       final isConfigError = e.code == 'configuration-not-found' ||
           (e.message != null && e.message!.contains('CONFIGURATION_NOT_FOUND'));
 
-      // If user exists in local database, verify the stored hash before
-      // signing them in locally — never log in on email alone.
-      final verified =
-          await LocalDatabase.instance.verifyLocalPassword(cleanEmail, password);
-      if (verified != null) {
-        await _loginAsLocalUser(verified);
-        return;
-      }
-      final exists =
-          await LocalDatabase.instance.getUserByEmail(cleanEmail);
-      if (exists != null) {
-        throw FirebaseAuthException(
-          code: 'wrong-password',
-          message: 'Incorrect email address or password.',
-        );
-      }
-
+      // Only fall back to local password when Firebase is *unavailable*.
       if (isConfigError) {
+        final verified =
+            await LocalDatabase.instance.verifyLocalPassword(cleanEmail, password);
+        if (verified != null) {
+          await _loginAsLocalUser(verified);
+          return;
+        }
+        final exists =
+            await LocalDatabase.instance.getUserByEmail(cleanEmail);
+        if (exists != null) {
+          throw FirebaseAuthException(
+            code: 'wrong-password',
+            message: 'Incorrect email address or password.',
+          );
+        }
         throw FirebaseAuthException(
           code: 'configuration-not-found',
           message: 'Account not found. Please register to create an account.',
@@ -473,6 +492,7 @@ class AuthService {
       }
       rethrow;
     } catch (e) {
+      // Non-Firebase error (network, platform): fall back to local.
       final verified =
           await LocalDatabase.instance.verifyLocalPassword(cleanEmail, password);
       if (verified != null) {
@@ -669,13 +689,14 @@ class AuthService {
       } catch (e) {
         debugPrint('[AuthService] Firestore sync skipped: $e');
       }
-      // Prefer the OAuth profile name Firebase received from Google/Facebook.
+      // Prefer the OAuth profile name Firebase received from Google/Facebook,
+      // but only pass the email as verified if Firebase has verified it.
       final mirrored = await _mirrorFirebaseUserToLocal(
         user,
         provider: providerName,
         realName: user.displayName,
         realPhoto: user.photoURL,
-        realEmail: user.email,
+        realEmail: user.emailVerified ? user.email : null,
       );
       if (mirrored) return true;
       // Mirror failed: still keep the signed-in session so the user is
@@ -831,6 +852,14 @@ class AuthService {
           !email.contains('@') ||
           email.startsWith('google.user') ||
           email.startsWith('facebook.user')) {
+        return false;
+      }
+
+      // Verify email ownership: reject unverified emails from Firebase.
+      // If the email did not come directly from native SDK (realEmail),
+      // Firebase must confirm emailVerified == true.
+      if (realEmail == null && !user.emailVerified) {
+        debugPrint('[AuthService] Refusing to mirror unverified email from Firebase user');
         return false;
       }
 
@@ -1110,6 +1139,7 @@ class AuthService {
 
   Future<void> signOut() async {
     await LocalDatabase.instance.clearActiveSession();
+    LocalDatabase.instance.resetAnonymousSession();
     _currentUser = null;
     _isInitialized = true;
     _authController.add(null);
