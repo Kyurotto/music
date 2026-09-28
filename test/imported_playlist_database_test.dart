@@ -13,6 +13,7 @@ void main() {
   late Database db;
 
   setUp(() async {
+    AuthService.setMockVerifiedProfile(null);
     db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath);
     LocalDatabase.setDatabaseForTesting(db);
     await LocalDatabase.instance.createAllTables(db);
@@ -20,6 +21,7 @@ void main() {
   });
 
   tearDown(() async {
+    AuthService.setMockVerifiedProfile(null);
     await db.close();
     LocalDatabase.setDatabaseForTesting(null);
   });
@@ -263,10 +265,15 @@ void main() {
 
 
   test('signInWithProviderAuto creates and saves Google user in SQLite users table', () async {
+    AuthService.setMockVerifiedProfile(
+      const VerifiedSocialProfile(
+        email: 'john.smith@gmail.com',
+        displayName: 'John Smith',
+        provider: 'google',
+      ),
+    );
     await AuthService.instance.signInWithProviderAuto(
       provider: 'google',
-      preferredEmail: 'john.smith@gmail.com',
-      preferredName: 'John Smith',
     );
 
     final user = await LocalDatabase.instance.getUserByEmail('john.smith@gmail.com');
@@ -282,10 +289,15 @@ void main() {
   });
 
   test('signInWithProviderAuto creates and saves Facebook user in SQLite users table', () async {
+    AuthService.setMockVerifiedProfile(
+      const VerifiedSocialProfile(
+        email: 'sarah.connor@facebook.com',
+        displayName: 'Sarah Connor',
+        provider: 'facebook',
+      ),
+    );
     await AuthService.instance.signInWithProviderAuto(
       provider: 'facebook',
-      preferredEmail: 'sarah.connor@facebook.com',
-      preferredName: 'Sarah Connor',
     );
 
     final user = await LocalDatabase.instance.getUserByEmail('sarah.connor@facebook.com');
@@ -386,10 +398,15 @@ void main() {
   });
 
   test('creating new account with Google saves in SQLite users table', () async {
+    AuthService.setMockVerifiedProfile(
+      const VerifiedSocialProfile(
+        email: 'newgoogleuser@gmail.com',
+        displayName: 'Google Pioneer',
+        provider: 'google',
+      ),
+    );
     await AuthService.instance.signInWithProviderAuto(
       provider: 'google',
-      preferredEmail: 'newgoogleuser@gmail.com',
-      preferredName: 'Google Pioneer',
       forceNewAccount: true,
     );
 
@@ -405,10 +422,15 @@ void main() {
   });
 
   test('creating new account with Facebook saves in SQLite users table', () async {
+    AuthService.setMockVerifiedProfile(
+      const VerifiedSocialProfile(
+        email: 'newfacebookuser@facebook.com',
+        displayName: 'Facebook Pioneer',
+        provider: 'facebook',
+      ),
+    );
     await AuthService.instance.signInWithProviderAuto(
       provider: 'facebook',
-      preferredEmail: 'newfacebookuser@facebook.com',
-      preferredName: 'Facebook Pioneer',
       forceNewAccount: true,
     );
 
@@ -424,11 +446,16 @@ void main() {
   });
 
   test('Google taps reuse one account per email, never a different account', () async {
+    AuthService.setMockVerifiedProfile(
+      const VerifiedSocialProfile(
+        email: 'same.person@gmail.com',
+        displayName: 'Same Person',
+        provider: 'google',
+      ),
+    );
     // First tap creates exactly one row for the real email.
     await AuthService.instance.signInWithProviderAuto(
       provider: 'google',
-      preferredEmail: 'same.person@gmail.com',
-      preferredName: 'Same Person',
     );
     final first = await LocalDatabase.instance.getUserByEmail('same.person@gmail.com');
     expect(first, isNotNull);
@@ -436,8 +463,6 @@ void main() {
     // Second tap with the same email reuses the SAME row (same id), no duplicate.
     await AuthService.instance.signInWithProviderAuto(
       provider: 'google',
-      preferredEmail: 'same.person@gmail.com',
-      preferredName: 'Same Person',
     );
     final second = await LocalDatabase.instance.getUserByEmail('same.person@gmail.com');
     expect(second, isNotNull);
@@ -447,34 +472,54 @@ void main() {
     final matches = googleRows.where((u) => u['email'] == 'same.person@gmail.com');
     expect(matches, hasLength(1));
 
-    // A password account keeps its provider when Google uses the same email.
+    // A Google profile for an existing password email is rejected.
     await AuthService.instance.register(
       name: 'Pass User',
       email: 'shared@example.com',
       password: 'password123',
     );
-    await AuthService.instance.signInWithRealProfile(
-      email: 'shared@example.com',
-      displayName: 'Shared Person',
-      provider: 'google',
+    AuthService.setMockVerifiedProfile(
+      const VerifiedSocialProfile(
+        email: 'shared@example.com',
+        displayName: 'Shared Person',
+        provider: 'google',
+      ),
+    );
+    expect(
+      () => AuthService.instance.signInWithProviderAuto(provider: 'google'),
+      throwsA(isA<FirebaseAuthException>().having(
+        (e) => e.code,
+        'code',
+        'account-exists-with-different-credential',
+      )),
     );
     final shared = await LocalDatabase.instance.getUserByEmail('shared@example.com');
     expect(shared, isNotNull);
     expect(shared!['auth_provider'], 'password');
-    expect(shared['display_name'], 'Shared Person');
+    expect(shared['display_name'], 'Pass User');
   });
 
   test('Create mode with a different Google email creates that account', () async {
-    await AuthService.instance.signInWithProviderAuto(
-      provider: 'google',
-      preferredEmail: 'first.person@gmail.com',
-      preferredName: 'First Person',
-      forceNewAccount: true,
+    AuthService.setMockVerifiedProfile(
+      const VerifiedSocialProfile(
+        email: 'first.person@gmail.com',
+        displayName: 'First Person',
+        provider: 'google',
+      ),
     );
     await AuthService.instance.signInWithProviderAuto(
       provider: 'google',
-      preferredEmail: 'second.person@gmail.com',
-      preferredName: 'Second Person',
+      forceNewAccount: true,
+    );
+    AuthService.setMockVerifiedProfile(
+      const VerifiedSocialProfile(
+        email: 'second.person@gmail.com',
+        displayName: 'Second Person',
+        provider: 'google',
+      ),
+    );
+    await AuthService.instance.signInWithProviderAuto(
+      provider: 'google',
       forceNewAccount: true,
     );
 
@@ -522,11 +567,14 @@ void main() {
 
   test('Real Google and Facebook account selection saves directly into users table and user_sessions', () async {
     // 1. Save different Google account
-    await AuthService.instance.signInWithRealProfile(
-      email: 'arteezy0909@gmail.com',
-      displayName: 'Arteezy',
-      provider: 'google',
+    AuthService.setMockVerifiedProfile(
+      const VerifiedSocialProfile(
+        email: 'arteezy0909@gmail.com',
+        displayName: 'Arteezy',
+        provider: 'google',
+      ),
     );
+    await AuthService.instance.signInWithGoogle();
     var user = await LocalDatabase.instance.getUserByEmail('arteezy0909@gmail.com');
     expect(user, isNotNull);
     expect(user!['email'], 'arteezy0909@gmail.com');
@@ -536,11 +584,14 @@ void main() {
     expect(activeSessionUserId, user['id']);
 
     // 2. Save another different Google account
-    await AuthService.instance.signInWithRealProfile(
-      email: 'johnlaurencenovicio21@gmail.com',
-      displayName: 'John Laurence Novicio',
-      provider: 'google',
+    AuthService.setMockVerifiedProfile(
+      const VerifiedSocialProfile(
+        email: 'johnlaurencenovicio21@gmail.com',
+        displayName: 'John Laurence Novicio',
+        provider: 'google',
+      ),
     );
+    await AuthService.instance.signInWithGoogle();
     user = await LocalDatabase.instance.getUserByEmail('johnlaurencenovicio21@gmail.com');
     expect(user, isNotNull);
     expect(user!['email'], 'johnlaurencenovicio21@gmail.com');
@@ -550,14 +601,18 @@ void main() {
     expect(activeSessionUserId, user['id']);
 
     // 3. Save Facebook account
-    await AuthService.instance.signInWithRealProfile(
-      email: 'johnlaurencenovicio@gmail.com',
-      displayName: 'John Laurence Novicio',
-      provider: 'facebook',
+    AuthService.setMockVerifiedProfile(
+      const VerifiedSocialProfile(
+        email: 'johnlaurencenovicio@gmail.com',
+        displayName: 'John Laurence Novicio',
+        provider: 'facebook',
+      ),
     );
+    await AuthService.instance.signInWithFacebook();
     user = await LocalDatabase.instance.getUserByEmail('johnlaurencenovicio@gmail.com');
     expect(user, isNotNull);
     expect(user!['display_name'], 'John Laurence Novicio');
+    expect(user['auth_provider'], 'facebook');
     activeSessionUserId = await LocalDatabase.instance.getActiveSessionUserId();
     expect(activeSessionUserId, user['id']);
   });

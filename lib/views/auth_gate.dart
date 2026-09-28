@@ -72,14 +72,12 @@ class _AuthViewState extends State<AuthView> {
     }
   }
 
-  /// Google button. Sign-in mode reuses your saved Google account;
-  /// Create-account mode adds a *different* Google account: native picker
-  /// first, otherwise a small dialog for that account's Gmail + name —
-  /// one tap creates exactly that account.
+  /// Authenticates using the official Google sign-in flow.
   Future<void> _handleGoogleSignIn() async {
     await _handleSocialSignIn(provider: 'google');
   }
 
+  /// Authenticates using the official Facebook sign-in flow.
   Future<void> _handleFacebookSignIn() async {
     await _handleSocialSignIn(provider: 'facebook');
   }
@@ -120,6 +118,9 @@ class _AuthViewState extends State<AuthView> {
     switch (error.code) {
       case 'email-already-in-use':
         return 'An account already uses that email address.';
+      case 'account-exists-with-different-credential':
+        return error.message ??
+            'An account already exists with this email address using a different sign-in method.';
       case 'invalid-credential':
       case 'wrong-password':
       case 'user-not-found':
@@ -133,8 +134,7 @@ class _AuthViewState extends State<AuthView> {
       case 'google-unavailable':
       case 'facebook-unavailable':
       case 'facebook-failed':
-        return error.message ??
-            'Type your email address above first, then continue.';
+        return error.message ?? 'Social sign-in is unavailable. Please try again.';
       case 'configuration-not-found':
         return error.message ?? 'Authentication failed. Please verify your credentials and try again.';
       default:

@@ -26,6 +26,22 @@ class LocalUser {
   String toString() => 'LocalUser(id: $id, email: $email, name: $displayName, role: $role)';
 }
 
+/// Represents a verified social profile returned directly by an authentic provider
+/// (e.g. Google, Facebook) or mocked in tests.
+class VerifiedSocialProfile {
+  final String email;
+  final String displayName;
+  final String? photoUrl;
+  final String provider;
+
+  const VerifiedSocialProfile({
+    required this.email,
+    required this.displayName,
+    this.photoUrl,
+    required this.provider,
+  });
+}
+
 class AuthService {
   AuthService._() {
     _initAuthListener();
@@ -479,78 +495,42 @@ class AuthService {
     return false;
   }
 
-  /// Fully automatic one-click sign-in-or-sign-up for a social provider.
-  /// One real email == one stable account: an existing saved account is
-  /// reused, a typed email signs in or creates exactly that account.
-  /// Throws a friendly FirebaseAuthException only when there is no saved
-  /// account, no typed email, and the native/OAuth flow is unavailable —
-  /// the UI turns that into a "type your email first" hint. Never invents
-  /// a different/fake account.
+  /// Holds a verified social profile for testing without native SDK interaction.
+  @visibleForTesting
+  static VerifiedSocialProfile? mockVerifiedProfile;
+
+  /// Injects a mocked verified provider result for testing.
+  @visibleForTesting
+  static void setMockVerifiedProfile(VerifiedSocialProfile? profile) {
+    mockVerifiedProfile = profile;
+  }
+
+  /// Authenticates with a social provider (Google or Facebook) via genuine
+  /// native SDK or OAuth. Never trusts an unverified client-supplied email
+  /// or reuses a local account row without verified credentials.
   Future<void> signInWithProviderAuto({
     required String provider,
     String? preferredEmail,
     String? preferredName,
     bool forceNewAccount = false,
   }) async {
-    final cleanEmail = (preferredEmail ?? '').trim().toLowerCase();
-    final cleanName = (preferredName ?? '').trim();
-
-    // 1. If user entered an email, always use exactly that account.
-    if (cleanEmail.isNotEmpty && cleanEmail.contains('@')) {
-      final displayName =
-          cleanName.isNotEmpty ? cleanName : cleanEmail.split('@').first;
-      await signInWithRealProfile(
-        email: cleanEmail,
-        displayName: displayName,
-        provider: provider,
-      );
-      return;
+    // The preferredEmail shortcut has been removed to prevent authorization bypass:
+    // social sign-in must always authenticate against genuine native or OAuth credentials.
+    final success = provider == 'google'
+        ? await signInWithGoogle(isCreatingNewAccount: forceNewAccount)
+        : await signInWithFacebook(isCreatingNewAccount: forceNewAccount);
+    if (!success) {
+      debugPrint('[AuthService] $provider sign-in was cancelled or did not complete');
     }
-
-    // 2. Otherwise reuse the most recent real saved account of this provider,
-    // so repeated taps sign into the SAME account instead of creating
-    // a different one each time.
-    if (!forceNewAccount) {
-      try {
-        final saved = await LocalDatabase.instance.getUsersByProvider(provider);
-        for (final row in saved) {
-          final name = (row['display_name'] as String? ?? '').trim();
-          final email = (row['email'] as String? ?? '').trim().toLowerCase();
-          if (name.isNotEmpty &&
-              email.contains('@') &&
-              !_isGenericName(name, provider)) {
-            await _loginAsLocalUser(row);
-            return;
-          }
-        }
-      } catch (e) {
-        debugPrint('[AuthService] Saved account reuse note: $e');
-      }
-    }
-
-    // 3. Otherwise, use the native SDK / OAuth for the real profile.
-    try {
-      final success = provider == 'google'
-          ? await signInWithGoogle(isCreatingNewAccount: forceNewAccount)
-          : await signInWithFacebook(isCreatingNewAccount: forceNewAccount);
-      if (success) return;
-    } catch (_) {}
-
-    // No saved account, no typed email, native/OAuth unavailable:
-    // ask the user for their email instead of inventing an account.
-    final label = provider == 'google' ? 'Gmail' : 'Facebook email';
-    throw FirebaseAuthException(
-      code: '$provider-unavailable',
-      message:
-          'Type your $label address in the email field above, then tap Continue with ${provider == 'google' ? 'Google' : 'Facebook'}.',
-    );
   }
 
-  /// Persists exactly one stable account per real email. A new email creates
-  /// one row; an existing email reuses its row (same id) and keeps its
-  /// original auth provider and role — a Google tap never converts a
-  /// password account into a different Google account or vice versa.
-  Future<void> signInWithRealProfile({
+  /// Persists a social profile from a verified provider result (e.g. GoogleSignInAccount
+  /// after signIn(), Facebook getUserData() after a successful LoginResult, or a
+  /// verified Firebase UserCredential).
+  ///
+  /// Refuses to sign in if an account already exists with a different auth_provider
+  /// (e.g. password) to prevent unauthorized account takeover.
+  Future<void> _persistVerifiedSocialProfile({
     required String email,
     required String displayName,
     String? photoUrl,
@@ -579,6 +559,18 @@ class AuthService {
     if (cleanName.isEmpty) cleanName = '$provider-user';
 
     var existingUser = await LocalDatabase.instance.getUserByEmail(cleanEmail);
+    if (existingUser != null) {
+      final existingProvider =
+          (existingUser['auth_provider'] as String? ?? 'password').trim().toLowerCase();
+      if (existingProvider != provider.trim().toLowerCase()) {
+        throw FirebaseAuthException(
+          code: 'account-exists-with-different-credential',
+          message:
+              'An account already exists with this email address ($cleanEmail) using $existingProvider. Please sign in using your original method.',
+        );
+      }
+    }
+
     if (existingUser == null) {
       final userId = await LocalDatabase.instance.getNextUserId();
       await LocalDatabase.instance.saveUser(
@@ -591,9 +583,7 @@ class AuthService {
       );
       existingUser = await LocalDatabase.instance.getUserById(userId);
     } else {
-      // Accuracy guard: never overwrite a real stored name/photo with a
-      // generic placeholder or a missing value from a failed profile read,
-      // and never flip the original auth provider or role.
+      // Existing verified social user with the matching provider:
       final oldName = (existingUser['display_name'] as String? ?? '').trim();
       final oldPhoto = existingUser['photo_url'] as String?;
       final newIsGeneric = _isGenericName(cleanName, provider);
@@ -608,17 +598,29 @@ class AuthService {
         displayName: resolvedName,
         photoUrl: resolvedPhoto,
         role: existingUser['role'] as String? ?? 'user',
-        authProvider:
-            existingUser['auth_provider'] as String? ?? provider,
+        authProvider: provider,
       );
       existingUser = await LocalDatabase.instance.getUserById(existingUser['id'] as String);
     }
 
     if (existingUser != null) {
       await _loginAsLocalUser(existingUser);
-      debugPrint('[AuthService] Saved $provider user: $cleanEmail as $cleanName');
+      debugPrint('[AuthService] Saved verified $provider user: $cleanEmail as $cleanName');
     }
   }
+
+  @visibleForTesting
+  Future<void> persistVerifiedSocialProfileForTesting({
+    required String email,
+    required String displayName,
+    String? photoUrl,
+    required String provider,
+  }) => _persistVerifiedSocialProfile(
+        email: email,
+        displayName: displayName,
+        photoUrl: photoUrl,
+        provider: provider,
+      );
 
   /// Browser/IdP OAuth via Firebase (works on desktop/web where the
   /// native SDKs are unavailable). Returns true with the REAL accurate
@@ -667,9 +669,20 @@ class AuthService {
   /// Throws only when native sign-in is unavailable/failed so the UI
   /// can offer the local one-tap fallback sheet.
   Future<bool> signInWithGoogle({bool isCreatingNewAccount = false}) async {
-    GoogleSignInAccount? googleUser;
     _socialSignInInProgress = true;
     try {
+      if (mockVerifiedProfile != null && mockVerifiedProfile!.provider == 'google') {
+        final mock = mockVerifiedProfile!;
+        await _persistVerifiedSocialProfile(
+          email: mock.email,
+          displayName: mock.displayName,
+          photoUrl: mock.photoUrl,
+          provider: 'google',
+        );
+        return true;
+      }
+
+      GoogleSignInAccount? googleUser;
       try {
         if (isCreatingNewAccount) {
           try {
@@ -688,7 +701,7 @@ class AuthService {
         if (oauthOk) return true;
         throw FirebaseAuthException(
           code: 'google-unavailable',
-          message: 'Google sign-in is unavailable. Choose a saved account or add one.',
+          message: 'Google sign-in is unavailable. Please try again.',
         );
       }
     if (googleUser == null) {
@@ -765,7 +778,7 @@ class AuthService {
       }
     }
 
-    await signInWithRealProfile(
+    await _persistVerifiedSocialProfile(
       email: realEmail,
       displayName: realName,
       photoUrl: realPhoto,
@@ -854,7 +867,7 @@ class AuthService {
           ? realPhoto
           : user.photoURL;
 
-      await signInWithRealProfile(
+      await _persistVerifiedSocialProfile(
         email: email,
         displayName: name,
         photoUrl: photo,
@@ -865,6 +878,8 @@ class AuthService {
       // object often has a null displayName and would show an email
       // prefix instead of the real Google/Facebook account name.
       return _currentUser is LocalUser;
+    } on FirebaseAuthException {
+      rethrow;
     } catch (e) {
       debugPrint('[AuthService] Local mirror skipped: $e');
       return false;
@@ -876,6 +891,17 @@ class AuthService {
   Future<bool> signInWithFacebook({bool isCreatingNewAccount = false}) async {
     _socialSignInInProgress = true;
     try {
+      if (mockVerifiedProfile != null && mockVerifiedProfile!.provider == 'facebook') {
+        final mock = mockVerifiedProfile!;
+        await _persistVerifiedSocialProfile(
+          email: mock.email,
+          displayName: mock.displayName,
+          photoUrl: mock.photoUrl,
+          provider: 'facebook',
+        );
+        return true;
+      }
+
       if (isCreatingNewAccount) {
         try {
           await FacebookAuth.instance.logOut();
@@ -895,7 +921,7 @@ class AuthService {
         if (oauthOk) return true;
         throw FirebaseAuthException(
           code: 'facebook-unavailable',
-          message: 'Facebook sign-in is unavailable. Choose a saved account or add one.',
+          message: 'Facebook sign-in is unavailable. Please try again.',
         );
       }
 
@@ -914,7 +940,7 @@ class AuthService {
         if (oauthOk) return true;
         throw FirebaseAuthException(
           code: 'facebook-failed',
-          message: 'Facebook sign-in did not complete. Choose a saved account or add one.',
+          message: 'Facebook sign-in did not complete. Please try again.',
         );
       }
 
@@ -959,12 +985,12 @@ class AuthService {
           realPhoto: fbPhoto,
           realEmail: fbEmail.isNotEmpty ? fbEmail : userCredential.user?.email,
         );
-        await LocalDatabase.instance.claimAnonymousPlaylists(userCredential.user!.uid);
-        if (mirrored) return true;
-        // Mirror failed: fall through to local profile sign-in below.
+        if (mirrored) {
+          await LocalDatabase.instance.claimAnonymousPlaylists(userCredential.user!.uid);
+          return true;
+        }
       } catch (e) {
         debugPrint('[AuthService] Firebase Facebook credential note: $e');
-        // Fall through to local profile sign-in below.
       }
     }
     // Without a real Facebook email there is no account to sign into —
@@ -972,8 +998,7 @@ class AuthService {
     if (fbEmail.isEmpty || fbEmail.startsWith('fb-') || fbEmail.startsWith('facebook.user')) {
       throw FirebaseAuthException(
         code: 'facebook-failed',
-        message:
-            'Facebook did not share an email address. Type your email above, then tap Continue with Facebook.',
+        message: 'Facebook did not share a verified email address. Please try again.',
       );
     }
     // Accuracy: if Facebook returned no real name, reuse the accurate
@@ -994,7 +1019,7 @@ class AuthService {
       }
     }
 
-    await signInWithRealProfile(
+    await _persistVerifiedSocialProfile(
       email: fbEmail,
       displayName: fbName,
       photoUrl: fbPhoto,
