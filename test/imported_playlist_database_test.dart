@@ -478,5 +478,68 @@ void main() {
     user = await LocalDatabase.instance.getUserById(testUserId);
     expect(user?['role'], 'user');
   });
+
+  test('updateUserRole switches role between user, employee, and admin and links employees', () async {
+    const testUserId = 'test-switch-101';
+    const testEmail = 'staff.switcher@example.com';
+    const testName = 'Staff Switcher';
+
+    // 1. Create user with 'user' role
+    await LocalDatabase.instance.saveUser(
+      id: testUserId,
+      email: testEmail,
+      displayName: testName,
+      role: 'user',
+    );
+
+    var user = await LocalDatabase.instance.getUserById(testUserId);
+    expect(user?['role'], 'user');
+
+    // 2. Switch to 'employee'
+    await LocalDatabase.instance.updateUserRole(
+      userId: testUserId,
+      role: 'employee',
+      email: testEmail,
+      displayName: testName,
+    );
+
+    user = await LocalDatabase.instance.getUserById(testUserId);
+    expect(user?['role'], 'employee');
+    var employee = await LocalDatabase.instance.getEmployeeByUserId(testUserId);
+    expect(employee, isNotNull);
+    expect(employee?['status'], 'active');
+    expect(employee?['email'], testEmail);
+    expect(await LocalDatabase.instance.resolveUserRole(testUserId), 'employee');
+
+    // 3. Switch to 'admin'
+    await LocalDatabase.instance.updateUserRole(
+      userId: testUserId,
+      role: 'admin',
+      email: testEmail,
+      displayName: testName,
+    );
+
+    user = await LocalDatabase.instance.getUserById(testUserId);
+    expect(user?['role'], 'admin');
+    employee = await LocalDatabase.instance.getEmployeeByUserId(testUserId);
+    expect(employee, isNotNull);
+    expect(employee?['status'], 'active');
+    expect((employee?['employee_code'] as String).startsWith('EMP-ADM'), isTrue);
+    expect(await LocalDatabase.instance.resolveUserRole(testUserId), 'admin');
+
+    // 4. Switch back to 'user'
+    await LocalDatabase.instance.updateUserRole(
+      userId: testUserId,
+      role: 'user',
+      email: testEmail,
+      displayName: testName,
+    );
+
+    user = await LocalDatabase.instance.getUserById(testUserId);
+    expect(user?['role'], 'user');
+    employee = await LocalDatabase.instance.getEmployeeByUserId(testUserId);
+    expect(employee?['status'], 'inactive');
+    expect(await LocalDatabase.instance.resolveUserRole(testUserId), 'user');
+  });
 }
 

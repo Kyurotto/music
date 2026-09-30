@@ -110,12 +110,17 @@ class LocalDatabase {
       final placeholders = await db.query(
         'users',
         columns: ['id'],
-        where: "LOWER(email) LIKE 'google.user%' OR LOWER(email) LIKE 'facebook.user%' OR LOWER(display_name) LIKE 'google.user%' OR LOWER(display_name) LIKE 'facebook.user%'",
+        where:
+            "LOWER(email) LIKE 'google.user%' OR LOWER(email) LIKE 'facebook.user%' OR LOWER(display_name) LIKE 'google.user%' OR LOWER(display_name) LIKE 'facebook.user%'",
       );
       for (final row in placeholders) {
         final id = row['id'] as String?;
         if (id != null) {
-          await db.delete('user_sessions', where: 'user_id = ?', whereArgs: [id]);
+          await db.delete(
+            'user_sessions',
+            where: 'user_id = ?',
+            whereArgs: [id],
+          );
           await db.delete('users', where: 'id = ?', whereArgs: [id]);
         }
       }
@@ -128,14 +133,19 @@ class LocalDatabase {
     try {
       final db = await database;
       // Only delete by email — id '1' is now a valid sequential user ID.
-      final adminRows = await db.query('users',
-          where: 'LOWER(email) = ?', whereArgs: ['admin@pulsemusic.app']);
+      final adminRows = await db.query(
+        'users',
+        where: 'LOWER(email) = ?',
+        whereArgs: ['admin@pulsemusic.app'],
+      );
       for (final row in adminRows) {
         final adminId = row['id'] as String;
-        await db.delete('user_sessions',
-            where: 'user_id = ?', whereArgs: [adminId]);
-        await db.delete('users',
-            where: 'id = ?', whereArgs: [adminId]);
+        await db.delete(
+          'user_sessions',
+          where: 'user_id = ?',
+          whereArgs: [adminId],
+        );
+        await db.delete('users', where: 'id = ?', whereArgs: [adminId]);
       }
     } catch (_) {}
   }
@@ -170,14 +180,16 @@ class LocalDatabase {
   }
 
   DatabaseFactory _databaseFactoryForPlatform() {
-    if (!kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
+    if (!kIsWeb &&
+        (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
       return databaseFactoryFfi;
     }
     return databaseFactory;
   }
 
   @visibleForTesting
-  Future<void> createAllTables(Database db) => _createDatabase(db, _databaseVersion);
+  Future<void> createAllTables(Database db) =>
+      _createDatabase(db, _databaseVersion);
 
   Future<void> _createDatabase(Database database, int version) async {
     await database.execute('''
@@ -213,7 +225,11 @@ class LocalDatabase {
     await _createImportedPlaylistTables(database);
   }
 
-  Future<void> _upgradeDatabase(Database database, int oldVersion, int newVersion) async {
+  Future<void> _upgradeDatabase(
+    Database database,
+    int oldVersion,
+    int newVersion,
+  ) async {
     if (oldVersion < 2) {
       await _createAccountTables(database);
     }
@@ -226,7 +242,9 @@ class LocalDatabase {
     if (oldVersion < 5) {
       // Password hashes: never store plaintext passwords in SQLite.
       try {
-        await database.execute('ALTER TABLE users ADD COLUMN password_hash TEXT');
+        await database.execute(
+          'ALTER TABLE users ADD COLUMN password_hash TEXT',
+        );
       } catch (_) {}
     }
   }
@@ -336,20 +354,16 @@ class LocalDatabase {
     );
     if (existing.isEmpty) {
       final now = DateTime.now().millisecondsSinceEpoch;
-      await db.insert(
-        'employees',
-        {
-          'id': '1',
-          'user_id': '1',
-          'employee_code': 'EMP-001',
-          'display_name': 'System Administrator',
-          'email': 'admin@pulsemusic.app',
-          'status': 'active',
-          'created_at': now,
-          'updated_at': now,
-        },
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
+      await db.insert('employees', {
+        'id': '1',
+        'user_id': '1',
+        'employee_code': 'EMP-001',
+        'display_name': 'System Administrator',
+        'email': 'admin@pulsemusic.app',
+        'status': 'active',
+        'created_at': now,
+        'updated_at': now,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
     }
     _syncToWorkspace();
   }
@@ -366,20 +380,16 @@ class LocalDatabase {
     if (existing.isEmpty) {
       final now = DateTime.now().millisecondsSinceEpoch;
       final nextId = await getNextUserId();
-      await db.insert(
-        'users',
-        {
-          'id': nextId,
-          'email': 'johnlaurencenovicio@gmail.com',
-          'display_name': 'John Laurence',
-          'photo_url': null,
-          'role': 'user',
-          'auth_provider': 'password',
-          'created_at': now,
-          'last_login_at': now,
-        },
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
+      await db.insert('users', {
+        'id': nextId,
+        'email': 'johnlaurencenovicio@gmail.com',
+        'display_name': 'John Laurence',
+        'photo_url': null,
+        'role': 'user',
+        'auth_provider': 'password',
+        'created_at': now,
+        'last_login_at': now,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
     }
     _syncToWorkspace();
   }
@@ -509,10 +519,15 @@ class LocalDatabase {
     int createdAt = now;
     String? resolvedHash = passwordHash;
     try {
-      final byId = await db.query('users',
-          where: 'id = ?', whereArgs: [id], limit: 1);
-      final existing =
-          byId.isNotEmpty ? byId.first : await _rowByEmail(db, cleanEmail);
+      final byId = await db.query(
+        'users',
+        where: 'id = ?',
+        whereArgs: [id],
+        limit: 1,
+      );
+      final existing = byId.isNotEmpty
+          ? byId.first
+          : await _rowByEmail(db, cleanEmail);
       if (existing != null) {
         if (existing['created_at'] is int) {
           createdAt = existing['created_at'] as int;
@@ -528,29 +543,25 @@ class LocalDatabase {
         }
       }
     } catch (_) {}
-    await db.insert(
-      'users',
-      {
-        'id': id,
-        'email': cleanEmail,
-        'display_name': resolvedDisplayName,
-        'photo_url': photoUrl,
-        'role': role,
-        'auth_provider': authProvider,
-        'password_hash': resolvedHash,
-        'created_at': createdAt,
-        'last_login_at': now,
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await db.insert('users', {
+      'id': id,
+      'email': cleanEmail,
+      'display_name': resolvedDisplayName,
+      'photo_url': photoUrl,
+      'role': role,
+      'auth_provider': authProvider,
+      'password_hash': resolvedHash,
+      'created_at': createdAt,
+      'last_login_at': now,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
     try {
       await db.execute('PRAGMA wal_checkpoint(TRUNCATE)');
     } catch (_) {}
     try {
-      final count =
-          await db.rawQuery('SELECT COUNT(*) AS c FROM users');
+      final count = await db.rawQuery('SELECT COUNT(*) AS c FROM users');
       debugPrint(
-          '[LocalDatabase] saveUser $cleanEmail ($authProvider) -> total users: ${count.first['c']}');
+        '[LocalDatabase] saveUser $cleanEmail ($authProvider) -> total users: ${count.first['c']}',
+      );
     } catch (_) {}
     await _syncToWorkspace();
   }
@@ -598,11 +609,10 @@ class LocalDatabase {
   Future<void> saveActiveSession(String userId) async {
     final db = await database;
     final now = DateTime.now().millisecondsSinceEpoch;
-    await db.insert(
-      'user_sessions',
-      {'user_id': userId, 'saved_at': now},
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await db.insert('user_sessions', {
+      'user_id': userId,
+      'saved_at': now,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
     try {
       await db.execute('PRAGMA wal_checkpoint(TRUNCATE)');
     } catch (_) {}
@@ -611,7 +621,11 @@ class LocalDatabase {
 
   Future<String?> getActiveSessionUserId() async {
     final db = await database;
-    final results = await db.query('user_sessions', orderBy: 'saved_at DESC', limit: 1);
+    final results = await db.query(
+      'user_sessions',
+      orderBy: 'saved_at DESC',
+      limit: 1,
+    );
     if (results.isNotEmpty) {
       return results.first['user_id'] as String?;
     }
@@ -685,19 +699,15 @@ class LocalDatabase {
   }) async {
     final db = await database;
     final now = DateTime.now().millisecondsSinceEpoch;
-    await db.insert(
-      'employees',
-      {
-        'id': userId ?? 'employee-$now',
-        'user_id': userId,
-        'employee_code': employeeCode.trim(),
-        'display_name': displayName.trim(),
-        'email': email.trim().toLowerCase(),
-        'updated_at': now,
-        'created_at': now,
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await db.insert('employees', {
+      'id': userId ?? 'employee-$now',
+      'user_id': userId,
+      'employee_code': employeeCode.trim(),
+      'display_name': displayName.trim(),
+      'email': email.trim().toLowerCase(),
+      'updated_at': now,
+      'created_at': now,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<List<Map<String, Object?>>> getEmployees() async {
@@ -762,7 +772,7 @@ class LocalDatabase {
     }
   }
 
-  /// True when [userId] has an active linked row in `employees`.
+  /// True when [userId] has an active admin link in `employees`.
   Future<bool> isAdmin(String userId) async {
     return await resolveUserRole(userId) == 'admin';
   }
@@ -787,6 +797,162 @@ class LocalDatabase {
     return resolved;
   }
 
+  /// Updates user role and synchronizes it with the employees table.
+  ///
+  /// - 'admin': sets users.role='admin' and ensures an active employee row with admin code.
+  /// - 'employee': sets users.role='employee' and ensures an active employee row.
+  /// - 'user': sets users.role='user' and sets any linked employee row to 'inactive'.
+  Future<void> updateUserRole({
+    required String userId,
+    required String role,
+    String? email,
+    String? displayName,
+  }) async {
+    if (userId.isEmpty) return;
+    final db = await database;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final normalizedRole = role.toLowerCase().trim();
+
+    // 1. Update users table
+    await db.update(
+      'users',
+      {
+        'role': normalizedRole,
+      },
+      where: 'id = ?',
+      whereArgs: [userId],
+    );
+
+    // 2. Sync with employees table
+    final empRows = await db.query(
+      'employees',
+      where: 'user_id = ?',
+      whereArgs: [userId],
+      limit: 1,
+    );
+
+    if (normalizedRole == 'admin' || normalizedRole == 'employee') {
+      final isAdminRole = normalizedRole == 'admin';
+      final cleanEmail = (email ?? '').trim().toLowerCase();
+      final cleanName = (displayName ?? '').trim().isNotEmpty
+          ? displayName!.trim()
+          : (isAdminRole ? 'Administrator' : 'Employee');
+
+      if (empRows.isNotEmpty) {
+        final existingEmp = empRows.first;
+        final currentCode =
+            (existingEmp['employee_code'] as String? ?? '').toUpperCase();
+        String targetCode = currentCode;
+        if (isAdminRole &&
+            !currentCode.startsWith('EMP-ADM') &&
+            currentCode != 'EMP-001') {
+          final suffix = userId.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '');
+          final codeSuffix = suffix.length >= 6
+              ? suffix.substring(0, 6).toUpperCase()
+              : (suffix.isNotEmpty ? suffix.toUpperCase() : '001');
+          targetCode = 'EMP-ADM-$codeSuffix';
+        } else if (!isAdminRole && currentCode.startsWith('EMP-ADM')) {
+          final suffix = userId.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '');
+          final codeSuffix = suffix.length >= 6
+              ? suffix.substring(0, 6).toUpperCase()
+              : (suffix.isNotEmpty ? suffix.toUpperCase() : '001');
+          targetCode = 'EMP-$codeSuffix';
+        }
+
+        await db.update(
+          'employees',
+          {
+            'status': 'active',
+            'employee_code': targetCode,
+            'updated_at': now,
+          },
+          where: 'user_id = ?',
+          whereArgs: [userId],
+        );
+      } else {
+        // Check if an employee exists by email to link
+        List<Map<String, Object?>> emailMatch = [];
+        if (cleanEmail.isNotEmpty) {
+          emailMatch = await db.query(
+            'employees',
+            where: 'LOWER(email) = ?',
+            whereArgs: [cleanEmail],
+            limit: 1,
+          );
+        }
+
+        if (emailMatch.isNotEmpty) {
+          final matched = emailMatch.first;
+          final currentCode =
+              (matched['employee_code'] as String? ?? '').toUpperCase();
+          String targetCode = currentCode;
+          if (isAdminRole &&
+              !currentCode.startsWith('EMP-ADM') &&
+              currentCode != 'EMP-001') {
+            final suffix = userId.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '');
+            final codeSuffix = suffix.length >= 6
+                ? suffix.substring(0, 6).toUpperCase()
+                : (suffix.isNotEmpty ? suffix.toUpperCase() : '001');
+            targetCode = 'EMP-ADM-$codeSuffix';
+          }
+          await db.update(
+            'employees',
+            {
+              'user_id': userId,
+              'status': 'active',
+              'employee_code': targetCode,
+              'updated_at': now,
+            },
+            where: 'id = ?',
+            whereArgs: [matched['id']],
+          );
+        } else {
+          final suffix = userId.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '');
+          final codeSuffix = suffix.length >= 6
+              ? suffix.substring(0, 6).toUpperCase()
+              : (suffix.isNotEmpty ? suffix.toUpperCase() : '001');
+          final targetCode =
+              isAdminRole ? 'EMP-ADM-$codeSuffix' : 'EMP-$codeSuffix';
+          final effectiveEmail =
+              cleanEmail.isNotEmpty ? cleanEmail : '$userId@pulsemusic.app';
+
+          await db.insert(
+            'employees',
+            {
+              'id': 'emp-$userId',
+              'user_id': userId,
+              'employee_code': targetCode,
+              'display_name': cleanName,
+              'email': effectiveEmail,
+              'status': 'active',
+              'created_at': now,
+              'updated_at': now,
+            },
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+        }
+      }
+    } else {
+      // Role is 'user': deactivate linked employee row if any
+      if (empRows.isNotEmpty) {
+        await db.update(
+          'employees',
+          {
+            'status': 'inactive',
+            'updated_at': now,
+          },
+          where: 'user_id = ?',
+          whereArgs: [userId],
+        );
+      }
+    }
+
+    try {
+      await db.execute('PRAGMA wal_checkpoint(TRUNCATE)');
+    } catch (_) {}
+    await _syncToWorkspace();
+  }
+
   Future<void> saveSetting(String key, String value) async {
     final db = await database;
     await db.execute('''
@@ -795,11 +961,10 @@ class LocalDatabase {
         value TEXT NOT NULL
       )
     ''');
-    await db.insert(
-      'app_settings',
-      {'key': key, 'value': value},
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await db.insert('app_settings', {
+      'key': key,
+      'value': value,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<String?> getSetting(String key) async {
@@ -862,20 +1027,18 @@ class LocalDatabase {
     }
 
     await db.transaction((txn) async {
-      await txn.insert(
-        'imported_playlists',
-        {
-          'id': id,
-          'user_id': userId,
-          'title': title,
-          'subtitle': subtitle ?? 'Imported from Spotify',
-          'spotify_url': spotifyUrl,
-          'gradient_colors': gradientColors != null ? jsonEncode(gradientColors) : null,
-          'created_at': now,
-          'updated_at': now,
-        },
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
+      await txn.insert('imported_playlists', {
+        'id': id,
+        'user_id': userId,
+        'title': title,
+        'subtitle': subtitle ?? 'Imported from Spotify',
+        'spotify_url': spotifyUrl,
+        'gradient_colors': gradientColors != null
+            ? jsonEncode(gradientColors)
+            : null,
+        'created_at': now,
+        'updated_at': now,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
 
       for (var i = 0; i < songs.length; i++) {
         final song = songs[i];
@@ -890,34 +1053,32 @@ class LocalDatabase {
           lyricsJson = jsonEncode(<String>[]);
         }
 
-        await txn.insert(
-          'imported_songs',
-          {
-            'id': songId,
-            'title': song['title'] as String? ?? 'Unknown Title',
-            'artist': song['artist'] as String? ?? 'Unknown Artist',
-            'album': song['album'] as String? ?? '',
-            'duration_ms': song['duration_ms'] as int? ?? 180000,
-            'image_url': song['image_url'] as String? ?? '',
-            'audio_url': song['audio_url'] as String? ?? '',
-            'lyrics': lyricsJson,
-            'genre': song['genre'] as String? ?? 'Spotify',
-            'is_preview': (song['is_preview'] == true || song['is_preview'] == 1) ? 1 : 0,
-            'is_youtube_audio': (song['is_youtube_audio'] == true || song['is_youtube_audio'] == 1) ? 1 : 0,
-            'updated_at': now,
-          },
-          conflictAlgorithm: ConflictAlgorithm.replace,
-        );
+        await txn.insert('imported_songs', {
+          'id': songId,
+          'title': song['title'] as String? ?? 'Unknown Title',
+          'artist': song['artist'] as String? ?? 'Unknown Artist',
+          'album': song['album'] as String? ?? '',
+          'duration_ms': song['duration_ms'] as int? ?? 180000,
+          'image_url': song['image_url'] as String? ?? '',
+          'audio_url': song['audio_url'] as String? ?? '',
+          'lyrics': lyricsJson,
+          'genre': song['genre'] as String? ?? 'Spotify',
+          'is_preview': (song['is_preview'] == true || song['is_preview'] == 1)
+              ? 1
+              : 0,
+          'is_youtube_audio':
+              (song['is_youtube_audio'] == true ||
+                  song['is_youtube_audio'] == 1)
+              ? 1
+              : 0,
+          'updated_at': now,
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
 
-        await txn.insert(
-          'imported_playlist_songs',
-          {
-            'playlist_id': id,
-            'song_id': songId,
-            'position': i,
-          },
-          conflictAlgorithm: ConflictAlgorithm.replace,
-        );
+        await txn.insert('imported_playlist_songs', {
+          'playlist_id': id,
+          'song_id': songId,
+          'position': i,
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
       }
     });
 
@@ -944,50 +1105,46 @@ class LocalDatabase {
   }) async {
     final db = await database;
     final now = DateTime.now().millisecondsSinceEpoch;
-    final values = <String, Object?>{
-      'updated_at': now,
-    };
+    final values = <String, Object?>{'updated_at': now};
     if (audioUrl != null) values['audio_url'] = audioUrl;
     if (isPreview != null) values['is_preview'] = isPreview ? 1 : 0;
-    if (isYouTubeAudio != null) values['is_youtube_audio'] = isYouTubeAudio ? 1 : 0;
+    if (isYouTubeAudio != null) {
+      values['is_youtube_audio'] = isYouTubeAudio ? 1 : 0;
+    }
     if (durationMs != null) values['duration_ms'] = durationMs;
     if (imageUrl != null) values['image_url'] = imageUrl;
     if (lyrics != null) values['lyrics'] = jsonEncode(lyrics);
 
-    await db.update(
-      'imported_songs',
-      values,
-      where: 'id = ?',
-      whereArgs: [id],
-    );
+    await db.update('imported_songs', values, where: 'id = ?', whereArgs: [id]);
   }
 
   /// Retrieves all imported playlists and their tracks belonging to [userId].
-  Future<List<Map<String, dynamic>>> getImportedPlaylistsForUser(String userId) async {
+  Future<List<Map<String, dynamic>>> getImportedPlaylistsForUser(
+    String userId,
+  ) async {
     final db = await database;
     final effectiveId = userId.isEmpty ? 'default_user' : userId;
     final isGuest = guestUserIds.contains(effectiveId);
     final playlists = await db.query(
       'imported_playlists',
-      where: isGuest
-          ? 'user_id = ? OR user_id = ?'
-          : 'user_id = ?',
-      whereArgs: isGuest
-          ? ['default_user', '1']
-          : [effectiveId],
+      where: isGuest ? 'user_id = ? OR user_id = ?' : 'user_id = ?',
+      whereArgs: isGuest ? ['default_user', '1'] : [effectiveId],
       orderBy: 'created_at ASC',
     );
 
     final results = <Map<String, dynamic>>[];
     for (final playlist in playlists) {
       final playlistId = playlist['id'] as String;
-      final songRows = await db.rawQuery('''
+      final songRows = await db.rawQuery(
+        '''
         SELECT s.*, ps.position
         FROM imported_songs s
         INNER JOIN imported_playlist_songs ps ON s.id = ps.song_id
         WHERE ps.playlist_id = ?
         ORDER BY ps.position ASC
-      ''', [playlistId]);
+      ''',
+        [playlistId],
+      );
 
       final songs = songRows.map((row) {
         List<String> lyricsList = [];
@@ -1047,7 +1204,10 @@ class LocalDatabase {
   /// Deletes an imported playlist and its track associations.
   /// Always verifies ownership: a guest caller may only delete guest-owned
   /// playlists; a signed-in caller may only delete their own.
-  Future<void> deleteImportedPlaylist(String playlistId, {String? userId}) async {
+  Future<void> deleteImportedPlaylist(
+    String playlistId, {
+    String? userId,
+  }) async {
     final db = await database;
     final callerId = (userId ?? '').isEmpty ? 'default_user' : userId!;
     final callerIsGuest = guestUserIds.contains(callerId);
@@ -1065,11 +1225,15 @@ class LocalDatabase {
       // Guest callers may only delete guest-owned playlists.
       // Signed-in callers may only delete playlists they own.
       if (callerIsGuest && !ownerIsGuest) {
-        debugPrint('[LocalDatabase] Guest cannot delete playlist owned by $owner');
+        debugPrint(
+          '[LocalDatabase] Guest cannot delete playlist owned by $owner',
+        );
         return;
       }
       if (!callerIsGuest && !ownerIsGuest && owner != callerId) {
-        debugPrint('[LocalDatabase] Refusing to delete playlist owned by $owner');
+        debugPrint(
+          '[LocalDatabase] Refusing to delete playlist owned by $owner',
+        );
         return;
       }
     }
@@ -1139,27 +1303,32 @@ class LocalDatabase {
           .collection('imported_playlists')
           .doc(playlistId)
           .set({
-        'id': playlistId,
-        'title': title,
-        'subtitle': subtitle ?? 'Imported from Spotify',
-        'spotify_url': spotifyUrl,
-        'updated_at': FieldValue.serverTimestamp(),
-        'tracks': songs.map((s) => {
-          'id': s['id'],
-          'title': s['title'],
-          'artist': s['artist'],
-          'album': s['album'],
-          'duration_ms': s['duration_ms'],
-          'image_url': s['image_url'],
-          'audio_url': s['audio_url'],
-          'lyrics': s['lyrics'],
-          'genre': s['genre'],
-          'is_preview': s['is_preview'],
-          'is_youtube_audio': s['is_youtube_audio'],
-        }).toList(),
-      }, SetOptions(merge: true)).catchError((e) {
-        debugPrint('[LocalDatabase] Firestore playlist sync skipped: $e');
-      });
+            'id': playlistId,
+            'title': title,
+            'subtitle': subtitle ?? 'Imported from Spotify',
+            'spotify_url': spotifyUrl,
+            'updated_at': FieldValue.serverTimestamp(),
+            'tracks': songs
+                .map(
+                  (s) => {
+                    'id': s['id'],
+                    'title': s['title'],
+                    'artist': s['artist'],
+                    'album': s['album'],
+                    'duration_ms': s['duration_ms'],
+                    'image_url': s['image_url'],
+                    'audio_url': s['audio_url'],
+                    'lyrics': s['lyrics'],
+                    'genre': s['genre'],
+                    'is_preview': s['is_preview'],
+                    'is_youtube_audio': s['is_youtube_audio'],
+                  },
+                )
+                .toList(),
+          }, SetOptions(merge: true))
+          .catchError((e) {
+            debugPrint('[LocalDatabase] Firestore playlist sync skipped: $e');
+          });
     } catch (_) {}
   }
 
