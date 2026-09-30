@@ -1,4 +1,6 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:music/auth/auth_service.dart';
 import 'package:music/controllers/music_player_controller.dart';
 import 'package:music/data/local_database.dart';
 import 'package:music/services/spotify_import_service.dart';
@@ -248,7 +250,7 @@ void main() {
     // Give async database save a moment to complete
     await Future.delayed(const Duration(milliseconds: 100));
 
-    final userPlaylists = await LocalDatabase.instance.getImportedPlaylistsForUser('1');
+    final userPlaylists = await LocalDatabase.instance.getImportedPlaylistsForUser('default_user');
     expect(userPlaylists, isNotEmpty);
     final saved = userPlaylists.firstWhere((p) => p['id'] == result.playlistId);
     expect(saved['title'], 'Auto Saved Playlist');
@@ -258,4 +260,223 @@ void main() {
 
     controller.dispose();
   });
+
+
+
+
+  test('employees table has EMP-001 preserved and never removed', () async {
+    await LocalDatabase.instance.seedEmployeeIfNeeded();
+    final employees = await LocalDatabase.instance.getEmployees();
+    expect(employees, isNotEmpty);
+    expect(employees.any((e) => e['employee_code'] == 'EMP-001'), isTrue);
+  });
+
+
+
+  test('LocalDatabase.removeGenericPlaceholderUsers removes any stray google.user or facebook.user rows', () async {
+    final db = await LocalDatabase.instance.database;
+    // Directly insert a fake placeholder row
+    await db.rawInsert('''
+      INSERT INTO users (id, email, display_name, role, auth_provider, created_at, last_login_at)
+      VALUES ('fake-1', 'google.user1790409015007@gmail.com', 'google.user1790409015007', 'user', 'google', 1000, 1000)
+    ''');
+    await db.rawInsert('''
+      INSERT INTO user_sessions (user_id, saved_at) VALUES ('fake-1', 1000)
+    ''');
+
+    await LocalDatabase.instance.removeGenericPlaceholderUsers();
+
+    final users = await LocalDatabase.instance.getAllUsers();
+    expect(users.any((u) => (u['email'] as String).startsWith('google.user')), isFalse);
+    expect(users.any((u) => (u['display_name'] as String).startsWith('google.user')), isFalse);
+  });
+
+
+
+  test('admin email or alias 1 requires password and does not bypass credentials', () async {
+    // Attempting to sign in with admin email and invalid password fails with wrong-password or config-not-found
+    expect(
+      () => AuthService.instance.signInWithEmail(
+        email: 'admin@pulsemusic.app',
+        password: 'wrong_password',
+      ),
+      throwsA(isA<FirebaseAuthException>()),
+    );
+
+    expect(
+      () => AuthService.instance.signInWithEmail(
+        email: '1',
+        password: 'wrong_password',
+      ),
+      throwsA(isA<FirebaseAuthException>()),
+    );
+  });
+
+  test('register creates a new user account and allows signing in', () async {
+    const email = 'newuser@example.com';
+    const password = 'securePassword123';
+
+    await AuthService.instance.register(
+      email: email,
+      password: password,
+    );
+
+    final savedUser = await LocalDatabase.instance.getUserByEmail(email);
+    expect(savedUser, isNotNull);
+    expect(savedUser!['email'], email);
+    expect(savedUser['auth_provider'], 'password');
+    expect(savedUser['password_hash'], isNotNull);
+
+    // Verify current user session
+    expect(AuthService.instance.userEmail, email);
+
+    // Cannot re-register with identical email
+    expect(
+      () => AuthService.instance.register(
+        email: email,
+        password: 'anotherPassword',
+      ),
+      throwsA(isA<FirebaseAuthException>().having(
+        (e) => e.code,
+        'code',
+        'email-already-in-use',
+      )),
+    );
+
+    // Can sign in with the new credentials
+    await AuthService.instance.signOut();
+    expect(AuthService.instance.currentUser, isNull);
+
+    await AuthService.instance.signInWithEmail(
+      email: email,
+      password: password,
+    );
+    expect(AuthService.instance.userEmail, email);
+  });
+
+  test('saveImportedPlaylist prevents cross-account playlist overwrites', () async {
+    const userA = 'user-alice';
+    const userB = 'user-bob';
+    const playlistId = 'shared-playlist-id-123';
+
+    await LocalDatabase.instance.saveImportedPlaylist(
+      id: playlistId,
+      userId: userA,
+      title: "Alice's Mix",
+      songs: [
+        {'id': 'song-1', 'title': 'Track 1', 'artist': 'Artist 1'},
+      ],
+    );
+
+    // Bob attempts to overwrite Alice's playlist
+    expect(
+      () => LocalDatabase.instance.saveImportedPlaylist(
+        id: playlistId,
+        userId: userB,
+        title: "Bob's Takeover",
+        songs: [
+          {'id': 'song-2', 'title': 'Track 2', 'artist': 'Artist 2'},
+        ],
+      ),
+      throwsA(isA<StateError>()),
+    );
+
+    // Verify Alice's playlist was not overwritten
+    final db = await LocalDatabase.instance.database;
+    final row = await db.query('imported_playlists', where: 'id = ?', whereArgs: [playlistId]);
+    expect(row.first['user_id'], userA);
+    expect(row.first['title'], "Alice's Mix");
+  });
+
+  test('deleteImportedPlaylist respects owner predicate', () async {
+    const ownerId = 'user-owner';
+    const unauthorizedId = 'user-unauthorized';
+    const playlistId = 'protected-playlist-id-456';
+
+    await LocalDatabase.instance.saveImportedPlaylist(
+      id: playlistId,
+      userId: ownerId,
+      title: "Protected Mix",
+      songs: [],
+    );
+
+    // Unauthorized user attempts deletion
+    await LocalDatabase.instance.deleteImportedPlaylist(playlistId, userId: unauthorizedId);
+
+    // Playlist should still exist
+    final db = await LocalDatabase.instance.database;
+    var rows = await db.query('imported_playlists', where: 'id = ?', whereArgs: [playlistId]);
+    expect(rows, isNotEmpty);
+
+    // Legitimate owner deletes playlist
+    await LocalDatabase.instance.deleteImportedPlaylist(playlistId, userId: ownerId);
+    rows = await db.query('imported_playlists', where: 'id = ?', whereArgs: [playlistId]);
+    expect(rows, isEmpty);
+  });
+
+  test('employees.user_id link grants admin; unlinking revokes it', () async {
+    const testUserId = 'test-user-999';
+    const testEmail = 'staff@example.com';
+    const testName = 'Staff Member';
+
+    // 1. Insert user — starts as plain user (no employee link).
+    await LocalDatabase.instance.saveUser(
+      id: testUserId,
+      email: testEmail,
+      displayName: testName,
+      role: 'user',
+    );
+
+    var user = await LocalDatabase.instance.getUserById(testUserId);
+    expect(user?['role'], 'user');
+    expect(await LocalDatabase.instance.resolveUserRole(testUserId), 'user');
+
+    // 2. Link via employees.user_id (this is how you grant admin in the DB).
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final db = await LocalDatabase.instance.database;
+    await db.insert(
+      'employees',
+      {
+        'id': 'emp-$testUserId',
+        'user_id': testUserId,
+        'employee_code': 'EMP-ADM-999',
+        'display_name': testName,
+        'email': testEmail,
+        'status': 'active',
+        'created_at': now,
+        'updated_at': now,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+
+    expect(await LocalDatabase.instance.resolveUserRole(testUserId), 'admin');
+
+    // 3. Sync cached users.role from the employees table.
+    final synced =
+        await LocalDatabase.instance.refreshUserRoleFromEmployees(testUserId);
+    expect(synced, 'admin');
+    user = await LocalDatabase.instance.getUserById(testUserId);
+    expect(user?['role'], 'admin');
+
+    // Verify linked employee row.
+    final employee =
+        await LocalDatabase.instance.getEmployeeByUserId(testUserId);
+    expect(employee, isNotNull);
+    expect(employee?['status'], 'active');
+    expect(employee?['email'], testEmail);
+
+    // 4. Unlink (deactivate) — user falls back to plain user.
+    await db.update(
+      'employees',
+      {'status': 'inactive', 'updated_at': now},
+      where: 'user_id = ?',
+      whereArgs: [testUserId],
+    );
+
+    expect(await LocalDatabase.instance.resolveUserRole(testUserId), 'user');
+    await LocalDatabase.instance.refreshUserRoleFromEmployees(testUserId);
+    user = await LocalDatabase.instance.getUserById(testUserId);
+    expect(user?['role'], 'user');
+  });
 }
+

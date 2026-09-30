@@ -24,6 +24,29 @@
 	<string>????</string>
 	<key>CFBundleVersion</key>
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<!-- Facebook Login: mirrors lib/auth/facebook_config.dart. -->
+	<key>FacebookAppID</key>
+	<string>1106921332286222</string>
+	<key>FacebookClientToken</key>
+	<string>d3f3e3aa31806b5fc3d74028e5fb4270</string>
+	<key>FacebookDisplayName</key>
+	<string>Pulse Music</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>fb1106921332286222</string>
+			</array>
+		</dict>
+	</array>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>fbapi</string>
+		<string>fb-messenger-share-api</string>
+		<string>fbauth2</string>
+		<string>fbshareextension</string>
+	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>

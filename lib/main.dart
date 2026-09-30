@@ -20,7 +20,7 @@ Future<void> main() async {
   }
 
   await LocalDatabase.instance.initialize();
-  // Initialize Firebase on every platform so Google/Facebook OAuth can
+  // Initialize Firebase on every platform so Google OAuth can
   // return the real accurate profile. Guarded: local auth still works
   // when Firebase options are missing (e.g. desktop without config).
   try {
