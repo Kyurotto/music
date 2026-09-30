@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Pulse Music</string>
-    <string name="facebook_app_id">YOUR_FACEBOOK_APP_ID</string>
-    <string name="facebook_client_token">YOUR_FACEBOOK_CLIENT_TOKEN</string>
-    <string name="fb_login_protocol_scheme">fbYOUR_FACEBOOK_APP_ID</string>
+    <!-- Facebook Login: mirrors lib/auth/facebook_config.dart. -->
+    <string name="facebook_app_id">1106921332286222</string>
+    <string name="facebook_client_token">d3f3e3aa31806b5fc3d74028e5fb4270</string>
+    <string name="fb_login_protocol_scheme">fb1106921332286222</string>
 </resources>

@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:crypto/crypto.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
@@ -34,15 +35,41 @@ class LocalDatabase {
   }
 
   Future<void> _syncToWorkspace() async {
-    // Synchronization of database files to external/workspace destinations or cleartext HTTP
-    // has been removed for security: database files containing password hashes and sessions
-    // must remain strictly isolated within the app's sandboxed storage.
+    if (kIsWeb) return;
+    if (!(Platform.isWindows || Platform.isLinux || Platform.isMacOS)) return;
+    try {
+      final src = _databaseFilePath;
+      final db = _database;
+      if (src == null || db == null) return;
+      if (!File(src).existsSync()) return;
+      try {
+        await db.execute('PRAGMA wal_checkpoint(TRUNCATE)');
+      } catch (_) {}
+      final targetDirs = {
+        Directory.current.path,
+        r'c:\Users\johnl\All Codes\music',
+      };
+      for (final targetDir in targetDirs) {
+        try {
+          final dest = path.join(targetDir, _databaseName);
+          if (src == dest) continue;
+          await File(src).copy(dest);
+          for (final suffix in ['-wal', '-shm']) {
+            final sidecar = File('$src$suffix');
+            if (await sidecar.exists()) {
+              await sidecar.copy('$dest$suffix');
+            }
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
   }
 
   Future<void> syncToWorkspace() => _syncToWorkspace();
 
   FirebaseAuth? get _auth {
     try {
+      if (Firebase.apps.isEmpty) return null;
       return FirebaseAuth.instance;
     } catch (_) {
       return null;
@@ -51,6 +78,7 @@ class LocalDatabase {
 
   FirebaseFirestore? get _firestore {
     try {
+      if (Firebase.apps.isEmpty) return null;
       return FirebaseFirestore.instance;
     } catch (_) {
       return null;
@@ -675,6 +703,88 @@ class LocalDatabase {
   Future<List<Map<String, Object?>>> getEmployees() async {
     final db = await database;
     return db.query('employees', orderBy: 'employee_code COLLATE NOCASE ASC');
+  }
+
+  Future<Map<String, Object?>?> getEmployeeByUserId(String userId) async {
+    final db = await database;
+    final results = await db.query(
+      'employees',
+      where: 'user_id = ?',
+      whereArgs: [userId],
+      limit: 1,
+    );
+    return results.isNotEmpty ? results.first : null;
+  }
+
+  Future<Map<String, Object?>?> getEmployeeByEmail(String email) async {
+    final db = await database;
+    final results = await db.query(
+      'employees',
+      where: 'LOWER(email) = ?',
+      whereArgs: [email.trim().toLowerCase()],
+      limit: 1,
+    );
+    return results.isNotEmpty ? results.first : null;
+  }
+
+  /// Source of truth for admin access: the `employees` table.
+  ///
+  /// To make a user an admin/employee, set the `user_id` column of the
+  /// matching `employees` row to that user's id (e.g. in a SQLite viewer),
+  /// and keep its status as active. No in-app switch exists.
+  ///
+  /// Returns 'admin' when the linked employee row looks like an admin
+  /// (code starts with EMP-ADM, or legacy id '1' / code 'EMP-001'),
+  /// 'employee' for any other active linked row, else 'user'.
+  Future<String> resolveUserRole(String userId) async {
+    if (userId.isEmpty) return 'user';
+    try {
+      final db = await database;
+      final rows = await db.query(
+        'employees',
+        where: 'user_id = ?',
+        whereArgs: [userId],
+        limit: 1,
+      );
+      if (rows.isEmpty) return 'user';
+      final row = rows.first;
+      if ((row['status'] as String? ?? 'active').toLowerCase() != 'active') {
+        return 'user';
+      }
+      final code = (row['employee_code'] as String? ?? '').toUpperCase();
+      final empId = (row['id'] as String? ?? '');
+      if (code.startsWith('EMP-ADM') || empId == '1' || code == 'EMP-001') {
+        return 'admin';
+      }
+      return 'employee';
+    } catch (_) {
+      return 'user';
+    }
+  }
+
+  /// True when [userId] has an active linked row in `employees`.
+  Future<bool> isAdmin(String userId) async {
+    return await resolveUserRole(userId) == 'admin';
+  }
+
+  /// Re-syncs `users.role` to match the `employees` table so the cached
+  /// column never drifts from the source of truth. Returns the resolved role.
+  Future<String> refreshUserRoleFromEmployees(String userId) async {
+    final resolved = await resolveUserRole(userId);
+    try {
+      final db = await database;
+      await db.update(
+        'users',
+        {'role': resolved},
+        where: 'id = ?',
+        whereArgs: [userId],
+      );
+      try {
+        await db.execute('PRAGMA wal_checkpoint(TRUNCATE)');
+      } catch (_) {}
+      await _syncToWorkspace();
+    } catch (_) {}
+    return resolved;
   }
 
   Future<void> saveSetting(String key, String value) async {

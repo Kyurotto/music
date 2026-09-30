@@ -63,6 +63,19 @@ class _SettingsViewState extends State<SettingsView> {
   void initState() {
     super.initState();
     _loadSettings();
+    _refreshRole();
+  }
+
+  /// Role is DB-driven (employees.user_id == users.id) — refresh once so the
+  /// read-only badge always reflects the current database state. Never throws:
+  /// a failed refresh simply keeps the current display value.
+  Future<void> _refreshRole() async {
+    try {
+      await AuthService.instance.refreshRoleFromDatabase();
+    } catch (_) {
+      // Keep the current role display; Settings must never break on this.
+    }
+    if (mounted) setState(() {});
   }
 
   Future<void> _loadSettings() async {
@@ -391,7 +404,7 @@ class _SettingsViewState extends State<SettingsView> {
               children: [
                 // 1. User Profile Header Card
                 _buildProfileCard(),
-                const SizedBox(height: 24),
+                const SizedBox(height: 16),
 
                 // 2. Playback Settings Section
                 _buildSectionHeader(Icons.play_circle_outline_rounded, 'Playback'),
@@ -748,20 +761,28 @@ class _SettingsViewState extends State<SettingsView> {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: AppTheme.primary.withValues(alpha: 0.2),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: AppTheme.primary.withValues(alpha: 0.5)),
-                      ),
-                      child: Text(
-                        role.toUpperCase(),
-                        style: const TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w700,
-                          color: AppTheme.primary,
-                          letterSpacing: 0.6,
+                    Tooltip(
+                      message: 'Role is granted via the Employees database',
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: AppTheme.primary.withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: AppTheme.primary.withValues(alpha: 0.5)),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              role.toUpperCase(),
+                              style: const TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                color: AppTheme.primary,
+                                letterSpacing: 0.6,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),

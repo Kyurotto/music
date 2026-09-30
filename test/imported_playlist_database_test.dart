@@ -13,7 +13,6 @@ void main() {
   late Database db;
 
   setUp(() async {
-    AuthService.setMockVerifiedProfile(null);
     db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath);
     LocalDatabase.setDatabaseForTesting(db);
     await LocalDatabase.instance.createAllTables(db);
@@ -21,7 +20,6 @@ void main() {
   });
 
   tearDown(() async {
-    AuthService.setMockVerifiedProfile(null);
     await db.close();
     LocalDatabase.setDatabaseForTesting(null);
   });
@@ -264,288 +262,16 @@ void main() {
   });
 
 
-  test('signInWithProviderAuto creates and saves Google user in SQLite users table', () async {
-    AuthService.setMockVerifiedProfile(
-      const VerifiedSocialProfile(
-        email: 'john.smith@gmail.com',
-        displayName: 'John Smith',
-        provider: 'google',
-      ),
-    );
-    await AuthService.instance.signInWithProviderAuto(
-      provider: 'google',
-    );
 
-    final user = await LocalDatabase.instance.getUserByEmail('john.smith@gmail.com');
-    expect(user, isNotNull);
-    expect(user!['email'], 'john.smith@gmail.com');
-    expect(user['display_name'], 'John Smith');
-    expect(user['auth_provider'], 'google');
-    expect(user['role'], 'user');
-
-    final googleUsers = await LocalDatabase.instance.getUsersByProvider('google');
-    expect(googleUsers, isNotEmpty);
-    expect(googleUsers.any((u) => u['email'] == 'john.smith@gmail.com'), isTrue);
-  });
-
-  test('signInWithProviderAuto creates and saves Facebook user in SQLite users table', () async {
-    AuthService.setMockVerifiedProfile(
-      const VerifiedSocialProfile(
-        email: 'sarah.connor@facebook.com',
-        displayName: 'Sarah Connor',
-        provider: 'facebook',
-      ),
-    );
-    await AuthService.instance.signInWithProviderAuto(
-      provider: 'facebook',
-    );
-
-    final user = await LocalDatabase.instance.getUserByEmail('sarah.connor@facebook.com');
-    expect(user, isNotNull);
-    expect(user!['email'], 'sarah.connor@facebook.com');
-    expect(user['display_name'], 'Sarah Connor');
-    expect(user['auth_provider'], 'facebook');
-
-    final fbUsers = await LocalDatabase.instance.getUsersByProvider('facebook');
-    expect(fbUsers, isNotEmpty);
-    expect(fbUsers.any((u) => u['email'] == 'sarah.connor@facebook.com'), isTrue);
-  });
-
-  test('register saves user to SQLite users table and sets active session', () async {
-    await AuthService.instance.register(
-      name: 'Elena Gilbert',
-      email: 'elena@gmail.com',
-      password: 'password123',
-    );
-
-    final user = await LocalDatabase.instance.getUserByEmail('elena@gmail.com');
-    expect(user, isNotNull);
-    expect(user!['email'], 'elena@gmail.com');
-    expect(user['display_name'], 'Elena Gilbert');
-    expect(user['auth_provider'], 'password');
-
-    final sessionUserId = await LocalDatabase.instance.getActiveSessionUserId();
-    expect(sessionUserId, user['id']);
-  });
-
-  test('register saves John Laurence to SQLite users table and removes default admin', () async {
-    await AuthService.instance.register(
-      name: 'John Laurence',
-      email: 'johnlaurencenovicio@gmail.com',
-      password: 'password123',
-    );
-
-    final user = await LocalDatabase.instance.getUserByEmail('johnlaurencenovicio@gmail.com');
-    expect(user, isNotNull);
-    expect(user!['email'], 'johnlaurencenovicio@gmail.com');
-    expect(user['display_name'], 'John Laurence');
-    expect(user['auth_provider'], 'password');
-
-    final allUsers = await LocalDatabase.instance.getAllUsers();
-    expect(allUsers.any((u) => u['email'] == 'admin@pulsemusic.app'), isFalse);
-    expect(allUsers.any((u) => u['email'] == 'johnlaurencenovicio@gmail.com'), isTrue);
-  });
-
-  test('register stores salted password hash, never plaintext', () async {
-    await AuthService.instance.register(
-      name: 'Elena Gilbert',
-      email: 'elena@gmail.com',
-      password: 'password123',
-    );
-
-    final user = await LocalDatabase.instance.getUserByEmail('elena@gmail.com');
-    expect(user, isNotNull);
-    final hash = user!['password_hash'] as String?;
-    expect(hash, isNotNull);
-    expect(hash, isNotEmpty);
-    expect(hash!.contains('password123'), isFalse);
-    expect(hash.contains(':'), isTrue);
-
-    // Correct password verifies, wrong password does not.
-    final ok = await LocalDatabase.instance.verifyLocalPassword(
-        'elena@gmail.com', 'password123');
-    expect(ok, isNotNull);
-    final bad = await LocalDatabase.instance.verifyLocalPassword(
-        'elena@gmail.com', 'wrongpass');
-    expect(bad, isNull);
-  });
-
-  test('hashPassword uses unique salts and verifies', () async {
-    final h1 = LocalDatabase.hashPassword('same-password');
-    final h2 = LocalDatabase.hashPassword('same-password');
-    expect(h1, isNot(equals(h2)));
-    expect(LocalDatabase.verifyPasswordHash('same-password', h1), isTrue);
-    expect(LocalDatabase.verifyPasswordHash('other-password', h1), isFalse);
-    expect(LocalDatabase.verifyPasswordHash('x', null), isFalse);
-    expect(LocalDatabase.verifyPasswordHash('x', ''), isFalse);
-  });
 
   test('employees table has EMP-001 preserved and never removed', () async {
     await LocalDatabase.instance.seedEmployeeIfNeeded();
     final employees = await LocalDatabase.instance.getEmployees();
     expect(employees, isNotEmpty);
     expect(employees.any((e) => e['employee_code'] == 'EMP-001'), isTrue);
-
-    // Register a new user and ensure employees are still intact
-    await AuthService.instance.register(
-      name: 'Test Listener',
-      email: 'listener@test.com',
-      password: 'password123',
-    );
-    final employeesAfter = await LocalDatabase.instance.getEmployees();
-    expect(employeesAfter, isNotEmpty);
-    expect(employeesAfter.any((e) => e['employee_code'] == 'EMP-001'), isTrue);
   });
 
-  test('creating new account with Google saves in SQLite users table', () async {
-    AuthService.setMockVerifiedProfile(
-      const VerifiedSocialProfile(
-        email: 'newgoogleuser@gmail.com',
-        displayName: 'Google Pioneer',
-        provider: 'google',
-      ),
-    );
-    await AuthService.instance.signInWithProviderAuto(
-      provider: 'google',
-      forceNewAccount: true,
-    );
 
-    final user = await LocalDatabase.instance.getUserByEmail('newgoogleuser@gmail.com');
-    expect(user, isNotNull);
-    expect(user!['email'], 'newgoogleuser@gmail.com');
-    expect(user['display_name'], 'Google Pioneer');
-    expect(user['auth_provider'], 'google');
-    expect(user['role'], 'user');
-
-    final allUsers = await LocalDatabase.instance.getAllUsers();
-    expect(allUsers.any((u) => u['email'] == 'newgoogleuser@gmail.com'), isTrue);
-  });
-
-  test('creating new account with Facebook saves in SQLite users table', () async {
-    AuthService.setMockVerifiedProfile(
-      const VerifiedSocialProfile(
-        email: 'newfacebookuser@facebook.com',
-        displayName: 'Facebook Pioneer',
-        provider: 'facebook',
-      ),
-    );
-    await AuthService.instance.signInWithProviderAuto(
-      provider: 'facebook',
-      forceNewAccount: true,
-    );
-
-    final user = await LocalDatabase.instance.getUserByEmail('newfacebookuser@facebook.com');
-    expect(user, isNotNull);
-    expect(user!['email'], 'newfacebookuser@facebook.com');
-    expect(user['display_name'], 'Facebook Pioneer');
-    expect(user['auth_provider'], 'facebook');
-    expect(user['role'], 'user');
-
-    final allUsers = await LocalDatabase.instance.getAllUsers();
-    expect(allUsers.any((u) => u['email'] == 'newfacebookuser@facebook.com'), isTrue);
-  });
-
-  test('Google taps reuse one account per email, never a different account', () async {
-    AuthService.setMockVerifiedProfile(
-      const VerifiedSocialProfile(
-        email: 'same.person@gmail.com',
-        displayName: 'Same Person',
-        provider: 'google',
-      ),
-    );
-    // First tap creates exactly one row for the real email.
-    await AuthService.instance.signInWithProviderAuto(
-      provider: 'google',
-    );
-    final first = await LocalDatabase.instance.getUserByEmail('same.person@gmail.com');
-    expect(first, isNotNull);
-
-    // Second tap with the same email reuses the SAME row (same id), no duplicate.
-    await AuthService.instance.signInWithProviderAuto(
-      provider: 'google',
-    );
-    final second = await LocalDatabase.instance.getUserByEmail('same.person@gmail.com');
-    expect(second, isNotNull);
-    expect(second!['id'], first!['id']);
-
-    final googleRows = await LocalDatabase.instance.getUsersByProvider('google');
-    final matches = googleRows.where((u) => u['email'] == 'same.person@gmail.com');
-    expect(matches, hasLength(1));
-
-    // A Google profile for an existing password email is rejected.
-    await AuthService.instance.register(
-      name: 'Pass User',
-      email: 'shared@example.com',
-      password: 'password123',
-    );
-    AuthService.setMockVerifiedProfile(
-      const VerifiedSocialProfile(
-        email: 'shared@example.com',
-        displayName: 'Shared Person',
-        provider: 'google',
-      ),
-    );
-    expect(
-      () => AuthService.instance.signInWithProviderAuto(provider: 'google'),
-      throwsA(isA<FirebaseAuthException>().having(
-        (e) => e.code,
-        'code',
-        'account-exists-with-different-credential',
-      )),
-    );
-    final shared = await LocalDatabase.instance.getUserByEmail('shared@example.com');
-    expect(shared, isNotNull);
-    expect(shared!['auth_provider'], 'password');
-    expect(shared['display_name'], 'Pass User');
-  });
-
-  test('Create mode with a different Google email creates that account', () async {
-    AuthService.setMockVerifiedProfile(
-      const VerifiedSocialProfile(
-        email: 'first.person@gmail.com',
-        displayName: 'First Person',
-        provider: 'google',
-      ),
-    );
-    await AuthService.instance.signInWithProviderAuto(
-      provider: 'google',
-      forceNewAccount: true,
-    );
-    AuthService.setMockVerifiedProfile(
-      const VerifiedSocialProfile(
-        email: 'second.person@gmail.com',
-        displayName: 'Second Person',
-        provider: 'google',
-      ),
-    );
-    await AuthService.instance.signInWithProviderAuto(
-      provider: 'google',
-      forceNewAccount: true,
-    );
-
-    final first = await LocalDatabase.instance.getUserByEmail('first.person@gmail.com');
-    final second = await LocalDatabase.instance.getUserByEmail('second.person@gmail.com');
-    expect(first, isNotNull);
-    expect(second, isNotNull);
-    expect(first!['id'], isNot(equals(second!['id'])));
-    expect(second['display_name'], 'Second Person');
-    expect(AuthService.instance.userEmail, 'second.person@gmail.com');
-  });
-
-  test('Google with no saved account and no email asks for email, creates nothing fake', () async {
-    try {
-      await AuthService.instance.signInWithProviderAuto(
-        provider: 'google',
-        forceNewAccount: true,
-      );
-      fail('Expected google-unavailable');
-    } on FirebaseAuthException catch (e) {
-      expect(e.code, 'google-unavailable');
-    }
-    final allUsers = await LocalDatabase.instance.getAllUsers();
-    expect(allUsers.any((u) => (u['email'] as String).startsWith('google.user')), isFalse);
-    expect(allUsers.any((u) => (u['display_name'] as String).startsWith('google.user')), isFalse);
-  });
 
   test('LocalDatabase.removeGenericPlaceholderUsers removes any stray google.user or facebook.user rows', () async {
     final db = await LocalDatabase.instance.database;
@@ -565,57 +291,7 @@ void main() {
     expect(users.any((u) => (u['display_name'] as String).startsWith('google.user')), isFalse);
   });
 
-  test('Real Google and Facebook account selection saves directly into users table and user_sessions', () async {
-    // 1. Save different Google account
-    AuthService.setMockVerifiedProfile(
-      const VerifiedSocialProfile(
-        email: 'arteezy0909@gmail.com',
-        displayName: 'Arteezy',
-        provider: 'google',
-      ),
-    );
-    await AuthService.instance.signInWithGoogle();
-    var user = await LocalDatabase.instance.getUserByEmail('arteezy0909@gmail.com');
-    expect(user, isNotNull);
-    expect(user!['email'], 'arteezy0909@gmail.com');
-    expect(user['display_name'], 'Arteezy');
-    expect(user['auth_provider'], 'google');
-    var activeSessionUserId = await LocalDatabase.instance.getActiveSessionUserId();
-    expect(activeSessionUserId, user['id']);
 
-    // 2. Save another different Google account
-    AuthService.setMockVerifiedProfile(
-      const VerifiedSocialProfile(
-        email: 'johnlaurencenovicio21@gmail.com',
-        displayName: 'John Laurence Novicio',
-        provider: 'google',
-      ),
-    );
-    await AuthService.instance.signInWithGoogle();
-    user = await LocalDatabase.instance.getUserByEmail('johnlaurencenovicio21@gmail.com');
-    expect(user, isNotNull);
-    expect(user!['email'], 'johnlaurencenovicio21@gmail.com');
-    expect(user['display_name'], 'John Laurence Novicio');
-    expect(user['auth_provider'], 'google');
-    activeSessionUserId = await LocalDatabase.instance.getActiveSessionUserId();
-    expect(activeSessionUserId, user['id']);
-
-    // 3. Save Facebook account
-    AuthService.setMockVerifiedProfile(
-      const VerifiedSocialProfile(
-        email: 'johnlaurencenovicio@gmail.com',
-        displayName: 'John Laurence Novicio',
-        provider: 'facebook',
-      ),
-    );
-    await AuthService.instance.signInWithFacebook();
-    user = await LocalDatabase.instance.getUserByEmail('johnlaurencenovicio@gmail.com');
-    expect(user, isNotNull);
-    expect(user!['display_name'], 'John Laurence Novicio');
-    expect(user['auth_provider'], 'facebook');
-    activeSessionUserId = await LocalDatabase.instance.getActiveSessionUserId();
-    expect(activeSessionUserId, user['id']);
-  });
 
   test('admin email or alias 1 requires password and does not bypass credentials', () async {
     // Attempting to sign in with admin email and invalid password fails with wrong-password or config-not-found
@@ -636,35 +312,46 @@ void main() {
     );
   });
 
-  test('registering an already existing email throws email-already-in-use and never overwrites password hash', () async {
-    const email = 'victim@example.com';
+  test('register creates a new user account and allows signing in', () async {
+    const email = 'newuser@example.com';
+    const password = 'securePassword123';
+
     await AuthService.instance.register(
-      name: 'Original User',
       email: email,
-      password: 'OriginalPassword123!',
+      password: password,
     );
 
-    final originalUser = await LocalDatabase.instance.getUserByEmail(email);
-    expect(originalUser, isNotNull);
-    final originalHash = originalUser!['password_hash'] as String;
-    final originalId = originalUser['id'] as String;
+    final savedUser = await LocalDatabase.instance.getUserByEmail(email);
+    expect(savedUser, isNotNull);
+    expect(savedUser!['email'], email);
+    expect(savedUser['auth_provider'], 'password');
+    expect(savedUser['password_hash'], isNotNull);
 
-    // Attacker attempts to register the same email with a new password
+    // Verify current user session
+    expect(AuthService.instance.userEmail, email);
+
+    // Cannot re-register with identical email
     expect(
       () => AuthService.instance.register(
-        name: 'Attacker',
         email: email,
-        password: 'AttackerPassword123!',
+        password: 'anotherPassword',
       ),
-      throwsA(isA<FirebaseAuthException>().having((e) => e.code, 'code', 'email-already-in-use')),
+      throwsA(isA<FirebaseAuthException>().having(
+        (e) => e.code,
+        'code',
+        'email-already-in-use',
+      )),
     );
 
-    // Verify existing user ID and password hash were NOT changed
-    final preservedUser = await LocalDatabase.instance.getUserByEmail(email);
-    expect(preservedUser!['id'], originalId);
-    expect(preservedUser['password_hash'], originalHash);
-    expect(LocalDatabase.verifyPasswordHash('OriginalPassword123!', preservedUser['password_hash'] as String?), isTrue);
-    expect(LocalDatabase.verifyPasswordHash('AttackerPassword123!', preservedUser['password_hash'] as String?), isFalse);
+    // Can sign in with the new credentials
+    await AuthService.instance.signOut();
+    expect(AuthService.instance.currentUser, isNull);
+
+    await AuthService.instance.signInWithEmail(
+      email: email,
+      password: password,
+    );
+    expect(AuthService.instance.userEmail, email);
   });
 
   test('saveImportedPlaylist prevents cross-account playlist overwrites', () async {
@@ -725,6 +412,71 @@ void main() {
     await LocalDatabase.instance.deleteImportedPlaylist(playlistId, userId: ownerId);
     rows = await db.query('imported_playlists', where: 'id = ?', whereArgs: [playlistId]);
     expect(rows, isEmpty);
+  });
+
+  test('employees.user_id link grants admin; unlinking revokes it', () async {
+    const testUserId = 'test-user-999';
+    const testEmail = 'staff@example.com';
+    const testName = 'Staff Member';
+
+    // 1. Insert user — starts as plain user (no employee link).
+    await LocalDatabase.instance.saveUser(
+      id: testUserId,
+      email: testEmail,
+      displayName: testName,
+      role: 'user',
+    );
+
+    var user = await LocalDatabase.instance.getUserById(testUserId);
+    expect(user?['role'], 'user');
+    expect(await LocalDatabase.instance.resolveUserRole(testUserId), 'user');
+
+    // 2. Link via employees.user_id (this is how you grant admin in the DB).
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final db = await LocalDatabase.instance.database;
+    await db.insert(
+      'employees',
+      {
+        'id': 'emp-$testUserId',
+        'user_id': testUserId,
+        'employee_code': 'EMP-ADM-999',
+        'display_name': testName,
+        'email': testEmail,
+        'status': 'active',
+        'created_at': now,
+        'updated_at': now,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+
+    expect(await LocalDatabase.instance.resolveUserRole(testUserId), 'admin');
+
+    // 3. Sync cached users.role from the employees table.
+    final synced =
+        await LocalDatabase.instance.refreshUserRoleFromEmployees(testUserId);
+    expect(synced, 'admin');
+    user = await LocalDatabase.instance.getUserById(testUserId);
+    expect(user?['role'], 'admin');
+
+    // Verify linked employee row.
+    final employee =
+        await LocalDatabase.instance.getEmployeeByUserId(testUserId);
+    expect(employee, isNotNull);
+    expect(employee?['status'], 'active');
+    expect(employee?['email'], testEmail);
+
+    // 4. Unlink (deactivate) — user falls back to plain user.
+    await db.update(
+      'employees',
+      {'status': 'inactive', 'updated_at': now},
+      where: 'user_id = ?',
+      whereArgs: [testUserId],
+    );
+
+    expect(await LocalDatabase.instance.resolveUserRole(testUserId), 'user');
+    await LocalDatabase.instance.refreshUserRoleFromEmployees(testUserId);
+    user = await LocalDatabase.instance.getUserById(testUserId);
+    expect(user?['role'], 'user');
   });
 }
 

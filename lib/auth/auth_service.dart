@@ -2,9 +2,8 @@ import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter_facebook_auth/flutter_facebook_auth.dart';
-import 'package:google_sign_in/google_sign_in.dart';
 import '../data/local_database.dart';
 
 class LocalUser {
@@ -22,25 +21,27 @@ class LocalUser {
     this.photoUrl,
   });
 
+  LocalUser copyWith({
+    String? id,
+    String? email,
+    String? displayName,
+    String? role,
+    String? photoUrl,
+  }) {
+    return LocalUser(
+      id: id ?? this.id,
+      email: email ?? this.email,
+      displayName: displayName ?? this.displayName,
+      role: role ?? this.role,
+      photoUrl: photoUrl ?? this.photoUrl,
+    );
+  }
+
   @override
   String toString() => 'LocalUser(id: $id, email: $email, name: $displayName, role: $role)';
 }
 
-/// Represents a verified social profile returned directly by an authentic provider
-/// (e.g. Google, Facebook) or mocked in tests.
-class VerifiedSocialProfile {
-  final String email;
-  final String displayName;
-  final String? photoUrl;
-  final String provider;
 
-  const VerifiedSocialProfile({
-    required this.email,
-    required this.displayName,
-    this.photoUrl,
-    required this.provider,
-  });
-}
 
 class AuthService {
   AuthService._() {
@@ -51,6 +52,7 @@ class AuthService {
 
   FirebaseAuth? get _auth {
     try {
+      if (Firebase.apps.isEmpty) return null;
       return FirebaseAuth.instance;
     } catch (_) {
       return null;
@@ -59,6 +61,7 @@ class AuthService {
 
   FirebaseFirestore? get _firestore {
     try {
+      if (Firebase.apps.isEmpty) return null;
       return FirebaseFirestore.instance;
     } catch (_) {
       return null;
@@ -78,7 +81,7 @@ class AuthService {
   /// own `await` is still using its `BuildContext`, which trips
   /// `'_dependents.isEmpty'` in framework.dart. The explicit sign-in method
   /// emits exactly one mirrored `LocalUser` when it finishes instead.
-  bool _socialSignInInProgress = false;
+  final bool _socialSignInInProgress = false;
 
   void _emitAuth(Object? user) {
     _currentUser = user;
@@ -148,7 +151,6 @@ class AuthService {
       for (final info in user.providerData) {
         final id = (info.providerId).toLowerCase();
         if (id.contains('google')) return 'google';
-        if (id.contains('facebook')) return 'facebook';
         if (id.contains('password')) return 'password';
       }
     } catch (_) {}
@@ -164,14 +166,17 @@ class AuthService {
       if (savedUserId != null) {
         final localData = await LocalDatabase.instance.getUserById(savedUserId);
         if (localData != null) {
-          // Restore the saved session exactly as stored — never rewrite
-          // it to a different account.
+          // Restore the saved session, but resolve the role from the
+          // employees table (employees.user_id == users.id). Editing the
+          // employee row in the database is the only way to grant admin.
+          final resolvedRole = await LocalDatabase.instance
+              .refreshUserRoleFromEmployees(savedUserId);
           _currentUser = LocalUser(
             id: localData['id'] as String,
             email: (localData['email'] as String? ?? '').trim(),
             displayName:
                 (localData['display_name'] as String? ?? '').trim(),
-            role: localData['role'] as String? ?? 'user',
+            role: resolvedRole,
             photoUrl: localData['photo_url'] as String?,
           );
           _isInitialized = true;
@@ -246,27 +251,44 @@ class AuthService {
   }
 
   Future<void> _loginAsLocalUser(Map<String, Object?> userData) async {
+    final userId = userData['id'] as String;
+    // Source of truth is employees.user_id -> users.id. Never trust the
+    // cached users.role column; an employee row linked to this ID makes
+    // the account admin/employee automatically.
+    final resolvedRole =
+        await LocalDatabase.instance.refreshUserRoleFromEmployees(userId);
     final localUser = LocalUser(
-      id: userData['id'] as String,
+      id: userId,
       email: userData['email'] as String,
       displayName: userData['display_name'] as String,
-      role: userData['role'] as String? ?? 'user',
+      role: resolvedRole,
       photoUrl: userData['photo_url'] as String?,
     );
     await LocalDatabase.instance.saveActiveSession(localUser.id);
     await LocalDatabase.instance.claimAnonymousPlaylists(localUser.id);
     _currentUser = localUser;
     _authController.add(localUser);
+
+    _upsertToFirestore(
+      uid: localUser.id,
+      email: localUser.email,
+      displayName: localUser.displayName,
+      photoUrl: localUser.photoUrl,
+      provider: 'password',
+    ).catchError((_) {});
   }
 
+
+
   Future<void> register({
-    required String name,
+    String? name,
     required String email,
     required String password,
   }) async {
     final cleanEmail = email.trim().toLowerCase();
-    final cleanName =
-        name.trim().isNotEmpty ? name.trim() : cleanEmail.split('@').first;
+    final cleanName = (name != null && name.trim().isNotEmpty)
+        ? name.trim()
+        : cleanEmail.split('@').first;
     const provider = 'password';
     final auth = _auth;
 
@@ -306,20 +328,24 @@ class AuthService {
         );
         await LocalDatabase.instance.saveActiveSession(fbUser.uid);
         await LocalDatabase.instance.claimAnonymousPlaylists(fbUser.uid);
+        // Keep users.role in sync with employees.user_id == users.id.
+        await LocalDatabase.instance.refreshUserRoleFromEmployees(fbUser.uid);
         return;
       } on FirebaseAuthException catch (e) {
         if (e.code == 'email-already-in-use' ||
             e.code == 'invalid-email' ||
-            e.code == 'weak-password' ||
-            e.code == 'operation-not-allowed') {
+            e.code == 'weak-password') {
           rethrow;
         }
         final isConfigError = e.code == 'configuration-not-found' ||
+            e.code == 'operation-not-allowed' ||
             (e.message != null && e.message!.contains('CONFIGURATION_NOT_FOUND'));
         if (!isConfigError) {
           rethrow;
         }
         debugPrint('[AuthService] Firebase config error, using local registration: $e');
+      } catch (e) {
+        debugPrint('[AuthService] Firebase registration error, using local registration: $e');
       }
     }
 
@@ -404,6 +430,8 @@ class AuthService {
         );
         await LocalDatabase.instance.saveActiveSession(fbUser.uid);
         await LocalDatabase.instance.claimAnonymousPlaylists(fbUser.uid);
+        // Keep users.role in sync with employees.user_id == users.id.
+        await LocalDatabase.instance.refreshUserRoleFromEmployees(fbUser.uid);
       } catch (e) {
         debugPrint('[AuthService] Local mirror skipped: $e');
       }
@@ -417,8 +445,14 @@ class AuthService {
           e.code == 'user-disabled' ||
           e.code == 'user-not-found';
       if (isCredentialError) {
-        // Re-hash with the current password attempt and check locally
-        // only to give a friendlier error message — never sign in.
+        // If the account was registered locally (e.g., when Firebase was unavailable),
+        // we should try to verify their password against the local database.
+        final verified = await LocalDatabase.instance.verifyLocalPassword(cleanEmail, password);
+        if (verified != null) {
+          await _loginAsLocalUser(verified);
+          return;
+        }
+
         final exists =
             await LocalDatabase.instance.getUserByEmail(cleanEmail);
         if (exists != null) {
@@ -431,6 +465,7 @@ class AuthService {
       }
 
       final isConfigError = e.code == 'configuration-not-found' ||
+          e.code == 'operation-not-allowed' ||
           (e.message != null && e.message!.contains('CONFIGURATION_NOT_FOUND'));
 
       // Only fall back to local password when Firebase is *unavailable*
@@ -477,559 +512,7 @@ class AuthService {
     }
   }
 
-  final _googleSignIn = GoogleSignIn(
-    scopes: ['email', 'profile'],
-  );
 
-  /// True for auto-generated / placeholder names that must never
-  /// overwrite a real profile name like "Juan Dela Cruz".
-  bool _isGenericName(String name, String provider) {
-    final n = name.trim().toLowerCase();
-    if (n.isEmpty) return true;
-    if (n == 'facebook user' || n == 'google user') return true;
-    if (n == 'music listener' || n == 'user') return true;
-    if (n.startsWith('google.user') || n.startsWith('facebook.user')) return true;
-    if (n.startsWith('google-user') || n.startsWith('facebook-user')) return true;
-    if (provider == 'google' && RegExp(r'^google(\.|\s|-)?user.*$').hasMatch(n)) return true;
-    if (provider == 'facebook' && RegExp(r'^facebook(\.|\s|-)?user.*$').hasMatch(n)) return true;
-    return false;
-  }
-
-  /// Holds a verified social profile for testing without native SDK interaction.
-  @visibleForTesting
-  static VerifiedSocialProfile? mockVerifiedProfile;
-
-  /// Injects a mocked verified provider result for testing.
-  @visibleForTesting
-  static void setMockVerifiedProfile(VerifiedSocialProfile? profile) {
-    mockVerifiedProfile = profile;
-  }
-
-  /// Authenticates with a social provider (Google or Facebook) via genuine
-  /// native SDK or OAuth. Never trusts an unverified client-supplied email
-  /// or reuses a local account row without verified credentials.
-  Future<void> signInWithProviderAuto({
-    required String provider,
-    String? preferredEmail,
-    String? preferredName,
-    bool forceNewAccount = false,
-  }) async {
-    // The preferredEmail shortcut has been removed to prevent authorization bypass:
-    // social sign-in must always authenticate against genuine native or OAuth credentials.
-    final success = provider == 'google'
-        ? await signInWithGoogle(isCreatingNewAccount: forceNewAccount)
-        : await signInWithFacebook(isCreatingNewAccount: forceNewAccount);
-    if (!success) {
-      debugPrint('[AuthService] $provider sign-in was cancelled or did not complete');
-    }
-  }
-
-  /// Persists a social profile from a verified provider result (e.g. GoogleSignInAccount
-  /// after signIn(), Facebook getUserData() after a successful LoginResult, or a
-  /// verified Firebase UserCredential).
-  ///
-  /// Refuses to sign in if an account already exists with a different auth_provider
-  /// (e.g. password) to prevent unauthorized account takeover.
-  Future<void> _persistVerifiedSocialProfile({
-    required String email,
-    required String displayName,
-    String? photoUrl,
-    required String provider,
-  }) async {
-    var cleanEmail = email.trim().toLowerCase();
-    var cleanName = displayName.trim();
-
-    // Reject placeholder/invalid emails instead of mapping them onto
-    // someone else's account.
-    if (cleanEmail.isEmpty ||
-        !cleanEmail.contains('@') ||
-        cleanEmail.startsWith('google.user') ||
-        cleanEmail.startsWith('facebook.user') ||
-        cleanEmail.startsWith('fb-')) {
-      throw FirebaseAuthException(
-        code: 'invalid-email',
-        message: 'Enter a valid email address.',
-      );
-    }
-
-    // Never persist a generic placeholder name; use the email prefix.
-    if (cleanName.isEmpty || _isGenericName(cleanName, provider)) {
-      cleanName = cleanEmail.split('@').first;
-    }
-    if (cleanName.isEmpty) cleanName = '$provider-user';
-
-    var existingUser = await LocalDatabase.instance.getUserByEmail(cleanEmail);
-    if (existingUser != null) {
-      final existingProvider =
-          (existingUser['auth_provider'] as String? ?? 'password').trim().toLowerCase();
-      if (existingProvider != provider.trim().toLowerCase()) {
-        throw FirebaseAuthException(
-          code: 'account-exists-with-different-credential',
-          message:
-              'An account already exists with this email address ($cleanEmail) using $existingProvider. Please sign in using your original method.',
-        );
-      }
-    }
-
-    if (existingUser == null) {
-      final userId = await LocalDatabase.instance.getNextUserId();
-      await LocalDatabase.instance.saveUser(
-        id: userId,
-        email: cleanEmail,
-        displayName: cleanName,
-        photoUrl: photoUrl,
-        role: 'user',
-        authProvider: provider,
-      );
-      existingUser = await LocalDatabase.instance.getUserById(userId);
-    } else {
-      // Existing verified social user with the matching provider:
-      final oldName = (existingUser['display_name'] as String? ?? '').trim();
-      final oldPhoto = existingUser['photo_url'] as String?;
-      final newIsGeneric = _isGenericName(cleanName, provider);
-      final oldIsGeneric = _isGenericName(oldName, provider);
-      final resolvedName = (newIsGeneric && !oldIsGeneric)
-          ? oldName
-          : (newIsGeneric ? cleanEmail.split('@').first : cleanName);
-      final resolvedPhoto = (photoUrl == null || photoUrl.isEmpty) ? oldPhoto : photoUrl;
-      await LocalDatabase.instance.saveUser(
-        id: existingUser['id'] as String,
-        email: cleanEmail,
-        displayName: resolvedName,
-        photoUrl: resolvedPhoto,
-        role: existingUser['role'] as String? ?? 'user',
-        authProvider: provider,
-      );
-      existingUser = await LocalDatabase.instance.getUserById(existingUser['id'] as String);
-    }
-
-    if (existingUser != null) {
-      await _loginAsLocalUser(existingUser);
-      debugPrint('[AuthService] Saved verified $provider user: $cleanEmail as $cleanName');
-    }
-  }
-
-  @visibleForTesting
-  Future<void> persistVerifiedSocialProfileForTesting({
-    required String email,
-    required String displayName,
-    String? photoUrl,
-    required String provider,
-  }) => _persistVerifiedSocialProfile(
-        email: email,
-        displayName: displayName,
-        photoUrl: photoUrl,
-        provider: provider,
-      );
-
-  /// Browser/IdP OAuth via Firebase (works on desktop/web where the
-  /// native SDKs are unavailable). Returns true with the REAL accurate
-  /// profile name when it succeeds, false otherwise. Never throws.
-  Future<bool> _signInWithOAuthProvider(
-    AuthProvider provider, {
-    required String providerName,
-  }) async {
-    final auth = _auth;
-    if (auth == null) return false;
-    _socialSignInInProgress = true;
-    try {
-      final userCredential = await auth.signInWithProvider(provider);
-      final user = userCredential.user;
-      if (user == null) return false;
-      try {
-        await _upsertUser(user, provider: providerName);
-      } catch (e) {
-        debugPrint('[AuthService] Firestore sync skipped: $e');
-      }
-      // Prefer the OAuth profile name Firebase received from Google/Facebook.
-      final mirrored = await _mirrorFirebaseUserToLocal(
-        user,
-        provider: providerName,
-        realName: user.displayName,
-        realPhoto: user.photoURL,
-        realEmail: user.email,
-      );
-      await LocalDatabase.instance.claimAnonymousPlaylists(user.uid);
-      if (mirrored) return true;
-      // Mirror failed: still keep the signed-in session so the user is
-      // not logged out, but prefer any non-empty Firebase display name.
-      _emitAuth(user);
-      return true;
-    } catch (e) {
-      debugPrint('[AuthService] OAuth $providerName note: $e');
-      return false;
-    } finally {
-      _socialSignInInProgress = false;
-    }
-  }
-
-  /// One-click Google sign-in: existing account -> sign in,
-  /// new account -> auto sign-up. Never throws for user cancellation.
-  /// Returns true when signed in, false when the user cancelled.
-  /// Throws only when native sign-in is unavailable/failed so the UI
-  /// can offer the local one-tap fallback sheet.
-  Future<bool> signInWithGoogle({bool isCreatingNewAccount = false}) async {
-    _socialSignInInProgress = true;
-    try {
-      if (mockVerifiedProfile != null && mockVerifiedProfile!.provider == 'google') {
-        final mock = mockVerifiedProfile!;
-        await _persistVerifiedSocialProfile(
-          email: mock.email,
-          displayName: mock.displayName,
-          photoUrl: mock.photoUrl,
-          provider: 'google',
-        );
-        return true;
-      }
-
-      GoogleSignInAccount? googleUser;
-      try {
-        if (isCreatingNewAccount) {
-          try {
-            await _googleSignIn.signOut();
-          } catch (_) {}
-        }
-        googleUser = await _googleSignIn.signIn();
-      } catch (e) {
-        debugPrint('[AuthService] Google native unavailable, trying OAuth: $e');
-        // Desktop/web: open the real Google picker in the browser so the
-        // accurate account name is returned instead of a placeholder.
-        final oauthOk = await _signInWithOAuthProvider(
-          GoogleAuthProvider(),
-          providerName: 'google',
-        );
-        if (oauthOk) return true;
-        throw FirebaseAuthException(
-          code: 'google-unavailable',
-          message: 'Google sign-in is unavailable. Please try again.',
-        );
-      }
-    if (googleUser == null) {
-      // User dismissed the account selection dialog - silent cancel.
-      return false;
-    }
-
-    // Best-effort Firebase credential link - never blocks local sign-in.
-    final auth = _auth;
-    if (auth != null) {
-      try {
-        final googleAuth = await googleUser.authentication;
-        if (googleAuth.idToken != null) {
-          final credential = GoogleAuthProvider.credential(
-            idToken: googleAuth.idToken,
-            accessToken: googleAuth.accessToken,
-          );
-          final userCredential = await auth.signInWithCredential(credential);
-          // Firestore sync must never break login.
-          try {
-            await _upsertUser(userCredential.user!, provider: 'google');
-          } catch (e) {
-            debugPrint('[AuthService] Firestore sync skipped: $e');
-          }
-          // Mirror into local DB with the REAL Google profile fields so the
-          // displayed name always matches the actual Google account.
-          final mirrored = await _mirrorFirebaseUserToLocal(
-            userCredential.user!,
-            provider: 'google',
-            realName: googleUser.displayName,
-            realPhoto: googleUser.photoUrl,
-            realEmail: googleUser.email,
-          );
-          await LocalDatabase.instance.claimAnonymousPlaylists(userCredential.user!.uid);
-          if (mirrored) return true;
-          // Mirror failed (e.g. no email): fall back to local profile sign-in
-          // using the real Google account data below.
-        }
-      } catch (e) {
-        debugPrint('[AuthService] Firebase credential sign-in note: $e');
-        // Fall through to local profile sign-in below.
-      }
-    }
-
-    // Capture the real Google user profile directly from Play Services.
-    // Existing email -> sign in (keeping the accurate stored name),
-    // new email -> auto sign-up - no extra taps, no errors.
-    final realEmail = googleUser.email.trim().toLowerCase();
-    if (realEmail.isEmpty || !realEmail.contains('@')) {
-      throw FirebaseAuthException(
-        code: 'invalid-email',
-        message: 'Could not read your Google email. Please try again.',
-      );
-    }
-    var realName = (googleUser.displayName != null && googleUser.displayName!.trim().isNotEmpty)
-        ? googleUser.displayName!.trim()
-        : '';
-    final realPhoto = googleUser.photoUrl;
-    // If Google returned no display name, reuse the accurate stored name
-    // for this email instead of falling back to the email prefix.
-    if (realName.isEmpty || _isGenericName(realName, 'google') || realName.startsWith('google.user')) {
-      try {
-        final stored = await LocalDatabase.instance.getUserByEmail(realEmail);
-        final storedName = (stored?['display_name'] as String? ?? '').trim();
-        if (storedName.isNotEmpty &&
-            !_isGenericName(storedName, 'google') &&
-            !storedName.startsWith('google.user')) {
-          realName = storedName;
-        } else {
-          realName = realEmail.split('@').first;
-        }
-      } catch (_) {
-        realName = realEmail.split('@').first;
-      }
-    }
-
-    await _persistVerifiedSocialProfile(
-      email: realEmail,
-      displayName: realName,
-      photoUrl: realPhoto,
-      provider: 'google',
-    );
-    return true;
-    } finally {
-      _socialSignInInProgress = false;
-    }
-  }
-
-  /// Mirror a Firebase [User] into the local database so the account shows
-  /// up in the one-tap chooser and works offline. Never throws.
-  /// [realName]/[realPhoto]/[realEmail] come straight from the native
-  /// Google/Facebook SDK and always win over a missing/generic Firebase value.
-  /// Returns true when the local profile was saved and set as the active user.
-  Future<bool> _mirrorFirebaseUserToLocal(
-    User user, {
-    required String provider,
-    String? realName,
-    String? realPhoto,
-    String? realEmail,
-  }) async {
-    try {
-      var email = (realEmail ?? user.email ?? '').trim().toLowerCase();
-      if (email.isEmpty ||
-          !email.contains('@') ||
-          email.startsWith('google.user') ||
-          email.startsWith('facebook.user')) {
-        email = (user.email ?? '').trim().toLowerCase();
-      }
-      // No valid email: do NOT invent a different account. The caller keeps
-      // the Firebase session; a row is created once a real email is known.
-      if (email.isEmpty ||
-          !email.contains('@') ||
-          email.startsWith('google.user') ||
-          email.startsWith('facebook.user')) {
-        return false;
-      }
-
-      // Reject unverified emails from Firebase to prevent account takeover.
-      // When the email came directly from the native SDK (realEmail != null)
-      // the provider has already verified ownership. When we fall back to
-      // user.email, Firebase's emailVerified flag must be true.
-      if (realEmail == null || realEmail.isEmpty) {
-        try {
-          if (!user.emailVerified) {
-            debugPrint('[AuthService] Rejecting unverified email from Firebase: $email');
-            return false;
-          }
-        } catch (_) {
-          // emailVerified unavailable — conservative: reject.
-          return false;
-        }
-      }
-
-      var name = (realName ?? user.displayName ?? '').trim();
-      if (name.isEmpty ||
-          _isGenericName(name, provider) ||
-          name.startsWith('google.user') ||
-          name.startsWith('facebook.user')) {
-        try {
-          final stored = await LocalDatabase.instance.getUserByEmail(email);
-          final storedName = (stored?['display_name'] as String? ?? '').trim();
-          if (storedName.isNotEmpty &&
-              !_isGenericName(storedName, provider) &&
-              !storedName.startsWith('google.user') &&
-              !storedName.startsWith('facebook.user')) {
-            name = storedName;
-          } else {
-            name = email.split('@').first;
-          }
-        } catch (_) {
-          name = email.split('@').first;
-        }
-      }
-      // Final guard: never persist a generic placeholder.
-      if (name.isEmpty ||
-          _isGenericName(name, provider) ||
-          name.startsWith('google.user') ||
-          name.startsWith('facebook.user')) {
-        name = email.split('@').first;
-      }
-
-      final photo = (realPhoto != null && realPhoto.isNotEmpty)
-          ? realPhoto
-          : user.photoURL;
-
-      await _persistVerifiedSocialProfile(
-        email: email,
-        displayName: name,
-        photoUrl: photo,
-        provider: provider,
-      );
-      // Keep the LocalUser (with the verified real name) as the active
-      // session. Do NOT overwrite it with the raw Firebase User — that
-      // object often has a null displayName and would show an email
-      // prefix instead of the real Google/Facebook account name.
-      return _currentUser is LocalUser;
-    } on FirebaseAuthException {
-      rethrow;
-    } catch (e) {
-      debugPrint('[AuthService] Local mirror skipped: $e');
-      return false;
-    }
-  }
-
-  /// One-click Facebook sign-in: existing account -> sign in,
-  /// new account -> auto sign-up. Returns false only when cancelled.
-  Future<bool> signInWithFacebook({bool isCreatingNewAccount = false}) async {
-    _socialSignInInProgress = true;
-    try {
-      if (mockVerifiedProfile != null && mockVerifiedProfile!.provider == 'facebook') {
-        final mock = mockVerifiedProfile!;
-        await _persistVerifiedSocialProfile(
-          email: mock.email,
-          displayName: mock.displayName,
-          photoUrl: mock.photoUrl,
-          provider: 'facebook',
-        );
-        return true;
-      }
-
-      if (isCreatingNewAccount) {
-        try {
-          await FacebookAuth.instance.logOut();
-        } catch (_) {}
-      }
-      late final LoginResult result;
-      try {
-        result = await FacebookAuth.instance.login(
-          permissions: ['email', 'public_profile'],
-        );
-      } catch (e) {
-        debugPrint('[AuthService] Facebook native unavailable, trying OAuth: $e');
-        final oauthOk = await _signInWithOAuthProvider(
-          FacebookAuthProvider(),
-          providerName: 'facebook',
-        );
-        if (oauthOk) return true;
-        throw FirebaseAuthException(
-          code: 'facebook-unavailable',
-          message: 'Facebook sign-in is unavailable. Please try again.',
-        );
-      }
-
-      if (result.status == LoginStatus.cancelled) {
-        return false; // Silent cancel - no sheet, no snackbar.
-      }
-      if (result.status == LoginStatus.operationInProgress) {
-        return false;
-      }
-      if (result.status != LoginStatus.success || result.accessToken == null) {
-        debugPrint('[AuthService] Facebook native failed, trying OAuth: ${result.message}');
-        final oauthOk = await _signInWithOAuthProvider(
-          FacebookAuthProvider(),
-          providerName: 'facebook',
-        );
-        if (oauthOk) return true;
-        throw FirebaseAuthException(
-          code: 'facebook-failed',
-          message: 'Facebook sign-in did not complete. Please try again.',
-        );
-      }
-
-      final accessToken = result.accessToken!;
-
-    // Read the real Facebook profile FIRST so the accurate account name
-    // is always available, even when the Firebase credential link succeeds.
-    String fbEmail = '';
-    String fbName = '';
-    String? fbPhoto;
-    try {
-      final userData = await FacebookAuth.instance.getUserData();
-      final rawEmail = (userData['email'] as String?)?.trim().toLowerCase() ?? '';
-      fbEmail = rawEmail.contains('@') ? rawEmail : '';
-      fbName = (userData['name'] as String?)?.trim() ?? '';
-      final picture = userData['picture'];
-      if (picture is Map) {
-        final data = picture['data'];
-        if (data is Map && data['url'] is String) fbPhoto = data['url'] as String;
-      }
-    } catch (e) {
-      debugPrint('[AuthService] Facebook profile read note: $e');
-    }
-
-    // Best-effort Firebase credential link - never blocks local sign-in.
-    final auth = _auth;
-    if (auth != null) {
-      try {
-        final credential = FacebookAuthProvider.credential(accessToken.tokenString);
-        final userCredential = await auth.signInWithCredential(credential);
-        try {
-          await _upsertUser(userCredential.user!, provider: 'facebook');
-        } catch (e) {
-          debugPrint('[AuthService] Firestore sync skipped: $e');
-        }
-        // Mirror with the REAL Facebook profile fields so the displayed
-        // name always matches the actual Facebook account.
-        final mirrored = await _mirrorFirebaseUserToLocal(
-          userCredential.user!,
-          provider: 'facebook',
-          realName: fbName,
-          realPhoto: fbPhoto,
-          realEmail: fbEmail.isNotEmpty ? fbEmail : userCredential.user?.email,
-        );
-        if (mirrored) {
-          await LocalDatabase.instance.claimAnonymousPlaylists(userCredential.user!.uid);
-          return true;
-        }
-      } catch (e) {
-        debugPrint('[AuthService] Firebase Facebook credential note: $e');
-      }
-    }
-    // Without a real Facebook email there is no account to sign into —
-    // throw instead of signing into a different person's account.
-    if (fbEmail.isEmpty || fbEmail.startsWith('fb-') || fbEmail.startsWith('facebook.user')) {
-      throw FirebaseAuthException(
-        code: 'facebook-failed',
-        message: 'Facebook did not share a verified email address. Please try again.',
-      );
-    }
-    // Accuracy: if Facebook returned no real name, reuse the accurate
-    // stored name for this email instead of a generic placeholder.
-    if (fbName.isEmpty || _isGenericName(fbName, 'facebook') || fbName.startsWith('facebook.user')) {
-      try {
-        final stored = await LocalDatabase.instance.getUserByEmail(fbEmail);
-        final storedName = (stored?['display_name'] as String? ?? '').trim();
-        if (storedName.isNotEmpty &&
-            !_isGenericName(storedName, 'facebook') &&
-            !storedName.startsWith('facebook.user')) {
-          fbName = storedName;
-        } else {
-          fbName = fbEmail.split('@').first;
-        }
-      } catch (_) {
-        fbName = fbEmail.split('@').first;
-      }
-    }
-
-    await _persistVerifiedSocialProfile(
-      email: fbEmail,
-      displayName: fbName,
-      photoUrl: fbPhoto,
-      provider: 'facebook',
-    );
-    return true;
-    } finally {
-      _socialSignInInProgress = false;
-    }
-  }
 
   Future<void> recordActivity({required String screen, String? trackTitle}) async {
     final auth = _auth;
@@ -1052,33 +535,64 @@ class AuthService {
     _authController.add(null);
     try {
       await _auth?.signOut();
-      await _googleSignIn.signOut();
-      await FacebookAuth.instance.logOut();
     } catch (e) {
       debugPrint('[AuthService] signOut: $e');
     }
   }
 
-  Future<void> _upsertUser(User user, {required String provider}) async {
+  /// Re-reads the role from the employees table
+  /// (employees.user_id == users.id) and updates the in-memory user.
+  /// Call this after editing the database, or on screens that show the role.
+  Future<String> refreshRoleFromDatabase() async {
+    final uid = currentUserId;
+    if (uid.isEmpty) return userRole;
+    final resolved =
+        await LocalDatabase.instance.refreshUserRoleFromEmployees(uid);
+    if (_currentUser is LocalUser) {
+      _currentUser = (_currentUser as LocalUser).copyWith(role: resolved);
+      _authController.add(_currentUser);
+    }
+    return resolved;
+  }
+
+  Future<void> _upsertToFirestore({
+    required String uid,
+    required String email,
+    required String displayName,
+    String? photoUrl,
+    required String provider,
+    String? role,
+  }) async {
     try {
       final firestore = _firestore;
       if (firestore == null) return;
-      final document = firestore.collection('users').doc(user.uid);
+      final document = firestore.collection('users').doc(uid);
       final snapshot = await document.get();
       await document.set({
-        'email': user.email,
-        'displayName': user.displayName ?? user.email?.split('@').first ?? 'Music listener',
-        'photoUrl': user.photoURL,
+        'email': email,
+        'displayName': displayName,
+        'photoUrl': photoUrl,
         'provider': provider,
+        if (role != null) 'role': role,
         'lastLoginAt': FieldValue.serverTimestamp(),
-        if (!snapshot.exists) ...{
+        if (!snapshot.exists && role == null) ...{
           'role': 'user',
           'createdAt': FieldValue.serverTimestamp(),
         },
       }, SetOptions(merge: true));
     } catch (e) {
-      // Firestore sync is best-effort only - local sign-in already succeeded.
+      // Firestore sync is best-effort only.
       debugPrint('[AuthService] Firestore sync skipped: $e');
     }
+  }
+
+  Future<void> _upsertUser(User user, {required String provider}) async {
+    return _upsertToFirestore(
+      uid: user.uid,
+      email: user.email ?? '',
+      displayName: user.displayName ?? user.email?.split('@').first ?? 'Music listener',
+      photoUrl: user.photoURL,
+      provider: provider,
+    );
   }
 }
