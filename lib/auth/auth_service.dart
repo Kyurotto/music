@@ -516,7 +516,19 @@ class AuthService {
           rethrow;
         }
       } catch (e) {
-        // SocketException / HttpException / timeout etc. -> offline mode.
+        // A timeout is ambiguous: Firebase may have created the account
+        // server-side even though the client timed out waiting for the
+        // response. Falling back to _registerLocally would create a second
+        // local-only ID and diverge from the Firebase account, so surface
+        // the error instead of registering locally.
+        if (e is TimeoutException) {
+          throw FirebaseAuthException(
+            code: 'network-request-failed',
+            message:
+                'Request timed out. Please check your connection and try again.',
+          );
+        }
+        // SocketException / HttpException etc. -> offline mode.
         // Anything else (e.g. an updateDisplayName failure or a saveUser
         // ArgumentError after Firebase already created the account) must
         // rethrow: falling back to _registerLocally would create a second
