@@ -77,11 +77,13 @@ class _AuthViewState extends State<AuthView> {
         await AuthService.instance.register(
           email: email,
           password: _passwordController.text,
+          persistSession: _rememberMe,
         );
       } else {
         await AuthService.instance.signInWithEmail(
           email: email,
           password: _passwordController.text,
+          persistSession: _rememberMe,
         );
       }
       // Tell the browser / OS the autofill context is complete so Chrome,
@@ -100,12 +102,15 @@ class _AuthViewState extends State<AuthView> {
   }
 
   /// Remember-me only controls auto-login persistence now (no saved-account
-  /// dropdown). AuthService always saves the active session on success;
-  /// unchecking clears it so the next launch starts signed out.
+  /// dropdown). The session row is always kept for the current run — it is
+  /// also the clock for claimAnonymousPlaylists — and the choice is stored
+  /// as a flag that _initAuthListener honors at the next startup (clearing
+  /// the local session and signing out of Firebase there). Clearing the row
+  /// here would leave Firebase signed in (auto-login anyway) and corrupt
+  /// the playlist-claim boundary.
   Future<void> _handleRememberMe() async {
-    if (_rememberMe) return;
     try {
-      await LocalDatabase.instance.clearActiveSession();
+      await LocalDatabase.instance.setPersistSession(_rememberMe);
     } catch (_) {}
   }
 

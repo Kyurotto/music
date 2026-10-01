@@ -657,6 +657,23 @@ class LocalDatabase {
     await _syncToWorkspace();
   }
 
+  /// Whether the last sign-in asked to persist across restarts
+  /// ("Remember me"). Stored in app_settings so it survives restarts.
+  /// Defaults to true for installs that signed in before the flag existed.
+  static const _persistSessionKey = 'auth_persist_session';
+
+  Future<void> setPersistSession(bool persist) =>
+      saveSetting(_persistSessionKey, persist ? '1' : '0');
+
+  Future<bool> getPersistSession() async {
+    try {
+      final v = await getSetting(_persistSessionKey);
+      return v != '0';
+    } catch (_) {
+      return true;
+    }
+  }
+
   /// Remembers an account for the sign-in "Remember me" popup.
   /// Stores email + display name only — never a password.
   Future<void> saveRememberedAccount({

@@ -203,6 +203,19 @@ class AuthService {
         s.contains('unreachable');
   }
 
+  /// True when [userRow] is a local-only account: no Firebase UID and
+  /// auth_provider is password. Local-only IDs are sequential integers
+  /// ('2', '3', ...) from [LocalDatabase.getNextUserId]; Firebase UIDs are
+  /// long alphanumeric strings and are never purely numeric.
+  bool _isLocalOnlyAccount(Map<String, Object?> userRow) {
+    final provider = (userRow['auth_provider'] as String? ?? '').toLowerCase();
+    if (provider != 'password') return false;
+    final id = (userRow['id'] as String? ?? '');
+    if (id.isEmpty) return false;
+    if (LocalDatabase.guestUserIds.contains(id)) return false;
+    return int.tryParse(id) != null;
+  }
+
   /// Creates + signs in a local-only SQLite account. No Firebase involved,
   /// so this works fully offline. Firestore sync is retried best-effort
   /// via [_loginAsLocalUser] when connectivity returns.
@@ -210,6 +223,7 @@ class AuthService {
     required String cleanEmail,
     required String cleanName,
     required String password,
+    bool persistSession = true,
   }) async {
     await LocalDatabase.instance.removeDefaultAdminIfSeeded();
     final passwordHash = LocalDatabase.hashPassword(password);
@@ -223,10 +237,11 @@ class AuthService {
       passwordHash: passwordHash,
     );
     await LocalDatabase.instance.saveActiveSession(newUserId);
+    await LocalDatabase.instance.setPersistSession(persistSession);
     await LocalDatabase.instance.claimAnonymousPlaylists(newUserId);
     final user = await LocalDatabase.instance.getUserById(newUserId);
     if (user != null) {
-      await _loginAsLocalUser(user);
+      await _loginAsLocalUser(user, persistSession: persistSession);
     }
   }
 
@@ -236,13 +251,14 @@ class AuthService {
   Future<void> _signInLocally({
     required String cleanEmail,
     required String password,
+    bool persistSession = true,
   }) async {
     final verified = await LocalDatabase.instance.verifyLocalPassword(
       cleanEmail,
       password,
     );
     if (verified != null) {
-      await _loginAsLocalUser(verified);
+      await _loginAsLocalUser(verified, persistSession: persistSession);
       return;
     }
     final exists = await LocalDatabase.instance.getUserByEmail(cleanEmail);
@@ -263,106 +279,138 @@ class AuthService {
     _listenerStarted = true;
 
     // Check local database for active session
-    LocalDatabase.instance
-        .getActiveSessionUserId()
-        .then((savedUserId) async {
-          if (savedUserId != null) {
-            final localData = await LocalDatabase.instance.getUserById(
-              savedUserId,
-            );
-            if (localData != null) {
-              // Restore the saved session, but resolve the role from the
-              // employees table (employees.user_id == users.id). Editing the
-              // employee row in the database is the only way to grant admin.
-              final resolvedRole = await LocalDatabase.instance
-                  .refreshUserRoleFromEmployees(savedUserId);
-              _currentUser = LocalUser(
-                id: localData['id'] as String,
-                email: (localData['email'] as String? ?? '').trim(),
-                displayName: (localData['display_name'] as String? ?? '')
-                    .trim(),
-                role: resolvedRole,
-                photoUrl: localData['photo_url'] as String?,
-              );
-              _isInitialized = true;
-              _authController.add(_currentUser);
-              return;
-            }
+    () async {
+      try {
+        // Honor "Remember me = off" from the last successful sign-in.
+        // The session row is intentionally kept during the run (deleting
+        // it at sign-in would corrupt claimAnonymousPlaylists' boundary,
+        // which uses user_sessions as its clock); persistence is decided
+        // here at startup instead. Firebase keeps its own persistence
+        // independently of SQLite, so Firebase accounts must also be
+        // signed out here — otherwise auth.currentUser would restore the
+        // user even with no local session row.
+        try {
+          final persist = await LocalDatabase.instance.getPersistSession();
+          if (!persist) {
+            try {
+              await _auth?.signOut();
+            } catch (_) {}
+            try {
+              await LocalDatabase.instance.clearActiveSession();
+            } catch (_) {}
+            try {
+              await LocalDatabase.instance.setPersistSession(true);
+            } catch (_) {}
+            _currentUser = null;
+            _isInitialized = true;
+            if (!_authController.isClosed) _authController.add(null);
+            return;
           }
+        } catch (_) {
+          // Flag unreadable — fall through to normal restore.
+        }
 
-          // If no local session, listen to Firebase Auth if initialized
-          final auth = _auth;
-          if (auth != null) {
-            _currentUser = auth.currentUser;
-            if (auth.currentUser != null) {
-              final u = auth.currentUser!;
-              final email = (u.email ?? '').trim();
-              if (email.isNotEmpty) {
-                // Email/password accounts stay 'password' even for gmail.com.
-                // Only use google/facebook when Firebase providerData says so.
-                final provider = _firebaseProvider(u);
-                final rawName = (u.displayName ?? '').trim();
-                LocalDatabase.instance
-                    .saveUser(
-                      id: u.uid,
-                      email: email,
-                      displayName: rawName.isNotEmpty
-                          ? rawName
-                          : email.split('@').first,
-                      photoUrl: u.photoURL,
-                      role: 'user',
-                      authProvider: provider,
-                    )
-                    .catchError((_) {});
-              }
+        final savedUserId = await LocalDatabase.instance
+            .getActiveSessionUserId();
+        if (savedUserId != null) {
+          final localData = await LocalDatabase.instance.getUserById(
+            savedUserId,
+          );
+          if (localData != null) {
+            // Restore the saved session, but resolve the role from the
+            // employees table (employees.user_id == users.id). Editing the
+            // employee row in the database is the only way to grant admin.
+            final resolvedRole = await LocalDatabase.instance
+                .refreshUserRoleFromEmployees(savedUserId);
+            _currentUser = LocalUser(
+              id: localData['id'] as String,
+              email: (localData['email'] as String? ?? '').trim(),
+              displayName: (localData['display_name'] as String? ?? '').trim(),
+              role: resolvedRole,
+              photoUrl: localData['photo_url'] as String?,
+            );
+            _isInitialized = true;
+            _authController.add(_currentUser);
+            return;
+          }
+        }
+
+        // If no local session, listen to Firebase Auth if initialized
+        final auth = _auth;
+        if (auth != null) {
+          _currentUser = auth.currentUser;
+          if (auth.currentUser != null) {
+            final u = auth.currentUser!;
+            final email = (u.email ?? '').trim();
+            if (email.isNotEmpty) {
+              // Email/password accounts stay 'password' even for gmail.com.
+              // Only use google/facebook when Firebase providerData says so.
+              final provider = _firebaseProvider(u);
+              final rawName = (u.displayName ?? '').trim();
+              LocalDatabase.instance
+                  .saveUser(
+                    id: u.uid,
+                    email: email,
+                    displayName: rawName.isNotEmpty
+                        ? rawName
+                        : email.split('@').first,
+                    photoUrl: u.photoURL,
+                    role: 'user',
+                    authProvider: provider,
+                  )
+                  .catchError((_) {});
             }
-            auth.authStateChanges().listen((user) {
-              if (user != null && user.email != null) {
-                final email = user.email!;
-                final provider = _firebaseProvider(user);
-                final rawName = (user.displayName ?? '').trim();
-                LocalDatabase.instance
-                    .saveUser(
-                      id: user.uid,
-                      email: email,
-                      displayName: rawName.isNotEmpty
-                          ? rawName
-                          : email.split('@').first,
-                      photoUrl: user.photoURL,
-                      role: 'user',
-                      authProvider: provider,
-                    )
-                    .catchError((_) {});
-              }
-              // Never yank the UI out from under an in-flight social sign-in.
-              // The sign-in method emits its single mirrored LocalUser itself.
-              if (_socialSignInInProgress) return;
-              if (_currentUser is! LocalUser) {
-                _emitAuth(user);
-              }
-            });
           }
-          _isInitialized = true;
-          _authController.add(_currentUser);
-        })
-        .catchError((e) {
-          debugPrint('[AuthService] Init local session error: $e');
-          _isInitialized = true;
-          final auth = _auth;
-          if (auth != null) {
-            _currentUser = auth.currentUser;
-            auth.authStateChanges().listen((user) {
-              if (_socialSignInInProgress) return;
-              if (_currentUser is! LocalUser) {
-                _emitAuth(user);
-              }
-            });
-          }
-          _authController.add(_currentUser);
-        });
+          auth.authStateChanges().listen((user) {
+            if (user != null && user.email != null) {
+              final email = user.email!;
+              final provider = _firebaseProvider(user);
+              final rawName = (user.displayName ?? '').trim();
+              LocalDatabase.instance
+                  .saveUser(
+                    id: user.uid,
+                    email: email,
+                    displayName: rawName.isNotEmpty
+                        ? rawName
+                        : email.split('@').first,
+                    photoUrl: user.photoURL,
+                    role: 'user',
+                    authProvider: provider,
+                  )
+                  .catchError((_) {});
+            }
+            // Never yank the UI out from under an in-flight social sign-in.
+            // The sign-in method emits its single mirrored LocalUser itself.
+            if (_socialSignInInProgress) return;
+            if (_currentUser is! LocalUser) {
+              _emitAuth(user);
+            }
+          });
+        }
+        _isInitialized = true;
+        _authController.add(_currentUser);
+      } catch (e) {
+        debugPrint('[AuthService] Init local session error: $e');
+        _isInitialized = true;
+        final auth = _auth;
+        if (auth != null) {
+          _currentUser = auth.currentUser;
+          auth.authStateChanges().listen((user) {
+            if (_socialSignInInProgress) return;
+            if (_currentUser is! LocalUser) {
+              _emitAuth(user);
+            }
+          });
+        }
+        _authController.add(_currentUser);
+      }
+    }();
   }
 
-  Future<void> _loginAsLocalUser(Map<String, Object?> userData) async {
+  Future<void> _loginAsLocalUser(
+    Map<String, Object?> userData, {
+    bool persistSession = true,
+  }) async {
     final userId = userData['id'] as String;
     // Source of truth is employees.user_id -> users.id. Never trust the
     // cached users.role column; an employee row linked to this ID makes
@@ -377,6 +425,7 @@ class AuthService {
       photoUrl: userData['photo_url'] as String?,
     );
     await LocalDatabase.instance.saveActiveSession(localUser.id);
+    await LocalDatabase.instance.setPersistSession(persistSession);
     await LocalDatabase.instance.claimAnonymousPlaylists(localUser.id);
     _currentUser = localUser;
     _authController.add(localUser);
@@ -398,6 +447,7 @@ class AuthService {
     String? name,
     required String email,
     required String password,
+    bool persistSession = true,
   }) async {
     final cleanEmail = email.trim().toLowerCase();
     final cleanName = (name != null && name.trim().isNotEmpty)
@@ -445,6 +495,7 @@ class AuthService {
           passwordHash: passwordHash,
         );
         await LocalDatabase.instance.saveActiveSession(fbUser.uid);
+        await LocalDatabase.instance.setPersistSession(persistSession);
         await LocalDatabase.instance.claimAnonymousPlaylists(fbUser.uid);
         // Keep users.role in sync with employees.user_id == users.id.
         await LocalDatabase.instance.refreshUserRoleFromEmployees(fbUser.uid);
@@ -466,14 +517,16 @@ class AuthService {
         }
       } catch (e) {
         // SocketException / HttpException / timeout etc. -> offline mode.
+        // Anything else (e.g. an updateDisplayName failure or a saveUser
+        // ArgumentError after Firebase already created the account) must
+        // rethrow: falling back to _registerLocally would create a second
+        // local-only ID and diverge from the Firebase account.
         if (_isGenericNetworkError(e)) {
           debugPrint(
             '[AuthService] Network unavailable, using local registration: $e',
           );
         } else {
-          debugPrint(
-            '[AuthService] Firebase registration error, using local registration: $e',
-          );
+          rethrow;
         }
       }
     }
@@ -482,6 +535,7 @@ class AuthService {
       cleanEmail: cleanEmail,
       cleanName: cleanName,
       password: password,
+      persistSession: persistSession,
     );
   }
 
@@ -493,6 +547,7 @@ class AuthService {
     String? name,
     required String email,
     required String password,
+    bool persistSession = true,
   }) async {
     final cleanEmail = email.trim().toLowerCase();
     if (cleanEmail.isEmpty || !cleanEmail.contains('@')) {
@@ -523,12 +578,14 @@ class AuthService {
       cleanEmail: cleanEmail,
       cleanName: cleanName,
       password: password,
+      persistSession: persistSession,
     );
   }
 
   Future<void> signInWithEmail({
     required String email,
     required String password,
+    bool persistSession = true,
   }) async {
     final cleanEmail = email.trim().toLowerCase();
 
@@ -539,7 +596,7 @@ class AuthService {
         password,
       );
       if (verified != null) {
-        await _loginAsLocalUser(verified);
+        await _loginAsLocalUser(verified, persistSession: persistSession);
         return;
       }
       final exists = await LocalDatabase.instance.getUserByEmail(cleanEmail);
@@ -591,6 +648,7 @@ class AuthService {
           passwordHash: LocalDatabase.hashPassword(password),
         );
         await LocalDatabase.instance.saveActiveSession(fbUser.uid);
+        await LocalDatabase.instance.setPersistSession(persistSession);
         await LocalDatabase.instance.claimAnonymousPlaylists(fbUser.uid);
         // Keep users.role in sync with employees.user_id == users.id.
         await LocalDatabase.instance.refreshUserRoleFromEmployees(fbUser.uid);
@@ -598,35 +656,41 @@ class AuthService {
         debugPrint('[AuthService] Local mirror skipped: $e');
       }
     } on FirebaseAuthException catch (e) {
+      // user-disabled is authoritative — never fall back to the local hash.
+      // A disabled account must stay signed out even if a stale local
+      // SQLite hash still matches the old password.
+      if (e.code == 'user-disabled') rethrow;
+
       // Firebase rejected the credentials authoritatively (wrong-password,
-      // invalid-credential, user-disabled). These are NOT network errors —
-      // the user's password was changed remotely, or the account was
-      // disabled. Still try the local hash first (account may have been
-      // created offline), then surface a friendly error.
+      // invalid-credential, user-not-found). These are NOT network errors —
+      // the user's password was changed remotely or the account does not
+      // exist remotely. Only fall back to the local hash for local-only
+      // accounts (no Firebase UID, auth_provider password) that may have
+      // been created offline. A mirrored Firebase account must never log
+      // in with a stale local hash.
       final isCredentialError =
           e.code == 'wrong-password' ||
           e.code == 'invalid-credential' ||
-          e.code == 'user-disabled' ||
           e.code == 'user-not-found';
       if (isCredentialError) {
-        // If the account was registered locally (e.g., when Firebase was unavailable),
-        // we should try to verify their password against the local database.
-        final verified = await LocalDatabase.instance.verifyLocalPassword(
-          cleanEmail,
-          password,
-        );
-        if (verified != null) {
-          await _loginAsLocalUser(verified);
-          return;
-        }
-
-        final exists = await LocalDatabase.instance.getUserByEmail(cleanEmail);
-        if (exists != null) {
+        final local = await LocalDatabase.instance.getUserByEmail(cleanEmail);
+        if (local != null && _isLocalOnlyAccount(local)) {
+          // Local-only account (e.g. created while Firebase was
+          // unavailable): verify against the local hash.
+          final verified = await LocalDatabase.instance.verifyLocalPassword(
+            cleanEmail,
+            password,
+          );
+          if (verified != null) {
+            await _loginAsLocalUser(verified, persistSession: persistSession);
+            return;
+          }
           throw FirebaseAuthException(
             code: 'wrong-password',
             message: 'Incorrect email address or password.',
           );
         }
+        // Firebase-backed (or unknown) account: Firebase is authoritative.
         rethrow;
       }
 
@@ -636,7 +700,11 @@ class AuthService {
         debugPrint(
           '[AuthService] Firebase unavailable (${e.code}), trying local sign-in.',
         );
-        await _signInLocally(cleanEmail: cleanEmail, password: password);
+        await _signInLocally(
+          cleanEmail: cleanEmail,
+          password: password,
+          persistSession: persistSession,
+        );
         return;
       }
       rethrow;
@@ -649,7 +717,7 @@ class AuthService {
         password,
       );
       if (verified != null) {
-        await _loginAsLocalUser(verified);
+        await _loginAsLocalUser(verified, persistSession: persistSession);
         return;
       }
       final exists = await LocalDatabase.instance.getUserByEmail(cleanEmail);
@@ -670,9 +738,14 @@ class AuthService {
   Future<void> signInOffline({
     required String email,
     required String password,
+    bool persistSession = true,
   }) async {
     final cleanEmail = email.trim().toLowerCase();
-    await _signInLocally(cleanEmail: cleanEmail, password: password);
+    await _signInLocally(
+      cleanEmail: cleanEmail,
+      password: password,
+      persistSession: persistSession,
+    );
   }
 
   Future<void> recordActivity({
@@ -694,6 +767,11 @@ class AuthService {
 
   Future<void> signOut() async {
     await LocalDatabase.instance.clearActiveSession();
+    try {
+      // Reset to the default so a stale "do not persist" flag from a
+      // previous sign-in can't affect the next one.
+      await LocalDatabase.instance.setPersistSession(true);
+    } catch (_) {}
     _currentUser = null;
     _isInitialized = true;
     _authController.add(null);
