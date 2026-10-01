@@ -393,6 +393,7 @@ class AuthService {
   /// Creates an account. Works offline: when Firebase is unreachable
   /// (no Wi-Fi/data, network-request-failed, or missing config) the account
   /// is created in local SQLite and syncs to Firestore later when online.
+
   Future<void> register({
     String? name,
     required String email,
