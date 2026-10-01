@@ -19,7 +19,7 @@ class LocalDatabase {
 
   static final LocalDatabase instance = LocalDatabase._();
   static const _databaseName = 'pulse_music.db';
-  static const _databaseVersion = 5;
+  static const _databaseVersion = 6;
 
   /// Sentinel user IDs that represent anonymous / guest ownership.
   /// Real user IDs must never collide with these values.
@@ -247,6 +247,9 @@ class LocalDatabase {
         );
       } catch (_) {}
     }
+    if (oldVersion < 6) {
+      await _createRememberedAccountsTable(database);
+    }
   }
 
   Future<void> _createImportedPlaylistTables(Database database) async {
@@ -322,6 +325,19 @@ class LocalDatabase {
       )
     ''');
     await _createEmployeeTable(database);
+    await _createRememberedAccountsTable(database);
+  }
+
+  /// Emails the user asked to remember on the sign-in screen.
+  /// Only email + display name are stored — never passwords.
+  Future<void> _createRememberedAccountsTable(Database database) async {
+    await database.execute('''
+      CREATE TABLE IF NOT EXISTS remembered_accounts (
+        email TEXT PRIMARY KEY,
+        display_name TEXT NOT NULL,
+        saved_at INTEGER NOT NULL
+      )
+    ''');
   }
 
   Future<void> _createEmployeeTable(Database database) async {
@@ -639,6 +655,79 @@ class LocalDatabase {
       await db.execute('PRAGMA wal_checkpoint(TRUNCATE)');
     } catch (_) {}
     await _syncToWorkspace();
+  }
+
+  /// Whether the last sign-in asked to persist across restarts
+  /// ("Remember me"). Stored in app_settings so it survives restarts.
+  /// Defaults to true for installs that signed in before the flag existed.
+  static const _persistSessionKey = 'auth_persist_session';
+
+  Future<void> setPersistSession(bool persist) =>
+      saveSetting(_persistSessionKey, persist ? '1' : '0');
+
+  Future<bool> getPersistSession() async {
+    try {
+      final v = await getSetting(_persistSessionKey);
+      return v != '0';
+    } catch (_) {
+      return true;
+    }
+  }
+
+  /// Remembers an account for the sign-in "Remember me" popup.
+  /// Stores email + display name only — never a password.
+  Future<void> saveRememberedAccount({
+    required String email,
+    required String displayName,
+  }) async {
+    final cleanEmail = email.trim().toLowerCase();
+    if (cleanEmail.isEmpty || !cleanEmail.contains('@')) return;
+    final cleanName = displayName.trim().isNotEmpty
+        ? displayName.trim()
+        : cleanEmail.split('@').first;
+    final db = await database;
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS remembered_accounts (
+        email TEXT PRIMARY KEY,
+        display_name TEXT NOT NULL,
+        saved_at INTEGER NOT NULL
+      )
+    ''');
+    await db.insert('remembered_accounts', {
+      'email': cleanEmail,
+      'display_name': cleanName,
+      'saved_at': DateTime.now().millisecondsSinceEpoch,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+    await _syncToWorkspace();
+  }
+
+  /// Saved accounts for the sign-in popup, most recent first.
+  Future<List<Map<String, Object?>>> getRememberedAccounts() async {
+    try {
+      final db = await database;
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS remembered_accounts (
+          email TEXT PRIMARY KEY,
+          display_name TEXT NOT NULL,
+          saved_at INTEGER NOT NULL
+        )
+      ''');
+      return db.query('remembered_accounts', orderBy: 'saved_at DESC');
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<void> removeRememberedAccount(String email) async {
+    try {
+      final db = await database;
+      await db.delete(
+        'remembered_accounts',
+        where: 'LOWER(email) = ?',
+        whereArgs: [email.trim().toLowerCase()],
+      );
+      await _syncToWorkspace();
+    } catch (_) {}
   }
 
   Future<int> saveTrack({

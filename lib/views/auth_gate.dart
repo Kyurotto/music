@@ -1,6 +1,8 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../auth/auth_service.dart';
+import '../data/local_database.dart';
 import '../theme/app_theme.dart';
 import 'music_dashboard_view.dart';
 
@@ -40,6 +42,7 @@ class _AuthViewState extends State<AuthView> {
   bool _isBusy = false;
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
+  bool _rememberMe = true;
 
   @override
   void dispose() {
@@ -66,17 +69,29 @@ class _AuthViewState extends State<AuthView> {
     }
     setState(() => _isBusy = true);
     try {
+      final email = _emailController.text.trim();
       if (_isRegistering) {
+        // Works online + offline: AuthService falls back to local SQLite
+        // when Firebase is unreachable (no Wi-Fi/data), so the same
+        // button creates the account either way.
         await AuthService.instance.register(
-          email: _emailController.text.trim(),
+          email: email,
           password: _passwordController.text,
+          persistSession: _rememberMe,
         );
       } else {
         await AuthService.instance.signInWithEmail(
-          email: _emailController.text.trim(),
+          email: email,
           password: _passwordController.text,
+          persistSession: _rememberMe,
         );
       }
+      // Tell the browser / OS the autofill context is complete so Chrome,
+      // Edge, Safari, etc. offer to SAVE the email+password into their
+      // built-in password manager. Next visit the browser autofills BOTH
+      // fields automatically.
+      TextInput.finishAutofillContext(shouldSave: true);
+      await _handleRememberMe();
     } on FirebaseAuthException catch (error) {
       _showError(_friendlyError(error));
     } catch (error) {
@@ -84,6 +99,19 @@ class _AuthViewState extends State<AuthView> {
     } finally {
       if (mounted) setState(() => _isBusy = false);
     }
+  }
+
+  /// Remember-me only controls auto-login persistence now (no saved-account
+  /// dropdown). The session row is always kept for the current run — it is
+  /// also the clock for claimAnonymousPlaylists — and the choice is stored
+  /// as a flag that _initAuthListener honors at the next startup (clearing
+  /// the local session and signing out of Firebase there). Clearing the row
+  /// here would leave Firebase signed in (auto-login anyway) and corrupt
+  /// the playlist-claim boundary.
+  Future<void> _handleRememberMe() async {
+    try {
+      await LocalDatabase.instance.setPersistSession(_rememberMe);
+    } catch (_) {}
   }
 
   void _showError(String message) {
@@ -114,7 +142,7 @@ class _AuthViewState extends State<AuthView> {
       case 'operation-not-allowed':
         return 'Authentication failed. Please verify your credentials and try again.';
       case 'network-request-failed':
-        return 'Network error. Check your connection and try again.';
+        return 'No internet connection. Please check your connection and try again — your account is saved on this device and works offline.';
       case 'app-not-authorized':
       case 'unauthorized-domain':
         return 'This app or domain is not authorized for social login. Check your Facebook and Firebase settings.';
@@ -122,6 +150,13 @@ class _AuthViewState extends State<AuthView> {
         return error.message ??
             'Authentication failed. Please verify your credentials and try again.';
       default:
+        final msg = (error.message ?? '').toLowerCase();
+        if (msg.contains('network') ||
+            msg.contains('socket') ||
+            msg.contains('offline') ||
+            msg.contains('unreachable')) {
+          return 'No internet connection. Please check your connection and try again — your account is saved on this device and works offline.';
+        }
         return error.message ?? 'Authentication failed. Please try again.';
     }
   }
@@ -142,7 +177,12 @@ class _AuthViewState extends State<AuthView> {
                 borderRadius: BorderRadius.circular(24),
                 border: Border.all(color: AppTheme.border),
               ),
-              child: Form(
+              // AutofillGroup lets the browser / OS password manager treat the
+              // email + password as one credential, so picking an account
+              // fills BOTH fields. Without it, only the email gets filled
+              // and the password stays blank (the bug in the screenshot).
+              child: AutofillGroup(
+                child: Form(
                 key: _formKey,
                 autovalidateMode: AutovalidateMode.onUserInteraction,
                 child: Column(
@@ -174,6 +214,17 @@ class _AuthViewState extends State<AuthView> {
                       controller: _emailController,
                       keyboardType: TextInputType.emailAddress,
                       textInputAction: TextInputAction.next,
+                      // Tells Chrome/Edge/Safari this is the username/email
+                      // of the credential. The browser saves + autofills
+                      // email AND password together.
+                      autofillHints: _isRegistering
+                          ? const [AutofillHints.email]
+                          : const [
+                              AutofillHints.username,
+                              AutofillHints.email,
+                            ],
+                      enableSuggestions: true,
+                      autocorrect: false,
                       decoration: const InputDecoration(
                         labelText: 'Email address',
                         hintText: 'name@example.com',
@@ -192,6 +243,14 @@ class _AuthViewState extends State<AuthView> {
                     TextFormField(
                       controller: _passwordController,
                       obscureText: _obscurePassword,
+                      // password = existing credential (browser autofills the
+                      // saved password automatically, just like the email);
+                      // newPassword = new credential (browser offers to save).
+                      autofillHints: _isRegistering
+                          ? const [AutofillHints.newPassword]
+                          : const [AutofillHints.password],
+                      enableSuggestions: !_isRegistering,
+                      autocorrect: false,
                       textInputAction: _isRegistering ? TextInputAction.next : TextInputAction.done,
                       onFieldSubmitted: _isRegistering ? null : (_) => _submit(),
                       decoration: InputDecoration(
@@ -215,6 +274,9 @@ class _AuthViewState extends State<AuthView> {
                       TextFormField(
                         controller: _confirmPasswordController,
                         obscureText: _obscureConfirmPassword,
+                        autofillHints: const [AutofillHints.newPassword],
+                        enableSuggestions: false,
+                        autocorrect: false,
                         textInputAction: TextInputAction.done,
                         onFieldSubmitted: (_) => _submit(),
                         decoration: InputDecoration(
@@ -241,10 +303,54 @@ class _AuthViewState extends State<AuthView> {
                         },
                       ),
                     ],
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        SizedBox(
+                          height: 24,
+                          width: 24,
+                          child: Checkbox(
+                            value: _rememberMe,
+                            activeColor: AppTheme.primary,
+                            onChanged: _isBusy
+                                ? null
+                                : (v) => setState(
+                                      () => _rememberMe = v ?? true,
+                                    ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        GestureDetector(
+                          onTap: _isBusy
+                              ? null
+                              : () => setState(
+                                    () => _rememberMe = !_rememberMe,
+                                  ),
+                          child: const Text(
+                            'Remember me',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: AppTheme.textPrimary,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                        const Spacer(),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
                     ElevatedButton(
                       onPressed: _isBusy ? null : _submit,
                       child: Text(_isRegistering ? 'Create account' : 'Sign in'),
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      'Works offline — no Wi-Fi or data needed.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: AppTheme.textSecondary,
+                      ),
                     ),
                     if (_isBusy)
                       const Padding(
@@ -312,6 +418,7 @@ class _AuthViewState extends State<AuthView> {
                       ),
                     ),
                   ],
+                ),
                 ),
               ),
             ),
