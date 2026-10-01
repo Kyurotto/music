@@ -47,3 +47,5 @@ app.*.map.json
 .code-review-graph/
 *.db
 *.db-journal
+*.db-wal
+*.db-shm

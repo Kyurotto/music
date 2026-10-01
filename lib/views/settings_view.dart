@@ -10,11 +10,12 @@ class SettingsView extends StatefulWidget {
 
   final MusicPlayerController? controller;
 
-  static Future<void> show(BuildContext context, {MusicPlayerController? controller}) {
+  static Future<void> show(
+    BuildContext context, {
+    MusicPlayerController? controller,
+  }) {
     return Navigator.of(context).push<void>(
-      MaterialPageRoute(
-        builder: (_) => SettingsView(controller: controller),
-      ),
+      MaterialPageRoute(builder: (_) => SettingsView(controller: controller)),
     );
   }
 
@@ -63,19 +64,6 @@ class _SettingsViewState extends State<SettingsView> {
   void initState() {
     super.initState();
     _loadSettings();
-    _refreshRole();
-  }
-
-  /// Role is DB-driven (employees.user_id == users.id) — refresh once so the
-  /// read-only badge always reflects the current database state. Never throws:
-  /// a failed refresh simply keeps the current display value.
-  Future<void> _refreshRole() async {
-    try {
-      await AuthService.instance.refreshRoleFromDatabase();
-    } catch (_) {
-      // Keep the current role display; Settings must never break on this.
-    }
-    if (mounted) setState(() {});
   }
 
   Future<void> _loadSettings() async {
@@ -84,7 +72,8 @@ class _SettingsViewState extends State<SettingsView> {
       if (!mounted) return;
       setState(() {
         if (settings.containsKey('crossfade')) {
-          _crossfadeSeconds = double.tryParse(settings['crossfade']!) ?? _crossfadeSeconds;
+          _crossfadeSeconds =
+              double.tryParse(settings['crossfade']!) ?? _crossfadeSeconds;
         }
         if (settings.containsKey('gapless_playback')) {
           _gaplessPlayback = settings['gapless_playback'] == 'true';
@@ -120,7 +109,8 @@ class _SettingsViewState extends State<SettingsView> {
           _allowExplicit = settings['allow_explicit'] == 'true';
         }
         if (settings.containsKey('cache_size_mb')) {
-          _cacheSizeMb = int.tryParse(settings['cache_size_mb']!) ?? _cacheSizeMb;
+          _cacheSizeMb =
+              int.tryParse(settings['cache_size_mb']!) ?? _cacheSizeMb;
         }
       });
     } catch (e) {
@@ -152,9 +142,14 @@ class _SettingsViewState extends State<SettingsView> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 8,
+                ),
                 child: Text(
-                  isStreaming ? 'Streaming Audio Quality' : 'Download Audio Quality',
+                  isStreaming
+                      ? 'Streaming Audio Quality'
+                      : 'Download Audio Quality',
                   style: const TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
@@ -168,8 +163,12 @@ class _SettingsViewState extends State<SettingsView> {
                   title: Text(
                     opt,
                     style: TextStyle(
-                      color: opt == current ? AppTheme.primary : AppTheme.textPrimary,
-                      fontWeight: opt == current ? FontWeight.w600 : FontWeight.normal,
+                      color: opt == current
+                          ? AppTheme.primary
+                          : AppTheme.textPrimary,
+                      fontWeight: opt == current
+                          ? FontWeight.w600
+                          : FontWeight.normal,
                     ),
                   ),
                   trailing: opt == current
@@ -229,13 +228,19 @@ class _SettingsViewState extends State<SettingsView> {
                 (preset) => ListTile(
                   leading: Icon(
                     Icons.graphic_eq_rounded,
-                    color: preset == _equalizerPreset ? AppTheme.primary : AppTheme.textMuted,
+                    color: preset == _equalizerPreset
+                        ? AppTheme.primary
+                        : AppTheme.textMuted,
                   ),
                   title: Text(
                     preset,
                     style: TextStyle(
-                      color: preset == _equalizerPreset ? AppTheme.primary : AppTheme.textPrimary,
-                      fontWeight: preset == _equalizerPreset ? FontWeight.w600 : FontWeight.normal,
+                      color: preset == _equalizerPreset
+                          ? AppTheme.primary
+                          : AppTheme.textPrimary,
+                      fontWeight: preset == _equalizerPreset
+                          ? FontWeight.w600
+                          : FontWeight.normal,
                     ),
                   ),
                   trailing: preset == _equalizerPreset
@@ -253,9 +258,9 @@ class _SettingsViewState extends State<SettingsView> {
     if (selected != null && mounted) {
       setState(() => _equalizerPreset = selected);
       _saveSetting('equalizer_preset', selected);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Equalizer set to "$selected"')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Equalizer set to "$selected"')));
     }
   }
 
@@ -268,7 +273,13 @@ class _SettingsViewState extends State<SettingsView> {
           borderRadius: BorderRadius.circular(20),
           side: const BorderSide(color: AppTheme.border),
         ),
-        title: const Text('Clear audio cache?', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.bold)),
+        title: const Text(
+          'Clear audio cache?',
+          style: TextStyle(
+            color: AppTheme.textPrimary,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
         content: const Text(
           'This will free up storage space. Your playlists, library tracks, and account data will NOT be deleted.',
           style: TextStyle(color: AppTheme.textSecondary, height: 1.4),
@@ -276,7 +287,10 @@ class _SettingsViewState extends State<SettingsView> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel', style: TextStyle(color: AppTheme.textSecondary)),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: AppTheme.textSecondary),
+            ),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
@@ -328,7 +342,13 @@ class _SettingsViewState extends State<SettingsView> {
           children: [
             Icon(Icons.logout_rounded, color: Colors.redAccent, size: 24),
             SizedBox(width: 10),
-            Text('Log out?', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.bold)),
+            Text(
+              'Log out?',
+              style: TextStyle(
+                color: AppTheme.textPrimary,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
           ],
         ),
         content: Text(
@@ -338,7 +358,10 @@ class _SettingsViewState extends State<SettingsView> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel', style: TextStyle(color: AppTheme.textSecondary)),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: AppTheme.textSecondary),
+            ),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
@@ -378,7 +401,10 @@ class _SettingsViewState extends State<SettingsView> {
         backgroundColor: AppTheme.surface,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_rounded, color: AppTheme.textPrimary),
+          icon: const Icon(
+            Icons.arrow_back_rounded,
+            color: AppTheme.textPrimary,
+          ),
           onPressed: () => Navigator.of(context).pop(),
         ),
         title: const Text(
@@ -404,10 +430,13 @@ class _SettingsViewState extends State<SettingsView> {
               children: [
                 // 1. User Profile Header Card
                 _buildProfileCard(),
-                const SizedBox(height: 16),
+                const SizedBox(height: 24),
 
                 // 2. Playback Settings Section
-                _buildSectionHeader(Icons.play_circle_outline_rounded, 'Playback'),
+                _buildSectionHeader(
+                  Icons.play_circle_outline_rounded,
+                  'Playback',
+                ),
                 _buildCard([
                   // Crossfade Slider
                   Padding(
@@ -441,22 +470,29 @@ class _SettingsViewState extends State<SettingsView> {
                         const SizedBox(height: 4),
                         const Text(
                           'Allows you to crossfade smoothly between songs',
-                          style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: AppTheme.textMuted,
+                          ),
                         ),
                         SliderTheme(
                           data: SliderTheme.of(context).copyWith(
                             activeTrackColor: AppTheme.primary,
                             inactiveTrackColor: AppTheme.border,
                             thumbColor: AppTheme.primary,
-                            overlayColor: AppTheme.primary.withValues(alpha: 0.2),
+                            overlayColor: AppTheme.primary.withValues(
+                              alpha: 0.2,
+                            ),
                           ),
                           child: Slider(
                             value: _crossfadeSeconds,
                             min: 0,
                             max: 12,
                             divisions: 12,
-                            onChanged: (val) => setState(() => _crossfadeSeconds = val),
-                            onChangeEnd: (val) => _saveSetting('crossfade', val.toString()),
+                            onChanged: (val) =>
+                                setState(() => _crossfadeSeconds = val),
+                            onChangeEnd: (val) =>
+                                _saveSetting('crossfade', val.toString()),
                           ),
                         ),
                       ],
@@ -479,7 +515,8 @@ class _SettingsViewState extends State<SettingsView> {
                   // Automix
                   _buildSwitchTile(
                     title: 'Automix',
-                    subtitle: 'Allow smooth AI-curated transitions between tracks',
+                    subtitle:
+                        'Allow smooth AI-curated transitions between tracks',
                     value: _automix,
                     onChanged: (val) {
                       setState(() => _automix = val);
@@ -503,7 +540,8 @@ class _SettingsViewState extends State<SettingsView> {
                   // Mono Audio
                   _buildSwitchTile(
                     title: 'Mono Audio',
-                    subtitle: 'Makes the left and right speakers play the same audio',
+                    subtitle:
+                        'Makes the left and right speakers play the same audio',
                     value: _monoAudio,
                     onChanged: (val) {
                       setState(() => _monoAudio = val);
@@ -515,7 +553,8 @@ class _SettingsViewState extends State<SettingsView> {
                   // Autoplay
                   _buildSwitchTile(
                     title: 'Autoplay',
-                    subtitle: 'Keep listening to similar songs when your queue ends',
+                    subtitle:
+                        'Keep listening to similar songs when your queue ends',
                     value: _autoplay,
                     onChanged: (val) {
                       setState(() => _autoplay = val);
@@ -529,23 +568,68 @@ class _SettingsViewState extends State<SettingsView> {
                 _buildSectionHeader(Icons.equalizer_rounded, 'Audio Quality'),
                 _buildCard([
                   ListTile(
-                    title: const Text('Streaming Quality', style: TextStyle(fontSize: 15, color: AppTheme.textPrimary)),
-                    subtitle: Text(_streamingQuality, style: const TextStyle(fontSize: 13, color: AppTheme.primary)),
-                    trailing: const Icon(Icons.chevron_right_rounded, color: AppTheme.textSecondary),
+                    title: const Text(
+                      'Streaming Quality',
+                      style: TextStyle(
+                        fontSize: 15,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                    subtitle: Text(
+                      _streamingQuality,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        color: AppTheme.primary,
+                      ),
+                    ),
+                    trailing: const Icon(
+                      Icons.chevron_right_rounded,
+                      color: AppTheme.textSecondary,
+                    ),
                     onTap: () => _showQualityPicker(isStreaming: true),
                   ),
                   const Divider(height: 1, color: AppTheme.border),
                   ListTile(
-                    title: const Text('Download Quality', style: TextStyle(fontSize: 15, color: AppTheme.textPrimary)),
-                    subtitle: Text(_downloadQuality, style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
-                    trailing: const Icon(Icons.chevron_right_rounded, color: AppTheme.textSecondary),
+                    title: const Text(
+                      'Download Quality',
+                      style: TextStyle(
+                        fontSize: 15,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                    subtitle: Text(
+                      _downloadQuality,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        color: AppTheme.textSecondary,
+                      ),
+                    ),
+                    trailing: const Icon(
+                      Icons.chevron_right_rounded,
+                      color: AppTheme.textSecondary,
+                    ),
                     onTap: () => _showQualityPicker(isStreaming: false),
                   ),
                   const Divider(height: 1, color: AppTheme.border),
                   ListTile(
-                    title: const Text('Equalizer', style: TextStyle(fontSize: 15, color: AppTheme.textPrimary)),
-                    subtitle: Text(_equalizerPreset, style: const TextStyle(fontSize: 13, color: AppTheme.primary)),
-                    trailing: const Icon(Icons.tune_rounded, color: AppTheme.primary),
+                    title: const Text(
+                      'Equalizer',
+                      style: TextStyle(
+                        fontSize: 15,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                    subtitle: Text(
+                      _equalizerPreset,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        color: AppTheme.primary,
+                      ),
+                    ),
+                    trailing: const Icon(
+                      Icons.tune_rounded,
+                      color: AppTheme.primary,
+                    ),
                     onTap: _showEqualizerPicker,
                   ),
                 ]),
@@ -556,7 +640,8 @@ class _SettingsViewState extends State<SettingsView> {
                 _buildCard([
                   _buildSwitchTile(
                     title: 'Animated Audio Wave Visualizer',
-                    subtitle: 'Show live frequency wave effect in the player bar',
+                    subtitle:
+                        'Show live frequency wave effect in the player bar',
                     value: _canvasAnimation,
                     onChanged: (val) {
                       setState(() => _canvasAnimation = val);
@@ -566,7 +651,8 @@ class _SettingsViewState extends State<SettingsView> {
                   const Divider(height: 1, color: AppTheme.border),
                   _buildSwitchTile(
                     title: 'Show Lyrics Automatically',
-                    subtitle: 'Pop up the Spotify-style lyrics sheet when starting a song',
+                    subtitle:
+                        'Pop up the Spotify-style lyrics sheet when starting a song',
                     value: _autoLyrics,
                     onChanged: (val) {
                       setState(() => _autoLyrics = val);
@@ -597,8 +683,21 @@ class _SettingsViewState extends State<SettingsView> {
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            const Text('Local Audio Cache', style: TextStyle(fontSize: 14, color: AppTheme.textPrimary)),
-                            Text('$_cacheSizeMb MB', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppTheme.textPrimary)),
+                            const Text(
+                              'Local Audio Cache',
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: AppTheme.textPrimary,
+                              ),
+                            ),
+                            Text(
+                              '$_cacheSizeMb MB',
+                              style: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                                color: AppTheme.textPrimary,
+                              ),
+                            ),
                           ],
                         ),
                         const SizedBox(height: 10),
@@ -608,15 +707,24 @@ class _SettingsViewState extends State<SettingsView> {
                             children: [
                               Expanded(
                                 flex: _cacheSizeMb > 0 ? 15 : 1,
-                                child: Container(height: 8, color: AppTheme.primary),
+                                child: Container(
+                                  height: 8,
+                                  color: AppTheme.primary,
+                                ),
                               ),
                               Expanded(
                                 flex: 20,
-                                child: Container(height: 8, color: Colors.blueAccent),
+                                child: Container(
+                                  height: 8,
+                                  color: Colors.blueAccent,
+                                ),
                               ),
                               Expanded(
                                 flex: 65,
-                                child: Container(height: 8, color: AppTheme.border),
+                                child: Container(
+                                  height: 8,
+                                  color: AppTheme.border,
+                                ),
                               ),
                             ],
                           ),
@@ -624,21 +732,43 @@ class _SettingsViewState extends State<SettingsView> {
                         const SizedBox(height: 8),
                         const Row(
                           children: [
-                            _StorageLegend(color: AppTheme.primary, label: 'Audio Cache'),
+                            _StorageLegend(
+                              color: AppTheme.primary,
+                              label: 'Audio Cache',
+                            ),
                             SizedBox(width: 16),
-                            _StorageLegend(color: Colors.blueAccent, label: 'Playlists & Tracks'),
+                            _StorageLegend(
+                              color: Colors.blueAccent,
+                              label: 'Playlists & Tracks',
+                            ),
                             SizedBox(width: 16),
-                            _StorageLegend(color: AppTheme.border, label: 'Free Space'),
+                            _StorageLegend(
+                              color: AppTheme.border,
+                              label: 'Free Space',
+                            ),
                           ],
                         ),
                         const SizedBox(height: 14),
                         OutlinedButton.icon(
                           onPressed: _cacheSizeMb > 0 ? _clearCache : null,
-                          icon: const Icon(Icons.delete_sweep_outlined, size: 18),
-                          label: Text(_cacheSizeMb > 0 ? 'Clear Audio Cache' : 'Cache is Clean (0 MB)'),
+                          icon: const Icon(
+                            Icons.delete_sweep_outlined,
+                            size: 18,
+                          ),
+                          label: Text(
+                            _cacheSizeMb > 0
+                                ? 'Clear Audio Cache'
+                                : 'Cache is Clean (0 MB)',
+                          ),
                           style: OutlinedButton.styleFrom(
-                            foregroundColor: _cacheSizeMb > 0 ? AppTheme.textPrimary : AppTheme.textMuted,
-                            side: BorderSide(color: _cacheSizeMb > 0 ? AppTheme.border : AppTheme.border.withValues(alpha: 0.3)),
+                            foregroundColor: _cacheSizeMb > 0
+                                ? AppTheme.textPrimary
+                                : AppTheme.textMuted,
+                            side: BorderSide(
+                              color: _cacheSizeMb > 0
+                                  ? AppTheme.border
+                                  : AppTheme.border.withValues(alpha: 0.3),
+                            ),
                           ),
                         ),
                       ],
@@ -652,7 +782,11 @@ class _SettingsViewState extends State<SettingsView> {
                   margin: const EdgeInsets.symmetric(horizontal: 16),
                   child: OutlinedButton.icon(
                     onPressed: _handleLogout,
-                    icon: const Icon(Icons.logout_rounded, color: Colors.redAccent, size: 20),
+                    icon: const Icon(
+                      Icons.logout_rounded,
+                      color: Colors.redAccent,
+                      size: 20,
+                    ),
                     label: const Text(
                       'Log out',
                       style: TextStyle(
@@ -663,7 +797,10 @@ class _SettingsViewState extends State<SettingsView> {
                     ),
                     style: OutlinedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 16),
-                      side: BorderSide(color: Colors.redAccent.withValues(alpha: 0.5), width: 1.5),
+                      side: BorderSide(
+                        color: Colors.redAccent.withValues(alpha: 0.5),
+                        width: 1.5,
+                      ),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(30),
                       ),
@@ -691,7 +828,6 @@ class _SettingsViewState extends State<SettingsView> {
   Widget _buildProfileCard() {
     final displayName = AuthService.instance.userDisplayName;
     final email = AuthService.instance.userEmail;
-    final role = AuthService.instance.userRole;
     final initials = AuthService.instance.userInitials;
 
     return Container(
@@ -747,51 +883,22 @@ class _SettingsViewState extends State<SettingsView> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Flexible(
-                      child: Text(
-                        displayName,
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: AppTheme.textPrimary,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Tooltip(
-                      message: 'Role is granted via the Employees database',
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: AppTheme.primary.withValues(alpha: 0.2),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: AppTheme.primary.withValues(alpha: 0.5)),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              role.toUpperCase(),
-                              style: const TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.w700,
-                                color: AppTheme.primary,
-                                letterSpacing: 0.6,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
+                Text(
+                  displayName,
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: AppTheme.textPrimary,
+                  ),
+                  overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 4),
                 Text(
                   email,
-                  style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary),
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: AppTheme.textSecondary,
+                  ),
                   overflow: TextOverflow.ellipsis,
                 ),
               ],
@@ -884,7 +991,10 @@ class _StorageLegend extends StatelessWidget {
           decoration: BoxDecoration(color: color, shape: BoxShape.circle),
         ),
         const SizedBox(width: 4),
-        Text(label, style: const TextStyle(fontSize: 10, color: AppTheme.textMuted)),
+        Text(
+          label,
+          style: const TextStyle(fontSize: 10, color: AppTheme.textMuted),
+        ),
       ],
     );
   }

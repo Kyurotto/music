@@ -262,13 +262,12 @@ class SidebarNav extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                         ),
                         Text(
-                          AuthService.instance.userRole.toUpperCase(),
+                          AuthService.instance.userEmail,
                           style: const TextStyle(
                             fontSize: 10,
-                            fontWeight: FontWeight.w700,
-                            color: AppTheme.primary,
-                            letterSpacing: 0.5,
+                            color: AppTheme.textSecondary,
                           ),
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ],
                     ),
