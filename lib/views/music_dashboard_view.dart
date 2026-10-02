@@ -12,6 +12,7 @@ import '../widgets/right_panel.dart';
 import '../widgets/bottom_player_bar.dart';
 import '../widgets/spotify_lyrics_sheet.dart';
 import '../widgets/spotify_import_dialog.dart';
+import '../services/display_rate_service.dart';
 import 'settings_view.dart';
 
 class MusicDashboardView extends StatefulWidget {
@@ -28,11 +29,33 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
   String? _selectedPlaylistId;
   StreamSubscription<Object?>? _authSub;
 
+  String? _lastSongId;
+  bool _lastIsPlaying = false;
+  int _lastNavIndex = 0;
+  String _lastGenre = 'All';
+  String _lastQuery = '';
+  int _lastSongCount = 0;
+  int _lastPlaylistCount = 0;
+  PlaybackRepeatMode _lastRepeatMode = PlaybackRepeatMode.all;
+  bool _lastShuffle = false;
+  bool _lastIsMuted = false;
+
   @override
   void initState() {
     super.initState();
     _controller = MusicPlayerController();
+    _lastSongId = _controller.currentSong?.id;
+    _lastIsPlaying = _controller.isPlaying;
+    _lastNavIndex = _controller.currentNavIndex;
+    _lastGenre = _controller.selectedGenre;
+    _lastQuery = _controller.searchQuery;
+    _lastSongCount = _controller.allSongs.length;
+    _lastPlaylistCount = _controller.playlists.length;
+    _lastRepeatMode = _controller.repeatMode;
+    _lastShuffle = _controller.isShuffle;
+    _lastIsMuted = _controller.isMuted;
     _controller.addListener(_onStateChange);
+    DisplayRateService.instance.initialize();
     _authSub = AuthService.instance.authChanges.listen((_) {
       if (mounted) {
         _controller.loadSavedPlaylists();
@@ -41,7 +64,40 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
   }
 
   void _onStateChange() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    final currentSongId = _controller.currentSong?.id;
+    final isPlaying = _controller.isPlaying;
+    final navIndex = _controller.currentNavIndex;
+    final genre = _controller.selectedGenre;
+    final query = _controller.searchQuery;
+    final songCount = _controller.allSongs.length;
+    final playlistCount = _controller.playlists.length;
+    final repeatMode = _controller.repeatMode;
+    final shuffle = _controller.isShuffle;
+    final isMuted = _controller.isMuted;
+
+    if (currentSongId != _lastSongId ||
+        isPlaying != _lastIsPlaying ||
+        navIndex != _lastNavIndex ||
+        genre != _lastGenre ||
+        query != _lastQuery ||
+        songCount != _lastSongCount ||
+        playlistCount != _lastPlaylistCount ||
+        repeatMode != _lastRepeatMode ||
+        shuffle != _lastShuffle ||
+        isMuted != _lastIsMuted) {
+      _lastSongId = currentSongId;
+      _lastIsPlaying = isPlaying;
+      _lastNavIndex = navIndex;
+      _lastGenre = genre;
+      _lastQuery = query;
+      _lastSongCount = songCount;
+      _lastPlaylistCount = playlistCount;
+      _lastRepeatMode = repeatMode;
+      _lastShuffle = shuffle;
+      _lastIsMuted = isMuted;
+      setState(() {});
+    }
   }
 
   @override
@@ -250,19 +306,25 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
 
                       // Right Activity / Now Playing Panel on Wide Screens
                       if (isDesktop)
-                        RightActivityPanel(
-                          controller: _controller,
-                          onOpenLyrics: _showLyricsForCurrentSong,
-                          onPlaySong: _playSongWithLyrics,
+                        ListenableBuilder(
+                          listenable: _controller,
+                          builder: (context, _) => RightActivityPanel(
+                            controller: _controller,
+                            onOpenLyrics: _showLyricsForCurrentSong,
+                            onPlaySong: _playSongWithLyrics,
+                          ),
                         ),
                     ],
                   ),
                 ),
 
                 // Persistent Bottom Player
-                BottomPlayerBar(
-                  controller: _controller,
-                  onOpenLyrics: _showLyricsForCurrentSong,
+                ListenableBuilder(
+                  listenable: _controller,
+                  builder: (context, _) => BottomPlayerBar(
+                    controller: _controller,
+                    onOpenLyrics: _showLyricsForCurrentSong,
+                  ),
                 ),
               ],
             ),

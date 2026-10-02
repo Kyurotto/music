@@ -261,8 +261,46 @@ void main() {
     controller.dispose();
   });
 
+  test('saveImportedPlaylistOffline saves per user with no cloud dependency', () async {
+    // Local-only style user id (no Firebase UID), as created offline.
+    const userId = '2';
+    const playlistId = 'offline-playlist-1';
 
+    await LocalDatabase.instance.saveImportedPlaylistOffline(
+      id: playlistId,
+      userId: userId,
+      title: 'Offline Mix',
+      spotifyUrl: 'https://open.spotify.com/playlist/offline123',
+      songs: [
+        {
+          'id': 'offline-song-1',
+          'title': 'Offline Track',
+          'artist': 'Offline Artist',
+        },
+      ],
+    );
 
+    final mine = await LocalDatabase.instance.getImportedPlaylistsForUser(userId);
+    expect(mine.any((p) => p['id'] == playlistId), isTrue);
+    final saved = mine.firstWhere((p) => p['id'] == playlistId);
+    expect(saved['spotify_url'], 'https://open.spotify.com/playlist/offline123');
+    expect(saved['songs'], hasLength(1));
+
+    // Another user sees none of it.
+    final other = await LocalDatabase.instance.getImportedPlaylistsForUser('3');
+    expect(other.any((p) => p['id'] == playlistId), isFalse);
+
+    // Ownership still enforced offline.
+    expect(
+      () => LocalDatabase.instance.saveImportedPlaylistOffline(
+        id: playlistId,
+        userId: '3',
+        title: 'Hijack Attempt',
+        songs: const [],
+      ),
+      throwsA(isA<StateError>()),
+    );
+  });
 
   test('employees table has EMP-001 preserved and never removed', () async {
     await LocalDatabase.instance.seedEmployeeIfNeeded();

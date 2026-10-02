@@ -59,7 +59,9 @@ void main() {
     expect(playBtn, findsOneWidget);
     await tester.tap(playBtn);
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 350));
+    // Allow online-check + audio load (DNS probe + setAudioSource timeout)
+    // to finish so no Timer stays pending at dispose.
+    await tester.pump(const Duration(seconds: 2));
 
     // Verify Spotify lyrics sheet pops up
     expect(find.text('PLAYING WITH LYRICS'), findsOneWidget);
@@ -98,7 +100,8 @@ void main() {
     expect(playBtn, findsOneWidget);
     await tester.tap(playBtn);
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 350));
+    // Allow online-check + audio load to finish so no Timer stays pending.
+    await tester.pump(const Duration(seconds: 2));
 
     // Dismiss lyrics sheet
     final closeBtn = find.byTooltip('Close lyrics');

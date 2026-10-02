@@ -3,14 +3,26 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:just_audio_background/just_audio_background.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'data/local_database.dart';
+import 'services/display_rate_service.dart';
 import 'theme/app_theme.dart';
 import 'views/auth_gate.dart';
 import 'views/music_dashboard_view.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  try {
+    await JustAudioBackground.init(
+      androidNotificationChannelId: 'com.music.app.channel.audio',
+      androidNotificationChannelName: 'Audio Playback',
+      androidNotificationOngoing: true,
+    );
+  } catch (e) {
+    debugPrint('[MusicApp] JustAudioBackground init failed: $e');
+  }
 
   // On desktop platforms, initialise the FFI-based SQLite implementation
   // before any database access so the native library is loaded in time.
@@ -20,6 +32,7 @@ Future<void> main() async {
   }
 
   await LocalDatabase.instance.initialize();
+  DisplayRateService.instance.initialize();
   // Initialize Firebase on every platform so Google OAuth can
   // return the real accurate profile. Guarded: local auth still works
   // when Firebase options are missing (e.g. desktop without config).

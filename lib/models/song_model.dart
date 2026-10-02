@@ -67,20 +67,55 @@ class Song {
     return '$minutes:${seconds.toString().padLeft(2, '0')}';
   }
 
+  static Duration? parseLyricTimestamp(String line) {
+    final match = RegExp(r'^\[(\d+):(\d+\.?\d*)\]').firstMatch(line);
+    if (match != null) {
+      final min = int.parse(match.group(1)!);
+      final sec = double.parse(match.group(2)!);
+      return Duration(milliseconds: (min * 60000 + sec * 1000).round());
+    }
+    return null;
+  }
+
+  static String stripTimestamp(String line) {
+    return line.replaceAll(RegExp(r'^\s*\[.*?\]'), '').trim();
+  }
+
   /// Which lyric line should be active for this playback position.
   ///
-  /// Plain (untimed) lyric lines are spread evenly across the track so the
-  /// sheet can auto-track without synced timestamps. Returns 0 when empty
-  /// or when the duration is unknown.
+  /// Uses synced timestamps if available. Otherwise, plain (untimed) lyric 
+  /// lines are spread evenly across the track.
   static int lyricsLineIndexForProgress(
     List<String> lyrics,
     Duration position,
     Duration total,
   ) {
-    if (lyrics.isEmpty || total <= Duration.zero) return 0;
+    if (lyrics.isEmpty) return 0;
+    final effectiveTotal =
+        total > Duration.zero ? total : const Duration(minutes: 3);
+
+    if (lyrics.any((l) => l.startsWith('['))) {
+      int lastIndex = 0;
+      for (int i = 0; i < lyrics.length; i++) {
+        final time = parseLyricTimestamp(lyrics[i]);
+        if (time != null) {
+          if (position >= time) {
+            lastIndex = i;
+          } else {
+            break;
+          }
+        } else {
+          if (i > 0 && lastIndex == i - 1) {
+            lastIndex = i;
+          }
+        }
+      }
+      return lastIndex;
+    }
+
     final posUs = position.inMicroseconds;
-    final totalUs = total.inMicroseconds;
-    if (posUs <= 0) return 0;
+    final totalUs = effectiveTotal.inMicroseconds;
+    if (posUs <= 0 || totalUs <= 0) return 0;
     final progress = posUs / totalUs;
     if (progress >= 1) return lyrics.length - 1;
     final idx = (progress * lyrics.length).floor();
@@ -96,10 +131,15 @@ class Song {
     int lineIndex,
     Duration total,
   ) {
-    if (lyrics.isEmpty || total <= Duration.zero) return Duration.zero;
+    if (lyrics.isEmpty) return Duration.zero;
+    final effectiveTotal =
+        total > Duration.zero ? total : const Duration(minutes: 3);
     final clamped = lineIndex.clamp(0, lyrics.length - 1).toInt();
-    final micros =
-        (total.inMicroseconds * clamped) ~/ lyrics.length;
+
+    final time = parseLyricTimestamp(lyrics[clamped]);
+    if (time != null) return time;
+
+    final micros = (effectiveTotal.inMicroseconds * clamped) ~/ lyrics.length;
     return Duration(microseconds: micros);
   }
 }
