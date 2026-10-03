@@ -55,7 +55,7 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
   }
 
   Future<void> _maybeFetchLyrics(Song song) async {
-    if (song.lyrics.isNotEmpty && !song.isPreview) return;
+    if (song.lyrics.isNotEmpty) return;
     // Auto-lookup for Spotify imports — bundled songs already ship lyrics,
     // but imported previews still need a full-length upgrade pass.
     if (!song.id.startsWith('spotify-')) return;
@@ -530,7 +530,7 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
                                     ),
                                   ),
                                   child: Text(
-                                    line,
+                                    Song.stripTimestamp(line),
                                     style: const TextStyle(
                                       fontSize: 21,
                                       height: 1.45,
@@ -580,16 +580,24 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
                           inactiveTrackColor: Colors.white24,
                           thumbColor: Colors.white,
                         ),
-                        child: Slider(
-                          value: widget.controller.currentPosition.inSeconds
-                              .toDouble()
-                              .clamp(0.0, widget.controller.currentDuration.inSeconds.toDouble()),
-                          min: 0.0,
-                          max: widget.controller.currentDuration.inSeconds.toDouble() > 0
-                              ? widget.controller.currentDuration.inSeconds.toDouble()
-                              : 1.0,
-                          onChanged: (val) {
-                            widget.controller.seekTo(Duration(seconds: val.toInt()));
+                        child: Builder(
+                          builder: (context) {
+                            final totalDur = widget.controller.displayDurationFor(currentSong);
+                            final maxMs = totalDur.inMilliseconds > 0
+                                ? totalDur.inMilliseconds.toDouble()
+                                : 1.0;
+                            final currentMs = widget.controller.currentPosition.inMilliseconds
+                                .toDouble()
+                                .clamp(0.0, maxMs);
+                            return Slider(
+                              value: currentMs,
+                              min: 0.0,
+                              max: maxMs,
+                              onChanged: (val) {
+                                widget.controller.seekTo(
+                                    Duration(milliseconds: val.toInt()));
+                              },
+                            );
                           },
                         ),
                       ),

@@ -177,7 +177,7 @@ void main() {
         title: 'Multo',
         artist: 'Cup of Joe',
       );
-      expect(enrichment.lyrics, ['hello', 'world']);
+      expect(enrichment.lyrics, ['[00:01.00] hello', '[00:05.50] world']);
       service.dispose();
     });
 

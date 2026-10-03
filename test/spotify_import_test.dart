@@ -222,5 +222,68 @@ void main() {
       expect(song.duration.inSeconds, 222);
       controller.dispose();
     });
+
+    test('replaces noisy spotify titles to match bundled local tracks', () {
+      final controller = MusicPlayerController();
+      controller.importSpotifyTracks(
+        playlistName: 'Clean Title Test',
+        tracks: [
+          SpotifyImportedTrack(
+            spotifyId: 'noisy-eminem-1',
+            title: 'Lose Yourself - From "8 Mile" Soundtrack',
+            artist: 'Eminem',
+            album: '8 Mile',
+            duration: const Duration(minutes: 5, seconds: 20),
+          ),
+          SpotifyImportedTrack(
+            spotifyId: 'noisy-taylor-1',
+            title: 'Blank Space (Taylor\'s Version)',
+            artist: 'Taylor Swift',
+            album: '1989',
+            duration: const Duration(minutes: 3, seconds: 50),
+          ),
+        ],
+      );
+
+      final songs = controller.songsForPlaylist(controller.playlists.last.id);
+      expect(songs.length, 2);
+      // Both should match the bundled audio tracks and have local asset audio
+      expect(songs[0].audioUrl, startsWith('assets/audio/'));
+      expect(songs[0].lyrics, isNotEmpty);
+      expect(songs[1].audioUrl, startsWith('assets/audio/'));
+      expect(songs[1].lyrics, isNotEmpty);
+      controller.dispose();
+    });
+
+    test('offline playback handles un-cached imported song by falling back to audio and generating lyrics', () async {
+      final controller = MusicPlayerController();
+      controller.importSpotifyTracks(
+        playlistName: 'Offline Test',
+        tracks: [
+          SpotifyImportedTrack(
+            spotifyId: 'offline-random-12345',
+            title: 'Custom Indie Track',
+            artist: 'Indie Artist',
+            album: 'Independent EP',
+            duration: const Duration(minutes: 3),
+            artworkUrl: 'https://example.com/unreachable-image.jpg',
+          ),
+        ],
+      );
+
+      final song = controller.songsForPlaylist(controller.playlists.last.id).single;
+      expect(song.audioUrl, isEmpty); // Starts un-cached
+
+      // Verify offline asset fallback is provided
+      final fallbackAsset = controller.getOfflineAssetFallbackForTesting(song);
+      expect(fallbackAsset, startsWith('assets/audio/'));
+
+      // Verify offline lyrics are generated so the lyrics tracker moves in sync
+      final lyrics = controller.ensureOfflineLyricsForTesting(song);
+      expect(lyrics, isNotEmpty);
+      expect(lyrics.first, contains('Custom Indie Track'));
+
+      controller.dispose();
+    });
   });
 }

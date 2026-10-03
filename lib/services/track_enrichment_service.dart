@@ -51,9 +51,10 @@ class TrackEnrichmentService {
 
   final http.Client _client;
 
-  static const _browserUserAgent =
+  static const browserUserAgent =
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
       '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+  static const _browserUserAgent = browserUserAgent;
 
   /// Enrich a single track: full-length audio (JioSaavn → YouTube → 30s
   /// previews) plus lyrics. Never throws — returns an empty enrichment
@@ -164,8 +165,11 @@ class TrackEnrichmentService {
     final cleanTitle = _cleanQuery(title);
     final cleanArtist = _cleanQuery(artist);
     if (cleanTitle.isEmpty) return null;
+    final primaryArtist = cleanArtist.split(RegExp(r'[,&/]')).first.trim();
     final queries = <String>[
       '$cleanTitle $cleanArtist'.trim(),
+      if (primaryArtist.isNotEmpty && primaryArtist != cleanArtist)
+        '$cleanTitle $primaryArtist'.trim(),
       cleanTitle,
     ];
 
@@ -499,6 +503,23 @@ class TrackEnrichmentService {
 
     final stream = await _ytAudioStream(best.videoId);
     if (stream == null || stream.url.isEmpty) return null;
+
+    // Verify stream accessibility. YouTube streams requiring PO-Token return 403.
+    // If blocked, discard so enrichment cleanly falls through to iTunes/Deezer.
+    if (stream.url.contains('googlevideo.com')) {
+      try {
+        final probe = await _client.head(
+          Uri.parse(stream.url),
+          headers: {'User-Agent': _browserUserAgent},
+        ).timeout(const Duration(seconds: 4));
+        if (probe.statusCode == 403) {
+          return null;
+        }
+      } catch (_) {
+        return null;
+      }
+    }
+
     return _PreviewHit(
       previewUrl: stream.url,
       artworkUrl: 'https://i.ytimg.com/vi/${best.videoId}/hqdefault.jpg',
@@ -1250,20 +1271,21 @@ class TrackEnrichmentService {
   }) {
     if (decoded['instrumental'] == true) return const [];
 
+    final synced = decoded['syncedLyrics'];
+    if (synced is String && synced.trim().isNotEmpty) {
+      final lines = _splitSyncedLines(synced);
+      if (lines.isNotEmpty) {
+        debugPrint(
+            'Lyrics (lrclib synced) for $title - $artist (${lines.length} lines)');
+        return lines;
+      }
+    }
+    
     final plain = decoded['plainLyrics'];
     if (plain is String && plain.trim().isNotEmpty) {
       final lines = _splitLyricLines(plain);
       if (lines.isNotEmpty) {
         debugPrint('Lyrics (lrclib) for $title - $artist (${lines.length} lines)');
-        return lines;
-      }
-    }
-    final synced = decoded['syncedLyrics'];
-    if (synced is String && synced.trim().isNotEmpty) {
-      final lines = _stripSyncedTimestamps(synced);
-      if (lines.isNotEmpty) {
-        debugPrint(
-            'Lyrics (lrclib synced) for $title - $artist (${lines.length} lines)');
         return lines;
       }
     }
@@ -1299,12 +1321,12 @@ class TrackEnrichmentService {
         .toList();
   }
 
-  static List<String> _stripSyncedTimestamps(String synced) {
-    // "[mm:ss.xx] lyric text" -> "lyric text"
+  static List<String> _splitSyncedLines(String synced) {
     final out = <String>[];
     for (final line in synced.split('\n')) {
-      final text = line.replaceAll(RegExp(r'^\s*\[.*?\]'), '').trim();
-      if (text.isNotEmpty) out.add(text);
+      final text = line.trim();
+      final content = text.replaceAll(RegExp(r'^\s*\[.*?\]'), '').trim();
+      if (content.isNotEmpty) out.add(text);
     }
     return out;
   }

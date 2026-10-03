@@ -390,19 +390,29 @@ class BottomPlayerBar extends StatelessWidget {
                           thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
                           overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
                         ),
-                        child: Slider(
-                          value: controller.currentPosition.inSeconds
-                              .toDouble()
-                              .clamp(0.0, controller.currentDuration.inSeconds.toDouble()),
-                          min: 0.0,
-                          max: controller.currentDuration.inSeconds.toDouble() > 0
-                              ? controller.currentDuration.inSeconds.toDouble()
-                              : 1.0,
-                          onChanged: song != null
-                              ? (val) {
-                                  controller.seekTo(Duration(seconds: val.toInt()));
-                                }
-                              : null,
+                        child: Builder(
+                          builder: (context) {
+                            final totalDur = song != null
+                                ? controller.displayDurationFor(song)
+                                : controller.currentDuration;
+                            final maxMs = totalDur.inMilliseconds > 0
+                                ? totalDur.inMilliseconds.toDouble()
+                                : 1.0;
+                            final currentMs = controller.currentPosition.inMilliseconds
+                                .toDouble()
+                                .clamp(0.0, maxMs);
+                            return Slider(
+                              value: currentMs,
+                              min: 0.0,
+                              max: maxMs,
+                              onChanged: song != null
+                                  ? (val) {
+                                      controller.seekTo(
+                                          Duration(milliseconds: val.toInt()));
+                                    }
+                                  : null,
+                            );
+                          },
                         ),
                       ),
                     ),
