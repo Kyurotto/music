@@ -188,13 +188,13 @@ class _AuthViewState extends State<AuthView> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const Icon(Icons.graphic_eq_rounded,
+                    Icon(Icons.graphic_eq_rounded,
                         size: 52, color: AppTheme.primary),
                     const SizedBox(height: 16),
                     Text(
                       _isRegistering ? 'Create account' : 'Welcome back',
                       textAlign: TextAlign.center,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 26,
                         fontWeight: FontWeight.bold,
                         color: AppTheme.textPrimary,
@@ -206,7 +206,7 @@ class _AuthViewState extends State<AuthView> {
                           ? 'Enter your email and choose a password to get started.'
                           : 'Sign in to continue to Pulse Music.',
                       textAlign: TextAlign.center,
-                      style: const TextStyle(color: AppTheme.textSecondary),
+                      style: TextStyle(color: AppTheme.textSecondary),
                     ),
                     const SizedBox(height: 24),
 
@@ -326,7 +326,7 @@ class _AuthViewState extends State<AuthView> {
                               : () => setState(
                                     () => _rememberMe = !_rememberMe,
                                   ),
-                          child: const Text(
+                          child: Text(
                             'Remember me',
                             style: TextStyle(
                               fontSize: 13,
@@ -344,7 +344,7 @@ class _AuthViewState extends State<AuthView> {
                       child: Text(_isRegistering ? 'Create account' : 'Sign in'),
                     ),
                     const SizedBox(height: 6),
-                    const Text(
+                    Text(
                       'Works offline — no Wi-Fi or data needed.',
                       textAlign: TextAlign.center,
                       style: TextStyle(
@@ -364,7 +364,7 @@ class _AuthViewState extends State<AuthView> {
                       children: [
                         Text(
                           _isRegistering ? 'Already have an account? ' : "Don't have an account? ",
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 13,
                             color: AppTheme.textSecondary,
                           ),
@@ -378,7 +378,7 @@ class _AuthViewState extends State<AuthView> {
                           ),
                           child: Text(
                             _isRegistering ? 'Sign in' : 'Create account',
-                            style: const TextStyle(
+                            style: TextStyle(
                               color: AppTheme.primary,
                               fontWeight: FontWeight.bold,
                               fontSize: 13,
@@ -394,7 +394,7 @@ class _AuthViewState extends State<AuthView> {
                         children: [
                           TextSpan(
                             text: 'Terms of Service',
-                            style: const TextStyle(
+                            style: TextStyle(
                               color: AppTheme.primary,
                               decoration: TextDecoration.underline,
                             ),
@@ -402,7 +402,7 @@ class _AuthViewState extends State<AuthView> {
                           const TextSpan(text: ' and '),
                           TextSpan(
                             text: 'Privacy Policy',
-                            style: const TextStyle(
+                            style: TextStyle(
                               color: AppTheme.primary,
                               decoration: TextDecoration.underline,
                             ),
@@ -411,7 +411,7 @@ class _AuthViewState extends State<AuthView> {
                         ],
                       ),
                       textAlign: TextAlign.center,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 12,
                         color: AppTheme.textSecondary,
                         height: 1.5,

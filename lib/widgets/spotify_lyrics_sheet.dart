@@ -194,37 +194,14 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
           });
         }
         final isPlaying = widget.controller.isPlaying;
-        final primaryColor = currentSong.gradientColors.isNotEmpty
-            ? currentSong.gradientColors.first
-            : const Color(0xFF6366F1);
-        final secondaryColor = currentSong.gradientColors.length > 1
-            ? currentSong.gradientColors.last
-            : const Color(0xFF1E1B4B);
 
         return Container(
           height: sheetHeight,
           decoration: BoxDecoration(
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [
-                primaryColor.withValues(alpha: 0.95),
-                secondaryColor.withValues(alpha: 0.85),
-                const Color(0xFF111422),
-                const Color(0xFF090B10),
-              ],
-              stops: const [0.0, 0.30, 0.65, 1.0],
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.7),
-                blurRadius: 32,
-                offset: const Offset(0, -6),
-              ),
-            ],
+            color: AppTheme.surface,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
             border: Border.all(
-              color: Colors.white.withValues(alpha: 0.15),
+              color: AppTheme.border,
               width: 1,
             ),
           ),
@@ -313,18 +290,8 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
                         height: 58,
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(12),
-                          gradient: LinearGradient(
-                            colors: currentSong.gradientColors,
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: currentSong.gradientColors.first.withValues(alpha: 0.4),
-                              blurRadius: 10,
-                              offset: const Offset(0, 4),
-                            ),
-                          ],
+                          color: AppTheme.cardSurfaceHover,
+                          border: Border.all(color: AppTheme.border, width: 1),
                         ),
                         child: const Center(
                           child: Icon(Icons.music_note_rounded, color: Colors.white, size: 28),
@@ -658,20 +625,14 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
                             height: 54,
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
-                              gradient: AppTheme.primaryGradient,
-                              boxShadow: [
-                                BoxShadow(
-                                  color: AppTheme.primary.withValues(alpha: 0.45),
-                                  blurRadius: 14,
-                                  offset: const Offset(0, 4),
-                                ),
-                              ],
+                              color: AppTheme.primary,
+                              border: Border.all(color: AppTheme.border, width: 1),
                             ),
                             child: IconButton(
                               icon: Icon(
                                 isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
                                 size: 30,
-                                color: Colors.white,
+                                color: AppTheme.background,
                               ),
                               tooltip: isPlaying ? 'Pause' : 'Play',
                               onPressed: widget.controller.togglePlayPause,

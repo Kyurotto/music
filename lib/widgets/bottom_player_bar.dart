@@ -21,8 +21,8 @@ class BottomPlayerBar extends StatelessWidget {
 
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFF0F131D),
-        border: const Border(
+        color: AppTheme.surface,
+        border: Border(
           top: BorderSide(color: AppTheme.border, width: 1),
         ),
         boxShadow: [
@@ -58,7 +58,7 @@ class BottomPlayerBar extends StatelessWidget {
         LinearProgressIndicator(
           value: progress,
           backgroundColor: Colors.white10,
-          valueColor: const AlwaysStoppedAnimation<Color>(AppTheme.primary),
+          valueColor: AlwaysStoppedAnimation<Color>(AppTheme.primary),
           minHeight: 2.5,
         ),
         Padding(
@@ -77,9 +77,8 @@ class BottomPlayerBar extends StatelessWidget {
                         height: 44,
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(8),
-                          gradient: LinearGradient(
-                            colors: song?.gradientColors ?? const [Color(0xFF334155), Color(0xFF1E293B)],
-                          ),
+                          color: AppTheme.surface,
+                          border: Border.all(color: AppTheme.border, width: 1),
                         ),
                         child: const Icon(Icons.music_note_rounded, color: Colors.white, size: 20),
                       ),
@@ -91,7 +90,7 @@ class BottomPlayerBar extends StatelessWidget {
                           children: [
                             Text(
                               song?.title ?? 'No track selected',
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 14,
                                 fontWeight: FontWeight.w600,
                                 color: AppTheme.textPrimary,
@@ -101,7 +100,7 @@ class BottomPlayerBar extends StatelessWidget {
                             ),
                             Text(
                               song?.artist ?? 'Select or add a track',
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 12,
                                 color: AppTheme.textMuted,
                               ),
@@ -132,14 +131,13 @@ class BottomPlayerBar extends StatelessWidget {
                 height: 40,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  gradient: song != null
-                      ? AppTheme.primaryGradient
-                      : const LinearGradient(colors: [Color(0xFF334155), Color(0xFF1E293B)]),
+                  color: song != null ? AppTheme.primary : AppTheme.cardSurfaceHover,
+                  border: Border.all(color: AppTheme.border, width: 1),
                 ),
                 child: IconButton(
                   icon: Icon(
                     isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                    color: Colors.white,
+                    color: song != null ? AppTheme.background : AppTheme.textMuted,
                     size: 24,
                   ),
                   onPressed: song != null ? controller.togglePlayPause : null,
@@ -148,7 +146,7 @@ class BottomPlayerBar extends StatelessWidget {
 
               // Next
               IconButton(
-                icon: const Icon(Icons.skip_next_rounded, size: 26, color: AppTheme.textPrimary),
+                icon: Icon(Icons.skip_next_rounded, size: 26, color: AppTheme.textPrimary),
                 onPressed: song != null ? controller.next : null,
               ),
             ],
@@ -180,17 +178,8 @@ class BottomPlayerBar extends StatelessWidget {
                           height: 52,
                           decoration: BoxDecoration(
                             borderRadius: BorderRadius.circular(10),
-                            gradient: LinearGradient(
-                              colors: song?.gradientColors ?? const [Color(0xFF334155), Color(0xFF1E293B)],
-                            ),
-                            boxShadow: song != null
-                                ? [
-                                    BoxShadow(
-                                      color: song.gradientColors.first.withValues(alpha: 0.3),
-                                      blurRadius: 8,
-                                    ),
-                                  ]
-                                : null,
+                            color: AppTheme.surface,
+                            border: Border.all(color: AppTheme.border, width: 1),
                           ),
                           child: const Center(
                             child: Icon(Icons.music_note_rounded, color: Colors.white, size: 24),
@@ -204,7 +193,7 @@ class BottomPlayerBar extends StatelessWidget {
                             children: [
                               Text(
                                 song?.title ?? 'No track selected',
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 14,
                                   fontWeight: FontWeight.bold,
                                   color: AppTheme.textPrimary,
@@ -215,7 +204,7 @@ class BottomPlayerBar extends StatelessWidget {
                               const SizedBox(height: 3),
                             Text(
                               song?.artist ?? 'Select a song to play',
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 12,
                                 color: AppTheme.textSecondary,
                               ),
@@ -225,7 +214,7 @@ class BottomPlayerBar extends StatelessWidget {
                             if (song?.isPreview == true)
                               Padding(
                                 padding: const EdgeInsets.only(top: 2),
-                                child: const Text(
+                                child: Text(
                                   '30s PREVIEW • UPGRADING TO FULL…',
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
@@ -239,8 +228,8 @@ class BottomPlayerBar extends StatelessWidget {
                                 ),
                               ),
                             if (song?.isFullTrack == true)
-                              const Padding(
-                                padding: EdgeInsets.only(top: 2),
+                              Padding(
+                                padding: const EdgeInsets.only(top: 2),
                                 child: Text(
                                   'FULL TRACK',
                                   maxLines: 1,
@@ -255,8 +244,8 @@ class BottomPlayerBar extends StatelessWidget {
                                 ),
                               ),
                             if (song?.isSilentPlaceholder == true)
-                              const Padding(
-                                padding: EdgeInsets.only(top: 2),
+                              Padding(
+                                padding: const EdgeInsets.only(top: 2),
                                 child: Text(
                                   'LOCATING AUDIO…',
                                   maxLines: 1,
@@ -314,35 +303,25 @@ class BottomPlayerBar extends StatelessWidget {
 
                     // Previous
                     IconButton(
-                      icon: const Icon(Icons.skip_previous_rounded, size: 26, color: AppTheme.textPrimary),
+                      icon: Icon(Icons.skip_previous_rounded, size: 26, color: AppTheme.textPrimary),
                       splashRadius: 20,
                       onPressed: song != null ? controller.previous : null,
                     ),
                     const SizedBox(width: 8),
 
-                    // Play / Pause with glow
+                    // Play / Pause
                     Container(
                       width: 44,
                       height: 44,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        gradient: song != null
-                            ? AppTheme.primaryGradient
-                            : const LinearGradient(colors: [Color(0xFF334155), Color(0xFF1E293B)]),
-                        boxShadow: song != null
-                            ? [
-                                BoxShadow(
-                                  color: AppTheme.primary.withValues(alpha: 0.45),
-                                  blurRadius: 12,
-                                  offset: const Offset(0, 2),
-                                ),
-                              ]
-                            : null,
+                        color: song != null ? AppTheme.primary : AppTheme.cardSurfaceHover,
+                        border: Border.all(color: AppTheme.border, width: 1),
                       ),
                       child: IconButton(
                         icon: Icon(
                           isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                          color: Colors.white,
+                          color: song != null ? AppTheme.background : AppTheme.textMuted,
                           size: 26,
                         ),
                         onPressed: song != null ? controller.togglePlayPause : null,
@@ -352,7 +331,7 @@ class BottomPlayerBar extends StatelessWidget {
 
                     // Next
                     IconButton(
-                      icon: const Icon(Icons.skip_next_rounded, size: 26, color: AppTheme.textPrimary),
+                      icon: Icon(Icons.skip_next_rounded, size: 26, color: AppTheme.textPrimary),
                       splashRadius: 20,
                       onPressed: song != null ? controller.next : null,
                     ),
@@ -381,7 +360,7 @@ class BottomPlayerBar extends StatelessWidget {
                   children: [
                     Text(
                       Song.formatTime(controller.currentPosition),
-                      style: const TextStyle(fontSize: 11, color: AppTheme.textMuted),
+                      style: TextStyle(fontSize: 11, color: AppTheme.textMuted),
                     ),
                     Expanded(
                       child: SliderTheme(
@@ -420,7 +399,7 @@ class BottomPlayerBar extends StatelessWidget {
                       song != null
                           ? Song.formatTime(controller.displayDurationFor(song))
                           : '0:00',
-                      style: const TextStyle(fontSize: 11, color: AppTheme.textMuted),
+                      style: TextStyle(fontSize: 11, color: AppTheme.textMuted),
                     ),
                   ],
                 ),
@@ -437,7 +416,7 @@ class BottomPlayerBar extends StatelessWidget {
                 // Lyrics button
                 if (onOpenLyrics != null)
                   IconButton(
-                    icon: const Icon(Icons.lyrics_rounded, size: 20, color: AppTheme.textSecondary),
+                    icon: Icon(Icons.lyrics_rounded, size: 20, color: AppTheme.textSecondary),
                     tooltip: 'View Lyrics',
                     splashRadius: 18,
                     onPressed: song != null ? onOpenLyrics : null,

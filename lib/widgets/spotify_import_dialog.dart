@@ -133,10 +133,10 @@ class _SpotifyImportDialogState extends State<SpotifyImportDialog> {
     return AlertDialog(
       backgroundColor: AppTheme.surface,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      title: const Row(
+      title: Row(
         children: [
           Icon(Icons.library_add_rounded, color: AppTheme.primary, size: 26),
-          SizedBox(width: 10),
+          const SizedBox(width: 10),
           Text(
             'Import from Spotify',
             style: TextStyle(color: AppTheme.textPrimary, fontSize: 18),
@@ -151,7 +151,7 @@ class _SpotifyImportDialogState extends State<SpotifyImportDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
+              Text(
                 'Paste a Spotify track, playlist, album, or artist link — or just type an artist name like "Bruno Mars" to import their top songs. We will import it into your library automatically.\n\nSpotify shares metadata only, so each track resolves to a full-length stream where available (30-second preview fallback) plus auto-fetched lyrics where available.',
                 style: TextStyle(color: AppTheme.textSecondary, fontSize: 13, height: 1.4),
               ),
@@ -159,28 +159,28 @@ class _SpotifyImportDialogState extends State<SpotifyImportDialog> {
               TextFormField(
                 controller: _linkController,
                 enabled: !_isLoading,
-                style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
+                style: TextStyle(color: AppTheme.textPrimary, fontSize: 14),
                 keyboardType: TextInputType.url,
                 decoration: InputDecoration(
                   hintText: 'https://open.spotify.com/playlist/... or "Bruno Mars"',
-                  hintStyle: const TextStyle(color: AppTheme.textMuted, fontSize: 13),
+                  hintStyle: TextStyle(color: AppTheme.textMuted, fontSize: 13),
                   filled: true,
                   fillColor: AppTheme.background,
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: AppTheme.border),
+                    borderSide: BorderSide(color: AppTheme.border),
                   ),
                   enabledBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: AppTheme.border),
+                    borderSide: BorderSide(color: AppTheme.border),
                   ),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: AppTheme.primary, width: 1.5),
+                    borderSide: BorderSide(color: AppTheme.primary, width: 1.5),
                   ),
                   suffixIcon: IconButton(
                     tooltip: 'Paste from clipboard',
-                    icon: const Icon(Icons.content_paste_rounded, size: 18, color: AppTheme.textSecondary),
+                    icon: Icon(Icons.content_paste_rounded, size: 18, color: AppTheme.textSecondary),
                     onPressed: _isLoading ? null : _pasteFromClipboard,
                   ),
                 ),
@@ -201,7 +201,7 @@ class _SpotifyImportDialogState extends State<SpotifyImportDialog> {
                     children: [
                       Text(
                         preview.title,
-                        style: const TextStyle(
+                        style: TextStyle(
                           color: AppTheme.textPrimary,
                           fontWeight: FontWeight.w700,
                           fontSize: 14,
@@ -211,7 +211,7 @@ class _SpotifyImportDialogState extends State<SpotifyImportDialog> {
                         const SizedBox(height: 2),
                         Text(
                           preview.subtitle,
-                          style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+                          style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
                         ),
                       ],
                       const SizedBox(height: 8),
@@ -219,7 +219,7 @@ class _SpotifyImportDialogState extends State<SpotifyImportDialog> {
                         preview.type == SpotifyLinkType.track
                             ? '1 track ready to import'
                             : '${preview.tracks.length} tracks ready to import',
-                        style: const TextStyle(color: AppTheme.accentGreen, fontSize: 12, fontWeight: FontWeight.w600),
+                        style: TextStyle(color: AppTheme.accentGreen, fontSize: 12, fontWeight: FontWeight.w600),
                       ),
                     ],
                   ),
@@ -228,19 +228,19 @@ class _SpotifyImportDialogState extends State<SpotifyImportDialog> {
                 DropdownButtonFormField<String?>(
                   initialValue: _targetPlaylistId,
                   dropdownColor: AppTheme.cardSurface,
-                  style: const TextStyle(color: AppTheme.textPrimary, fontSize: 13),
+                  style: TextStyle(color: AppTheme.textPrimary, fontSize: 13),
                   decoration: InputDecoration(
                     labelText: _playlistLabel,
-                    labelStyle: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+                    labelStyle: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
                     filled: true,
                     fillColor: AppTheme.background,
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
-                      borderSide: const BorderSide(color: AppTheme.border),
+                      borderSide: BorderSide(color: AppTheme.border),
                     ),
                     enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
-                      borderSide: const BorderSide(color: AppTheme.border),
+                      borderSide: BorderSide(color: AppTheme.border),
                     ),
                   ),
                   items: [
@@ -266,7 +266,7 @@ class _SpotifyImportDialogState extends State<SpotifyImportDialog> {
                 const SizedBox(height: 12),
                 Text(
                   _error!,
-                  style: const TextStyle(color: AppTheme.accentPink, fontSize: 12.5, height: 1.35),
+                  style: TextStyle(color: AppTheme.accentPink, fontSize: 12.5, height: 1.35),
                 ),
               ],
             ],
@@ -276,7 +276,7 @@ class _SpotifyImportDialogState extends State<SpotifyImportDialog> {
       actions: [
         TextButton(
           onPressed: _isLoading ? null : () => Navigator.of(context).pop(),
-          child: const Text('Cancel', style: TextStyle(color: AppTheme.textSecondary)),
+          child: Text('Cancel', style: TextStyle(color: AppTheme.textSecondary)),
         ),
         if (_preview == null)
           ElevatedButton.icon(

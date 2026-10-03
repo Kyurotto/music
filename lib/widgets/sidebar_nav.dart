@@ -25,7 +25,7 @@ class SidebarNav extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: 240,
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         color: AppTheme.surface,
         border: Border(
           right: BorderSide(color: AppTheme.border, width: 1),
@@ -43,15 +43,9 @@ class SidebarNav extends StatelessWidget {
                   width: 40,
                   height: 40,
                   decoration: BoxDecoration(
-                    gradient: AppTheme.primaryGradient,
+                    color: AppTheme.cardSurfaceHover,
                     borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: AppTheme.primary.withValues(alpha: 0.4),
-                        blurRadius: 12,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
+                    border: Border.all(color: AppTheme.border, width: 1),
                   ),
                   child: const Icon(
                     Icons.graphic_eq_rounded,
@@ -63,7 +57,7 @@ class SidebarNav extends StatelessWidget {
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
+                    Text(
                       'PULSE',
                       style: TextStyle(
                         fontSize: 18,
@@ -99,8 +93,8 @@ class SidebarNav extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Padding(
-                  padding: EdgeInsets.only(left: 12, bottom: 8),
+                Padding(
+                  padding: const EdgeInsets.only(left: 12, bottom: 8),
                   child: Text(
                     'MENU',
                     style: TextStyle(
@@ -150,7 +144,7 @@ class SidebarNav extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
             child: Row(
               children: [
-                const Expanded(
+                Expanded(
                   child: Text(
                     'PLAYLISTS',
                     style: TextStyle(
@@ -166,16 +160,7 @@ class SidebarNav extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     IconButton(
-                      icon: const Icon(Icons.download_rounded, size: 18, color: AppTheme.textSecondary),
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                      splashRadius: 14,
-                      tooltip: 'Import Spotify link',
-                      onPressed: onImportSpotify,
-                    ),
-                    const SizedBox(width: 4),
-                    IconButton(
-                      icon: const Icon(Icons.add_rounded, size: 18, color: AppTheme.textSecondary),
+                      icon: Icon(Icons.add_rounded, size: 18, color: AppTheme.textSecondary),
                       padding: EdgeInsets.zero,
                       constraints: const BoxConstraints(),
                       splashRadius: 14,
@@ -213,7 +198,7 @@ class SidebarNav extends StatelessWidget {
             borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
             child: Container(
               padding: const EdgeInsets.all(16),
-              decoration: const BoxDecoration(
+              decoration: BoxDecoration(
                 border: Border(
                   top: BorderSide(color: AppTheme.border, width: 1),
                 ),
@@ -225,15 +210,8 @@ class SidebarNav extends StatelessWidget {
                     height: 36,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      gradient: const LinearGradient(
-                        colors: [Color(0xFF8B5CF6), Color(0xFFEC4899)],
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: AppTheme.primary.withValues(alpha: 0.3),
-                          blurRadius: 8,
-                        ),
-                      ],
+                      color: AppTheme.cardSurfaceHover,
+                      border: Border.all(color: AppTheme.border, width: 1),
                     ),
                     child: Center(
                       child: Text(
@@ -254,7 +232,7 @@ class SidebarNav extends StatelessWidget {
                       children: [
                         Text(
                           AuthService.instance.userDisplayName,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.w600,
                             color: AppTheme.textPrimary,
@@ -263,7 +241,7 @@ class SidebarNav extends StatelessWidget {
                         ),
                         Text(
                           AuthService.instance.userEmail,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 10,
                             color: AppTheme.textSecondary,
                           ),
@@ -274,7 +252,7 @@ class SidebarNav extends StatelessWidget {
                   ),
                   IconButton(
                     tooltip: 'Settings & Account',
-                    icon: const Icon(Icons.settings_outlined, size: 18, color: AppTheme.textSecondary),
+                    icon: Icon(Icons.settings_outlined, size: 18, color: AppTheme.textSecondary),
                     onPressed: () => SettingsView.show(context, controller: controller),
                     splashRadius: 16,
                     padding: EdgeInsets.zero,
@@ -404,8 +382,9 @@ class _PlaylistItem extends StatelessWidget {
                   width: 24,
                   height: 24,
                   decoration: BoxDecoration(
-                    gradient: LinearGradient(colors: playlist.gradient),
+                    color: AppTheme.cardSurfaceHover,
                     borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: AppTheme.border, width: 1),
                   ),
                   child: const Icon(
                     Icons.music_note_rounded,

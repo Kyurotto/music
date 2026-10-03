@@ -96,21 +96,8 @@ class _AnimatedVisualizerState extends State<AnimatedVisualizer>
                   width: widget.barWidth,
                   height: height,
                   decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(4),
-                    gradient: LinearGradient(
-                      begin: Alignment.bottomCenter,
-                      end: Alignment.topCenter,
-                      colors: colors,
-                    ),
-                    boxShadow: widget.isPlaying
-                        ? [
-                            BoxShadow(
-                              color: colors.first.withValues(alpha: 0.4),
-                              blurRadius: 4,
-                              offset: const Offset(0, -2),
-                            ),
-                          ]
-                        : null,
+                    borderRadius: BorderRadius.circular(2),
+                    color: colors.first,
                   ),
                 ),
               );

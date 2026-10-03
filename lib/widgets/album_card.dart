@@ -47,22 +47,12 @@ class _AlbumCardState extends State<AlbumCard> {
                   : (_isHovered ? AppTheme.borderActive : AppTheme.border),
               width: widget.isSelected ? 2 : 1,
             ),
-            boxShadow: active
-                ? [
-                    BoxShadow(
-                      color: (widget.isSelected ? AppTheme.primary : widget.playlist.gradient.first)
-                          .withValues(alpha: widget.isSelected ? 0.35 : 0.25),
-                      blurRadius: widget.isSelected ? 20 : 16,
-                      offset: const Offset(0, 6),
-                    ),
-                  ]
-                : [],
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Artwork container with gradient
+              // Artwork container
               AspectRatio(
                 aspectRatio: 1.0,
                 child: Stack(
@@ -70,17 +60,14 @@ class _AlbumCardState extends State<AlbumCard> {
                     Container(
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(12),
-                        gradient: LinearGradient(
-                          colors: widget.playlist.gradient,
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                        ),
+                        color: AppTheme.cardSurfaceHover,
+                        border: Border.all(color: AppTheme.border, width: 1),
                       ),
                       child: Center(
                         child: Icon(
                           Icons.album_rounded,
                           size: 54,
-                          color: Colors.white.withValues(alpha: 0.9),
+                          color: AppTheme.textPrimary.withValues(alpha: 0.9),
                         ),
                       ),
                     ),
@@ -95,17 +82,11 @@ class _AlbumCardState extends State<AlbumCard> {
                         child: Container(
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
-                            gradient: AppTheme.primaryGradient,
-                            boxShadow: [
-                              BoxShadow(
-                                color: AppTheme.primary.withValues(alpha: 0.5),
-                                blurRadius: 10,
-                                offset: const Offset(0, 4),
-                              ),
-                            ],
+                            color: AppTheme.primary,
+                            border: Border.all(color: AppTheme.border, width: 1),
                           ),
                           child: IconButton(
-                            icon: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 24),
+                            icon: Icon(Icons.play_arrow_rounded, color: AppTheme.background, size: 24),
                             onPressed: widget.onPlay,
                           ),
                         ),
@@ -120,7 +101,7 @@ class _AlbumCardState extends State<AlbumCard> {
               // Title
               Text(
                 widget.playlist.title,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w700,
                   color: AppTheme.textPrimary,

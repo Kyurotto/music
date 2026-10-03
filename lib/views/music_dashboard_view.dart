@@ -55,6 +55,7 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
     _lastShuffle = _controller.isShuffle;
     _lastIsMuted = _controller.isMuted;
     _controller.addListener(_onStateChange);
+    AppTheme.themeModeNotifier.addListener(_onThemeChanged);
     DisplayRateService.instance.initialize();
     _authSub = AuthService.instance.authChanges.listen((_) {
       if (mounted) {
@@ -104,9 +105,14 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
   void dispose() {
     _authSub?.cancel();
     _controller.removeListener(_onStateChange);
+    AppTheme.themeModeNotifier.removeListener(_onThemeChanged);
     _controller.dispose();
     _searchTextController.dispose();
     super.dispose();
+  }
+
+  void _onThemeChanged() {
+    if (mounted) setState(() {});
   }
 
   void _openPlaylist(String playlistId) {
@@ -203,16 +209,17 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                     width: 36,
                     height: 36,
                     decoration: BoxDecoration(
+                      color: AppTheme.cardSurfaceHover,
                       borderRadius: BorderRadius.circular(8),
-                      gradient: LinearGradient(colors: playlist.gradient),
+                      border: Border.all(color: AppTheme.border, width: 1),
                     ),
                     child: const Icon(Icons.queue_music_rounded,
-                        color: Colors.white, size: 20),
+                        color: Colors.white70, size: 20),
                   ),
                   title: Text(playlist.title),
                   subtitle: Text('${playlist.trackCount} songs'),
                   trailing: playlist.songIds.contains(song.id)
-                      ? const Icon(Icons.check_rounded, color: AppTheme.primary)
+                      ? Icon(Icons.check_rounded, color: AppTheme.primary)
                       : const Icon(Icons.add_rounded),
                   onTap: () => Navigator.of(sheetContext).pop(playlist),
                 ),
@@ -340,7 +347,7 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
         horizontal: isMobile ? 12 : 24,
         vertical: 12,
       ),
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         color: AppTheme.surface,
         border: Border(
           bottom: BorderSide(color: AppTheme.border, width: 1),
@@ -351,7 +358,7 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
           // Drawer Hamburger for Mobile
           if (isMobile)
             IconButton(
-              icon: const Icon(Icons.menu_rounded, color: AppTheme.textPrimary),
+              icon: Icon(Icons.menu_rounded, color: AppTheme.textPrimary),
               onPressed: () => _scaffoldKey.currentState?.openDrawer(),
             ),
 
@@ -367,14 +374,14 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
               child: TextField(
                 controller: _searchTextController,
                 onChanged: (val) => _controller.setSearchQuery(val),
-                style: const TextStyle(fontSize: 14, color: AppTheme.textPrimary),
+                style: TextStyle(fontSize: 14, color: AppTheme.textPrimary),
                 decoration: InputDecoration(
                   hintText: 'Search songs, artists, albums...',
-                  hintStyle: const TextStyle(fontSize: 13, color: AppTheme.textMuted),
-                  prefixIcon: const Icon(Icons.search_rounded, size: 20, color: AppTheme.textSecondary),
+                  hintStyle: TextStyle(fontSize: 13, color: AppTheme.textMuted),
+                  prefixIcon: Icon(Icons.search_rounded, size: 20, color: AppTheme.textSecondary),
                   suffixIcon: _searchTextController.text.isNotEmpty
                       ? IconButton(
-                          icon: const Icon(Icons.clear_rounded, size: 16, color: AppTheme.textMuted),
+                          icon: Icon(Icons.clear_rounded, size: 16, color: AppTheme.textMuted),
                           onPressed: () {
                             _searchTextController.clear();
                             _controller.setSearchQuery('');
@@ -393,14 +400,14 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
           // Notifications button
           IconButton(
             tooltip: 'Notifications',
-            icon: const Icon(Icons.notifications_none_rounded, size: 22, color: AppTheme.textSecondary),
+            icon: Icon(Icons.notifications_none_rounded, size: 22, color: AppTheme.textSecondary),
             onPressed: () {},
           ),
 
           // Settings button
           IconButton(
             tooltip: 'Settings',
-            icon: const Icon(Icons.settings_outlined, size: 22, color: AppTheme.textSecondary),
+            icon: Icon(Icons.settings_outlined, size: 22, color: AppTheme.textSecondary),
             onPressed: () => SettingsView.show(context, controller: _controller),
           ),
         ],
@@ -577,14 +584,11 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                         width: 48,
                         height: 48,
                         decoration: BoxDecoration(
+                          color: AppTheme.cardSurfaceHover,
                           borderRadius: BorderRadius.circular(8),
-                          gradient: LinearGradient(
-                            colors: song.gradientColors,
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                          ),
+                          border: Border.all(color: AppTheme.border, width: 1),
                         ),
-                        child: const Icon(Icons.music_note_rounded, color: Colors.white, size: 24),
+                        child: const Icon(Icons.music_note_rounded, color: Colors.white70, size: 24),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
@@ -604,7 +608,7 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                             const SizedBox(height: 2),
                             Text(
                               song.artist,
-                              style: const TextStyle(fontSize: 11, color: AppTheme.textMuted),
+                              style: TextStyle(fontSize: 11, color: AppTheme.textMuted),
                               overflow: TextOverflow.ellipsis,
                             ),
                           ],
@@ -752,19 +756,18 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
           subtitle:
               '${_controller.allSongs.length} saved songs across ${_controller.playlists.length} playlists',
           actions: [
-            ElevatedButton.icon(
+            ElevatedButton(
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppTheme.cardSurface,
                 foregroundColor: AppTheme.textPrimary,
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
-                  side: const BorderSide(color: AppTheme.border),
+                  side: BorderSide(color: AppTheme.border),
                 ),
               ),
               onPressed: _importFromSpotify,
-              icon: const Icon(Icons.download_rounded, size: 18),
-              label: const Text('Import Spotify link'),
+              child: const Text('Import Spotify link'),
             ),
             ElevatedButton.icon(
               style: ElevatedButton.styleFrom(
@@ -903,7 +906,7 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
       children: [
         Text(
           title,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 20,
             fontWeight: FontWeight.w800,
             color: AppTheme.textPrimary,
@@ -913,7 +916,7 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
         const SizedBox(height: 2),
         Text(
           subtitle,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 13,
             color: AppTheme.textMuted,
           ),
@@ -956,7 +959,7 @@ class _CreatePlaylistDialogState extends State<_CreatePlaylistDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       backgroundColor: AppTheme.surface,
-      title: const Text(
+      title: Text(
         'Create playlist',
         style: TextStyle(color: AppTheme.textPrimary),
       ),
@@ -964,8 +967,8 @@ class _CreatePlaylistDialogState extends State<_CreatePlaylistDialog> {
         controller: _nameController,
         autofocus: true,
         textCapitalization: TextCapitalization.words,
-        style: const TextStyle(color: AppTheme.textPrimary),
-        decoration: const InputDecoration(
+        style: TextStyle(color: AppTheme.textPrimary),
+        decoration: InputDecoration(
           hintText: 'My new playlist',
           hintStyle: TextStyle(color: AppTheme.textMuted),
         ),

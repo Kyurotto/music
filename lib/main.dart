@@ -32,6 +32,10 @@ Future<void> main() async {
   }
 
   await LocalDatabase.instance.initialize();
+  final initialSettings = await LocalDatabase.instance.getAllSettings();
+  if (initialSettings['theme_mode'] == 'light') {
+    AppTheme.setThemeMode(ThemeMode.light);
+  }
   DisplayRateService.instance.initialize();
   // Initialize Firebase on every platform so Google OAuth can
   // return the real accurate profile. Guarded: local auth still works
@@ -55,13 +59,20 @@ class MusicApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Pulse Music Player & Dashboard',
-      debugShowCheckedModeBanner: false,
-      theme: AppTheme.darkTheme,
-      // Always go through AuthGate when enabled (local session works on every platform).
-      // When disabled (e.g. in tests), mount MusicDashboardView directly.
-      home: firebaseEnabled ? const AuthGate() : const MusicDashboardView(),
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: AppTheme.themeModeNotifier,
+      builder: (context, themeMode, _) {
+        return MaterialApp(
+          title: 'Pulse Music Player & Dashboard',
+          debugShowCheckedModeBanner: false,
+          theme: AppTheme.lightTheme,
+          darkTheme: AppTheme.darkTheme,
+          themeMode: themeMode,
+          // Always go through AuthGate when enabled (local session works on every platform).
+          // When disabled (e.g. in tests), mount MusicDashboardView directly.
+          home: firebaseEnabled ? const AuthGate() : const MusicDashboardView(),
+        );
+      },
     );
   }
 }

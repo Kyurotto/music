@@ -35,7 +35,7 @@ class TrackListView extends StatelessWidget {
             const SizedBox(height: 12),
             Text(
               emptyTitle ?? 'No tracks found',
-              style: const TextStyle(
+              style: TextStyle(
                   fontSize: 16,
                   color: AppTheme.textSecondary,
                   fontWeight: FontWeight.w600),
@@ -43,7 +43,7 @@ class TrackListView extends StatelessWidget {
             const SizedBox(height: 4),
             Text(
               emptySubtitle ?? 'Try changing your search query or genre filter',
-              style: const TextStyle(fontSize: 13, color: AppTheme.textMuted),
+              style: TextStyle(fontSize: 13, color: AppTheme.textMuted),
             ),
           ],
         ),
@@ -63,7 +63,7 @@ class TrackListView extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Row(
                 children: [
-                  const SizedBox(
+                  SizedBox(
                     width: 32,
                     child: Text(
                       '#',
@@ -76,7 +76,7 @@ class TrackListView extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 12),
-                  const Expanded(
+                  Expanded(
                     flex: 4,
                     child: Text(
                       'TITLE',
@@ -89,7 +89,7 @@ class TrackListView extends StatelessWidget {
                     ),
                   ),
                   if (showAlbum)
-                    const Expanded(
+                    Expanded(
                       flex: 3,
                       child: Text(
                         'ALBUM',
@@ -102,7 +102,7 @@ class TrackListView extends StatelessWidget {
                       ),
                     ),
                   if (showPlays)
-                    const SizedBox(
+                    SizedBox(
                       width: 90,
                       child: Text(
                         'PLAYS',
@@ -115,7 +115,7 @@ class TrackListView extends StatelessWidget {
                         textAlign: TextAlign.right,
                       ),
                     ),
-                  const SizedBox(
+                  SizedBox(
                     width: 70,
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.end,
@@ -253,7 +253,7 @@ class _TrackRowState extends State<_TrackRow> {
                             ),
                           )
                         : (_isHovered
-                            ? const Icon(Icons.play_arrow_rounded,
+                            ? Icon(Icons.play_arrow_rounded,
                                 size: 18, color: AppTheme.textPrimary)
                             : Text(
                                 '${widget.index}',
@@ -275,11 +275,8 @@ class _TrackRowState extends State<_TrackRow> {
                   height: 44,
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(8),
-                    gradient: LinearGradient(
-                      colors: widget.song.gradientColors,
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
+                    color: AppTheme.cardSurfaceHover,
+                    border: Border.all(color: AppTheme.border, width: 1),
                   ),
                   child: const Center(
                     child: Icon(
@@ -313,7 +310,7 @@ class _TrackRowState extends State<_TrackRow> {
                       const SizedBox(height: 3),
                       Text(
                         widget.song.artist,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 12,
                           color: AppTheme.textSecondary,
                         ),
@@ -368,7 +365,7 @@ class _TrackRowState extends State<_TrackRow> {
                             ),
                             if (widget.song.lyrics.isEmpty) ...[
                               const SizedBox(width: 6),
-                              const Icon(
+                              Icon(
                                 Icons.lyrics_outlined,
                                 size: 13,
                                 color: AppTheme.textMuted,
@@ -389,7 +386,7 @@ class _TrackRowState extends State<_TrackRow> {
                       padding: const EdgeInsets.only(right: 8.0),
                       child: Text(
                         widget.song.album,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 13,
                           color: AppTheme.textMuted,
                         ),
@@ -405,7 +402,7 @@ class _TrackRowState extends State<_TrackRow> {
                     width: 90,
                     child: Text(
                       widget.song.plays,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 13,
                         color: AppTheme.textMuted,
                         fontWeight: FontWeight.w500,
@@ -419,7 +416,7 @@ class _TrackRowState extends State<_TrackRow> {
                   width: 70,
                   child: Text(
                     widget.song.formattedDuration,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 13,
                       color: AppTheme.textMuted,
                     ),
@@ -451,8 +448,8 @@ class _TrackRowState extends State<_TrackRow> {
                       InkWell(
                         onTap: widget.onAddToPlaylist,
                         borderRadius: BorderRadius.circular(20),
-                        child: const Padding(
-                          padding: EdgeInsets.all(6),
+                        child: Padding(
+                          padding: const EdgeInsets.all(6),
                           child: Icon(
                             Icons.playlist_add_rounded,
                             size: 19,

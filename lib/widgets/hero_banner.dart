@@ -31,68 +31,14 @@ class HeroBanner extends StatelessWidget {
           width: double.infinity,
           constraints: BoxConstraints(minHeight: isCompact ? 180 : 220),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(24),
-            gradient: const LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                Color(0xFF3B1E78),
-                Color(0xFF1E1B4B),
-                Color(0xFF0F172A),
-              ],
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: const Color(0xFF3B1E78).withValues(alpha: 0.35),
-                blurRadius: 28,
-                offset: const Offset(0, 10),
-              ),
-            ],
+            color: AppTheme.cardSurface,
+            borderRadius: BorderRadius.circular(20),
             border: Border.all(
-              color: Colors.white.withValues(alpha: 0.1),
-              width: 1.2,
+              color: AppTheme.border,
+              width: 1,
             ),
           ),
-          child: Stack(
-            children: [
-              // Background ambient graphic accents
-              Positioned(
-                right: -30,
-                top: -40,
-                child: Container(
-                  width: 220,
-                  height: 220,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: RadialGradient(
-                      colors: [
-                        AppTheme.secondary.withValues(alpha: 0.25),
-                        Colors.transparent,
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-              Positioned(
-                left: 140,
-                bottom: -50,
-                child: Container(
-                  width: 180,
-                  height: 180,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: RadialGradient(
-                      colors: [
-                        AppTheme.accentPink.withValues(alpha: 0.2),
-                        Colors.transparent,
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-
-              // Content
-              Padding(
+          child: Padding(
                 padding: EdgeInsets.all(isCompact ? 18.0 : 28.0),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.center,
@@ -246,7 +192,7 @@ class HeroBanner extends StatelessWidget {
                                 ElevatedButton.icon(
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor: AppTheme.primary,
-                                    foregroundColor: Colors.white,
+                                    foregroundColor: const Color(0xFF0F172A),
                                     padding: EdgeInsets.symmetric(
                                       horizontal: isCompact ? 16 : 22,
                                       vertical: isCompact ? 10 : 14,
@@ -273,24 +219,11 @@ class HeroBanner extends StatelessWidget {
                         width: isCompact ? 110 : 150,
                         height: isCompact ? 110 : 150,
                         decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(20),
-                          gradient: LinearGradient(
-                            colors: currentSong?.gradientColors ??
-                                [const Color(0xFF6366F1), const Color(0xFF8B5CF6)],
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: (currentSong?.gradientColors.first ?? AppTheme.primary)
-                                  .withValues(alpha: 0.5),
-                              blurRadius: 20,
-                              offset: const Offset(0, 8),
-                            ),
-                          ],
+                          color: AppTheme.surface,
+                          borderRadius: BorderRadius.circular(16),
                           border: Border.all(
-                            color: Colors.white.withValues(alpha: 0.2),
-                            width: 2,
+                            color: AppTheme.border,
+                            width: 1,
                           ),
                         ),
                         child: Stack(
@@ -299,7 +232,7 @@ class HeroBanner extends StatelessWidget {
                             Icon(
                               Icons.album_rounded,
                               size: isCompact ? 52 : 72,
-                              color: Colors.white.withValues(alpha: 0.85),
+                              color: AppTheme.textPrimary.withValues(alpha: 0.85),
                             ),
                             if (isCurrentPlaying)
                               Container(
@@ -308,9 +241,9 @@ class HeroBanner extends StatelessWidget {
                                   shape: BoxShape.circle,
                                   color: Colors.black45,
                                 ),
-                                child: const Icon(
+                                child: Icon(
                                   Icons.graphic_eq_rounded,
-                                  color: AppTheme.secondary,
+                                  color: AppTheme.primary,
                                   size: 26,
                                 ),
                               ),
@@ -321,8 +254,6 @@ class HeroBanner extends StatelessWidget {
                   ],
                 ),
               ),
-            ],
-          ),
         );
       },
     );

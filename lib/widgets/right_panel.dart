@@ -61,7 +61,7 @@ class _RightActivityPanelState extends State<RightActivityPanel>
 
     return Container(
       width: 320,
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         color: AppTheme.surface,
         border: Border(
           left: BorderSide(color: AppTheme.border, width: 1),
@@ -76,7 +76,7 @@ class _RightActivityPanelState extends State<RightActivityPanel>
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text(
+                Text(
                   'NOW PLAYING',
                   style: TextStyle(
                     fontSize: 12,
@@ -129,23 +129,6 @@ class _RightActivityPanelState extends State<RightActivityPanel>
                   Stack(
                     alignment: Alignment.center,
                     children: [
-                      // Glow
-                      Container(
-                        width: 190,
-                        height: 190,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          boxShadow: [
-                            BoxShadow(
-                              color: (currentSong?.gradientColors.first ?? AppTheme.primary)
-                                  .withValues(alpha: isPlaying ? 0.35 : 0.05),
-                              blurRadius: 36,
-                              spreadRadius: 4,
-                            ),
-                          ],
-                        ),
-                      ),
-
                       // Vinyl Disc
                       RotationTransition(
                         turns: _rotationController,
@@ -154,17 +137,10 @@ class _RightActivityPanelState extends State<RightActivityPanel>
                           height: 180,
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
-                            gradient: const RadialGradient(
-                              colors: [
-                                Color(0xFF1E293B),
-                                Color(0xFF0F172A),
-                                Color(0xFF090D16),
-                              ],
-                              stops: [0.3, 0.7, 1.0],
-                            ),
+                            color: AppTheme.surface,
                             border: Border.all(
-                              color: Colors.white.withValues(alpha: 0.15),
-                              width: 3,
+                              color: AppTheme.border,
+                              width: 2,
                             ),
                           ),
                           child: Center(
@@ -173,9 +149,10 @@ class _RightActivityPanelState extends State<RightActivityPanel>
                               height: 80,
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
-                                gradient: LinearGradient(
-                                  colors: currentSong?.gradientColors ??
-                                      const [Color(0xFF334155), Color(0xFF1E293B)],
+                                color: AppTheme.cardSurfaceHover,
+                                border: Border.all(
+                                  color: AppTheme.border,
+                                  width: 1,
                                 ),
                               ),
                               child: const Icon(
@@ -195,7 +172,7 @@ class _RightActivityPanelState extends State<RightActivityPanel>
                   // Track Info
                   Text(
                     currentSong?.title ?? 'No Track Playing',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
                       color: AppTheme.textPrimary,
@@ -209,7 +186,7 @@ class _RightActivityPanelState extends State<RightActivityPanel>
                     currentSong != null
                         ? '${currentSong.artist} • ${currentSong.album}'
                         : 'Player is currently idle',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 13,
                       color: AppTheme.textSecondary,
                     ),
@@ -233,7 +210,7 @@ class _RightActivityPanelState extends State<RightActivityPanel>
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            const Text(
+                            Text(
                               'AUDIO FREQUENCY',
                               style: TextStyle(
                                 fontSize: 10,
@@ -244,7 +221,7 @@ class _RightActivityPanelState extends State<RightActivityPanel>
                             ),
                             Text(
                               '${(widget.controller.volume * 100).toInt()}% Vol',
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 11,
                                 color: AppTheme.secondary,
                                 fontWeight: FontWeight.w600,
@@ -288,10 +265,10 @@ class _RightActivityPanelState extends State<RightActivityPanel>
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Row(
+                            Row(
                               children: [
                                 Icon(Icons.lyrics_rounded, size: 16, color: AppTheme.primary),
-                                SizedBox(width: 8),
+                                const SizedBox(width: 8),
                                 Text(
                                   'LYRICS PREVIEW',
                                   style: TextStyle(
@@ -385,7 +362,7 @@ class _RightActivityPanelState extends State<RightActivityPanel>
                             ],
                           )
                         else
-                          const Text(
+                          Text(
                             'No lyrics or active track loaded',
                             style: TextStyle(
                               fontSize: 13,
@@ -404,7 +381,7 @@ class _RightActivityPanelState extends State<RightActivityPanel>
                   // Up Next Section Header
                   Row(
                     children: [
-                      const Expanded(
+                      Expanded(
                         child: Text(
                           'UP NEXT IN QUEUE',
                           style: TextStyle(
@@ -419,7 +396,7 @@ class _RightActivityPanelState extends State<RightActivityPanel>
                       const SizedBox(width: 8),
                       Text(
                         '${widget.controller.queue.length} Tracks',
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 11,
                           color: AppTheme.textSecondary,
                         ),
@@ -433,7 +410,7 @@ class _RightActivityPanelState extends State<RightActivityPanel>
                     Container(
                       padding: const EdgeInsets.symmetric(vertical: 24),
                       alignment: Alignment.center,
-                      child: const Text(
+                      child: Text(
                         'Queue is empty',
                         style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
                       ),
@@ -466,7 +443,8 @@ class _RightActivityPanelState extends State<RightActivityPanel>
                                     height: 34,
                                     decoration: BoxDecoration(
                                       borderRadius: BorderRadius.circular(6),
-                                      gradient: LinearGradient(colors: song.gradientColors),
+                                      color: AppTheme.cardSurfaceHover,
+                                      border: Border.all(color: AppTheme.border, width: 1),
                                     ),
                                     child: Center(
                                       child: Icon(
@@ -493,7 +471,7 @@ class _RightActivityPanelState extends State<RightActivityPanel>
                                         ),
                                         Text(
                                           song.artist,
-                                          style: const TextStyle(
+                                          style: TextStyle(
                                             fontSize: 11,
                                             color: AppTheme.textMuted,
                                           ),
@@ -505,7 +483,7 @@ class _RightActivityPanelState extends State<RightActivityPanel>
                                   ),
                                   Text(
                                     song.formattedDuration,
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                       fontSize: 11,
                                       color: AppTheme.textMuted,
                                     ),
