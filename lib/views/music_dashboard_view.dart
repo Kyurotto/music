@@ -584,7 +584,22 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                             end: Alignment.bottomRight,
                           ),
                         ),
-                        child: const Icon(Icons.music_note_rounded, color: Colors.white, size: 24),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: song.imageUrl.isNotEmpty
+                              ? Image.network(
+                                  song.imageUrl,
+                                  width: 48,
+                                  height: 48,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (context, error, stackTrace) => const Center(
+                                    child: Icon(Icons.music_note_rounded, color: Colors.white, size: 24),
+                                  ),
+                                )
+                              : const Center(
+                                  child: Icon(Icons.music_note_rounded, color: Colors.white, size: 24),
+                                ),
+                        ),
                       ),
                       const SizedBox(width: 12),
                       Expanded(

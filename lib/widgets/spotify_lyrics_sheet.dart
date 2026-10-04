@@ -55,7 +55,8 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
   }
 
   Future<void> _maybeFetchLyrics(Song song) async {
-    if (song.lyrics.isNotEmpty) return;
+    final hasSyncedLyrics = song.lyrics.any((l) => Song.parseLyricTimestamp(l) != null);
+    if (song.lyrics.isNotEmpty && hasSyncedLyrics) return;
     // Auto-lookup for Spotify imports — bundled songs already ship lyrics,
     // but imported previews still need a full-length upgrade pass.
     if (!song.id.startsWith('spotify-')) return;
@@ -176,8 +177,12 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
           _lastSeenSongId = currentSong.id;
           _highlightedLineIndex = null;
           _userPinnedLine = false;
+          final hasSyncedLyrics =
+              currentSong.lyrics.any((l) => Song.parseLyricTimestamp(l) != null);
           if (currentSong.id.startsWith('spotify-') &&
-              (currentSong.lyrics.isEmpty || currentSong.isPreview)) {
+              (currentSong.lyrics.isEmpty ||
+                  !hasSyncedLyrics ||
+                  currentSong.isPreview)) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (mounted) _maybeFetchLyrics(currentSong);
             });
@@ -326,8 +331,21 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
                             ),
                           ],
                         ),
-                        child: const Center(
-                          child: Icon(Icons.music_note_rounded, color: Colors.white, size: 28),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: currentSong.imageUrl.isNotEmpty
+                              ? Image.network(
+                                  currentSong.imageUrl,
+                                  width: 58,
+                                  height: 58,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (context, error, stackTrace) => const Center(
+                                    child: Icon(Icons.music_note_rounded, color: Colors.white, size: 28),
+                                  ),
+                                )
+                              : const Center(
+                                  child: Icon(Icons.music_note_rounded, color: Colors.white, size: 28),
+                                ),
                         ),
                       ),
                       const SizedBox(width: 14),

@@ -73,7 +73,20 @@ void main() {
       controller.toggleMute();
       expect(controller.isMuted, isTrue);
 
-      final sample = controller.allSongs.first;
+      final sample = controller.allSongs.isNotEmpty
+          ? controller.allSongs.first
+          : Song(
+              id: 'test-sample',
+              title: 'Test Sample',
+              artist: 'Test Artist',
+              album: 'Test Album',
+              duration: const Duration(minutes: 3),
+              genre: 'Pop',
+              imageUrl: '',
+              gradientColors: const [],
+              plays: '',
+              lyrics: const [],
+            );
       controller.playSong(sample);
 
       expect(controller.isMuted, isFalse);

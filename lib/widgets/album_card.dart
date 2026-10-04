@@ -76,12 +76,29 @@ class _AlbumCardState extends State<AlbumCard> {
                           end: Alignment.bottomRight,
                         ),
                       ),
-                      child: Center(
-                        child: Icon(
-                          Icons.album_rounded,
-                          size: 54,
-                          color: Colors.white.withValues(alpha: 0.9),
-                        ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: widget.playlist.imageUrl.isNotEmpty
+                            ? Image.network(
+                                widget.playlist.imageUrl,
+                                fit: BoxFit.cover,
+                                width: double.infinity,
+                                height: double.infinity,
+                                errorBuilder: (context, error, stackTrace) => Center(
+                                  child: Icon(
+                                    Icons.album_rounded,
+                                    size: 54,
+                                    color: Colors.white.withValues(alpha: 0.9),
+                                  ),
+                                ),
+                              )
+                            : Center(
+                                child: Icon(
+                                  Icons.album_rounded,
+                                  size: 54,
+                                  color: Colors.white.withValues(alpha: 0.9),
+                                ),
+                              ),
                       ),
                     ),
                     // Floating play button on hover or when selected

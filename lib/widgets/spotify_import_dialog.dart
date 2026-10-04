@@ -98,6 +98,7 @@ class _SpotifyImportDialogState extends State<SpotifyImportDialog> {
         tracks: preview.tracks,
         targetPlaylistId: _targetPlaylistId,
         spotifyUrl: _linkController.text.trim(),
+        imageUrl: preview.imageUrl,
       );
       if (!mounted) return;
       Navigator.of(context).pop(outcome.playlistId);
@@ -196,30 +197,49 @@ class _SpotifyImportDialogState extends State<SpotifyImportDialog> {
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(color: AppTheme.border),
                   ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  child: Row(
                     children: [
-                      Text(
-                        preview.title,
-                        style: const TextStyle(
-                          color: AppTheme.textPrimary,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 14,
+                      if (preview.imageUrl.isNotEmpty) ...[
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Image.network(
+                            preview.imageUrl,
+                            width: 52,
+                            height: 52,
+                            fit: BoxFit.cover,
+                            errorBuilder: (context, error, stackTrace) => const SizedBox.shrink(),
+                          ),
                         ),
-                      ),
-                      if (preview.subtitle.isNotEmpty) ...[
-                        const SizedBox(height: 2),
-                        Text(
-                          preview.subtitle,
-                          style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
-                        ),
+                        const SizedBox(width: 12),
                       ],
-                      const SizedBox(height: 8),
-                      Text(
-                        preview.type == SpotifyLinkType.track
-                            ? '1 track ready to import'
-                            : '${preview.tracks.length} tracks ready to import',
-                        style: const TextStyle(color: AppTheme.accentGreen, fontSize: 12, fontWeight: FontWeight.w600),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              preview.title,
+                              style: const TextStyle(
+                                color: AppTheme.textPrimary,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 14,
+                              ),
+                            ),
+                            if (preview.subtitle.isNotEmpty) ...[
+                              const SizedBox(height: 2),
+                              Text(
+                                preview.subtitle,
+                                style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+                              ),
+                            ],
+                            const SizedBox(height: 6),
+                            Text(
+                              preview.type == SpotifyLinkType.track
+                                  ? '1 track ready to import'
+                                  : '${preview.tracks.length} tracks ready to import',
+                              style: const TextStyle(color: AppTheme.accentGreen, fontSize: 12, fontWeight: FontWeight.w600),
+                            ),
+                          ],
+                        ),
                       ),
                     ],
                   ),

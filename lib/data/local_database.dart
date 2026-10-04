@@ -260,11 +260,15 @@ class LocalDatabase {
         title TEXT NOT NULL,
         subtitle TEXT,
         spotify_url TEXT,
+        image_url TEXT,
         gradient_colors TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       )
     ''');
+    try {
+      await database.execute('ALTER TABLE imported_playlists ADD COLUMN image_url TEXT');
+    } catch (_) {}
     await database.execute('''
       CREATE TABLE IF NOT EXISTS imported_songs (
         id TEXT PRIMARY KEY,
@@ -1094,6 +1098,7 @@ class LocalDatabase {
     required String title,
     String? subtitle,
     String? spotifyUrl,
+    String? imageUrl,
     List<int>? gradientColors,
     required List<Map<String, dynamic>> songs,
   }) async {
@@ -1103,6 +1108,7 @@ class LocalDatabase {
       title: title,
       subtitle: subtitle,
       spotifyUrl: spotifyUrl,
+      imageUrl: imageUrl,
       gradientColors: gradientColors,
       songs: songs,
     );
@@ -1128,6 +1134,7 @@ class LocalDatabase {
     required String title,
     String? subtitle,
     String? spotifyUrl,
+    String? imageUrl,
     List<int>? gradientColors,
     required List<Map<String, dynamic>> songs,
   }) async {
@@ -1137,10 +1144,24 @@ class LocalDatabase {
       title: title,
       subtitle: subtitle,
       spotifyUrl: spotifyUrl,
+      imageUrl: imageUrl,
       gradientColors: gradientColors,
       songs: songs,
     );
     _syncToWorkspace();
+  }
+
+  /// Updates only the image_url of an imported playlist.
+  Future<void> updateImportedPlaylistImageUrl(String playlistId, String imageUrl) async {
+    try {
+      final db = await database;
+      await db.update(
+        'imported_playlists',
+        {'image_url': imageUrl, 'updated_at': DateTime.now().millisecondsSinceEpoch},
+        where: 'id = ?',
+        whereArgs: [playlistId],
+      );
+    } catch (_) {}
   }
 
   /// Shared SQLite write for [saveImportedPlaylist] and
@@ -1151,6 +1172,7 @@ class LocalDatabase {
     required String title,
     String? subtitle,
     String? spotifyUrl,
+    String? imageUrl,
     List<int>? gradientColors,
     required List<Map<String, dynamic>> songs,
   }) async {
@@ -1180,6 +1202,7 @@ class LocalDatabase {
         'title': title,
         'subtitle': subtitle ?? 'Imported from Spotify',
         'spotify_url': spotifyUrl,
+        'image_url': imageUrl ?? '',
         'gradient_colors': gradientColors != null
             ? jsonEncode(gradientColors)
             : null,

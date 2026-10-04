@@ -41,12 +41,14 @@ class SpotifyImportResult {
   final String title;
   final String subtitle;
   final List<SpotifyImportedTrack> tracks;
+  final String imageUrl;
 
   const SpotifyImportResult({
     required this.type,
     required this.title,
     required this.subtitle,
     required this.tracks,
+    this.imageUrl = '',
   });
 }
 
@@ -226,11 +228,13 @@ class SpotifyImportService {
     }
     final displayName =
         tracks.first.artist.isNotEmpty ? tracks.first.artist : name;
+    final firstArtwork = tracks.isNotEmpty ? tracks.first.artworkUrl : '';
     return SpotifyImportResult(
       type: SpotifyLinkType.artist,
       title: displayName,
       subtitle: 'Top songs · ${tracks.length} tracks',
       tracks: tracks,
+      imageUrl: firstArtwork,
     );
   }
 
@@ -589,6 +593,30 @@ class SpotifyImportService {
     final name = _stringValue(entity, 'name', 'title');
     final subtitle = _stringValue(entity, 'subtitle');
 
+    var imageUrl = '';
+    final coverArt = entity['coverArt'];
+    if (coverArt is Map) {
+      final sources = coverArt['sources'];
+      if (sources is List && sources.isNotEmpty) {
+        final last = sources.last;
+        if (last is Map && last['url'] is String) {
+          imageUrl = (last['url'] as String).trim();
+        }
+      }
+    }
+    if (imageUrl.isEmpty) {
+      final visualIdentity = entity['visualIdentity'];
+      if (visualIdentity is Map && visualIdentity['image'] is List) {
+        final images = visualIdentity['image'] as List;
+        if (images.isNotEmpty) {
+          final last = images.last;
+          if (last is Map && last['url'] is String) {
+            imageUrl = (last['url'] as String).trim();
+          }
+        }
+      }
+    }
+
     switch (link.type) {
       case SpotifyLinkType.track:
         final track = _trackFromEntity(entity, fallbackAlbum: subtitle);
@@ -600,6 +628,7 @@ class SpotifyImportService {
           title: track.title,
           subtitle: track.artist,
           tracks: [track],
+          imageUrl: imageUrl.isNotEmpty ? imageUrl : track.artworkUrl,
         );
       case SpotifyLinkType.playlist:
       case SpotifyLinkType.album:
@@ -619,6 +648,9 @@ class SpotifyImportService {
                 : 'No tracks were found in this Spotify album.',
           );
         }
+        if (imageUrl.isEmpty && tracks.isNotEmpty && tracks.first.artworkUrl.isNotEmpty) {
+          imageUrl = tracks.first.artworkUrl;
+        }
         return SpotifyImportResult(
           type: link.type,
           title: name.isEmpty
@@ -626,6 +658,7 @@ class SpotifyImportService {
               : name,
           subtitle: subtitle,
           tracks: tracks,
+          imageUrl: imageUrl,
         );
       case SpotifyLinkType.artist:
         // Artist links are resolved via importArtistTopSongs before the
@@ -739,6 +772,38 @@ class SpotifyImportService {
       hash = 0x1fffffff & (hash + ((0x0007ffff & hash) << 15));
     }
     return hash.toRadixString(16).padLeft(11, '0');
+  }
+
+  /// Resolves playlist/album thumbnail URL via Spotify's keyless oEmbed endpoint.
+  static Future<String?> fetchSpotifyThumbnail(String urlOrId) async {
+    try {
+      final clean = urlOrId.trim();
+      if (clean.isEmpty) return null;
+      final String fullUrl;
+      if (clean.startsWith('http')) {
+        fullUrl = clean;
+      } else {
+        fullUrl = 'https://open.spotify.com/playlist/$clean';
+      }
+      final uri = Uri.https('open.spotify.com', '/oembed', {'url': fullUrl});
+      final client = http.Client();
+      try {
+        final res = await client.get(
+          uri,
+          headers: {'User-Agent': _browserUserAgent},
+        ).timeout(const Duration(seconds: 5));
+        if (res.statusCode == 200) {
+          final decoded = jsonDecode(utf8.decode(res.bodyBytes, allowMalformed: true));
+          if (decoded is Map && decoded['thumbnail_url'] is String) {
+            final thumb = (decoded['thumbnail_url'] as String).trim();
+            if (thumb.isNotEmpty) return thumb;
+          }
+        }
+      } finally {
+        client.close();
+      }
+    } catch (_) {}
+    return null;
   }
 
   void dispose() {

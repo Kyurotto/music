@@ -81,7 +81,22 @@ class BottomPlayerBar extends StatelessWidget {
                             colors: song?.gradientColors ?? const [Color(0xFF334155), Color(0xFF1E293B)],
                           ),
                         ),
-                        child: const Icon(Icons.music_note_rounded, color: Colors.white, size: 20),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: (song != null && song.imageUrl.isNotEmpty)
+                              ? Image.network(
+                                  song.imageUrl,
+                                  width: 44,
+                                  height: 44,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (context, error, stackTrace) => const Center(
+                                    child: Icon(Icons.music_note_rounded, color: Colors.white, size: 20),
+                                  ),
+                                )
+                              : const Center(
+                                  child: Icon(Icons.music_note_rounded, color: Colors.white, size: 20),
+                                ),
+                        ),
                       ),
                       const SizedBox(width: 12),
                       Expanded(

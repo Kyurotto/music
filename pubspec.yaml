@@ -36,6 +36,7 @@ dependencies:
   cupertino_icons: ^1.0.8
   http: ^1.2.0
   just_audio: ^0.9.43
+  audio_session: ^0.1.25
   just_audio_windows: ^0.2.0
   path: ^1.9.1
   path_provider: ^2.1.5

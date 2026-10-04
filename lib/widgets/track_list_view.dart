@@ -281,12 +281,29 @@ class _TrackRowState extends State<_TrackRow> {
                       end: Alignment.bottomRight,
                     ),
                   ),
-                  child: const Center(
-                    child: Icon(
-                      Icons.music_note_rounded,
-                      color: Colors.white,
-                      size: 20,
-                    ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: widget.song.imageUrl.isNotEmpty
+                        ? Image.network(
+                            widget.song.imageUrl,
+                            width: 44,
+                            height: 44,
+                            fit: BoxFit.cover,
+                            errorBuilder: (context, error, stackTrace) => const Center(
+                              child: Icon(
+                                Icons.music_note_rounded,
+                                color: Colors.white,
+                                size: 20,
+                              ),
+                            ),
+                          )
+                        : const Center(
+                            child: Icon(
+                              Icons.music_note_rounded,
+                              color: Colors.white,
+                              size: 20,
+                            ),
+                          ),
                   ),
                 ),
                 const SizedBox(width: 14),
