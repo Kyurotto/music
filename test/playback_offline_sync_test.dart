@@ -150,4 +150,58 @@ void main() {
       expect(controller.displayDurationFor(testSong), const Duration(seconds: 215));
     });
   });
+
+  group('Skip locating/preview tracks into full tracks', () {
+    Song t(String id, {String audioUrl = '', bool isPreview = false}) {
+      return Song(
+        id: id,
+        title: 'T',
+        artist: 'A',
+        album: '',
+        duration: const Duration(seconds: 200),
+        genre: 'Spotify',
+        imageUrl: '',
+        gradientColors: const [],
+        plays: '',
+        lyrics: const [],
+        audioUrl: audioUrl,
+        isPreview: isPreview,
+      );
+    }
+
+    test('needsFullTrack flags silent and preview imports only', () {
+      expect(MusicPlayerController.needsFullTrack(t('spotify-1')), isTrue);
+      expect(
+        MusicPlayerController.needsFullTrack(t('spotify-2',
+            audioUrl: 'http://x/y.mp3', isPreview: true)),
+        isTrue,
+      );
+      expect(
+        MusicPlayerController.needsFullTrack(
+            t('spotify-3', audioUrl: 'http://x/y.mp3')),
+        isFalse,
+      );
+      expect(MusicPlayerController.needsFullTrack(t('local-1')), isFalse);
+    });
+
+    test('nextFullTrackIndex skips placeholders without wrapping', () {
+      final q = [
+        t('spotify-1'),
+        t('spotify-2', audioUrl: 'http://x/y.mp3'),
+        t('spotify-3'),
+      ];
+      expect(MusicPlayerController.nextFullTrackIndex(q, 0, false), 1);
+      expect(MusicPlayerController.nextFullTrackIndex(q, 1, false), isNull);
+    });
+
+    test('nextFullTrackIndex wraps when allowed', () {
+      final q = [
+        t('spotify-1', audioUrl: 'http://x/y.mp3'),
+        t('spotify-2'),
+      ];
+      expect(MusicPlayerController.nextFullTrackIndex(q, 1, true), 0);
+      expect(MusicPlayerController.nextFullTrackIndex(q, 1, false), isNull);
+      expect(MusicPlayerController.nextFullTrackIndex([], 0, true), isNull);
+    });
+  });
 }
