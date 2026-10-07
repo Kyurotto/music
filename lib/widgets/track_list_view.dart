@@ -9,6 +9,7 @@ class TrackListView extends StatelessWidget {
   final MusicPlayerController controller;
   final ValueChanged<Song>? onAddToPlaylist;
   final ValueChanged<Song>? onSongTap;
+  final ValueChanged<Song>? onDelete;
   final String? emptyTitle;
   final String? emptySubtitle;
 
@@ -18,6 +19,7 @@ class TrackListView extends StatelessWidget {
     required this.controller,
     this.onAddToPlaylist,
     this.onSongTap,
+    this.onDelete,
     this.emptyTitle,
     this.emptySubtitle,
   });
@@ -165,6 +167,7 @@ class TrackListView extends StatelessWidget {
                   onAddToQueue: () => controller.addToQueue(song),
                   onAddToPlaylist:
                       onAddToPlaylist == null ? null : () => onAddToPlaylist!(song),
+                  onDelete: onDelete == null ? null : () => onDelete!(song),
                 );
               },
             ),
@@ -187,6 +190,7 @@ class _TrackRow extends StatefulWidget {
   final VoidCallback onLikeToggle;
   final VoidCallback onAddToQueue;
   final VoidCallback? onAddToPlaylist;
+  final VoidCallback? onDelete;
 
   const _TrackRow({
     required this.index,
@@ -200,6 +204,7 @@ class _TrackRow extends StatefulWidget {
     required this.onLikeToggle,
     required this.onAddToQueue,
     this.onAddToPlaylist,
+    this.onDelete,
   });
 
   @override
@@ -473,6 +478,19 @@ class _TrackRowState extends State<_TrackRow> {
                           child: Icon(
                             Icons.playlist_add_rounded,
                             size: 19,
+                            color: AppTheme.textMuted,
+                          ),
+                        ),
+                      ),
+                    if (widget.onDelete != null)
+                      InkWell(
+                        onTap: widget.onDelete,
+                        borderRadius: BorderRadius.circular(20),
+                        child: const Padding(
+                          padding: EdgeInsets.all(6),
+                          child: Icon(
+                            Icons.delete_outline_rounded,
+                            size: 18,
                             color: AppTheme.textMuted,
                           ),
                         ),

@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:audio_session/audio_session.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -13,6 +14,19 @@ import 'views/music_dashboard_view.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Configure the shared AudioSession BEFORE any AudioPlayer is constructed.
+  // MusicPlayerController creates its AudioPlayer as a field initializer, which
+  // runs ahead of the constructor body — so configuring the session inside the
+  // controller left ExoPlayer without an activated session, and imported
+  // Spotify tracks started muted on Android. Doing it here guarantees the
+  // session is configured (and focus-requestable) before playback begins.
+  try {
+    final session = await AudioSession.instance;
+    await session.configure(const AudioSessionConfiguration.music());
+  } catch (e) {
+    debugPrint('[MusicApp] AudioSession pre-configure failed: $e');
+  }
 
   try {
     await JustAudioBackground.init(
