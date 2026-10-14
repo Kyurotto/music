@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'package:audio_session/audio_session.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
@@ -1533,6 +1534,67 @@ class MusicPlayerController extends ChangeNotifier {
 
   Timer? _connectivityTimer;
   bool _watchedOnline = true;
+  bool _onMobileData = false;
+
+  /// app_settings key written by the "Download on mobile data" switch.
+  static const String _downloadOnMobileKey = 'download_on_mobile_data';
+
+  /// Songs the player gave up on (no cache, no stream, no bundled asset).
+  /// Drives the "can't play" message and Retry in the player bar.
+  final Set<String> _unavailableIds = {};
+
+  bool isUnavailable(String songId) => _unavailableIds.contains(songId);
+
+  /// True on cellular without Wi-Fi/ethernet. Returns false when the platform
+  /// can't tell (tests, desktop) so downloads are never blocked by mistake.
+  Future<bool> _isOnMeteredConnection() async {
+    try {
+      final results = await Connectivity().checkConnectivity();
+      final unmetered = results.contains(ConnectivityResult.wifi) ||
+          results.contains(ConnectivityResult.ethernet);
+      return results.contains(ConnectivityResult.mobile) && !unmetered;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Offline-cache downloads are skipped on mobile data unless the user
+  /// turned "Download on mobile data" on. Streaming for playback is unaffected.
+  Future<bool> _mayDownloadNow() async {
+    if (!await _isOnMeteredConnection()) return true;
+    try {
+      final v = await LocalDatabase.instance.getSetting(_downloadOnMobileKey);
+      return v == 'true';
+    } catch (_) {
+      return true;
+    }
+  }
+
+  /// The current song could not be played: stop pretending it is playing.
+  void _markUnavailable(Song song) {
+    if (_disposed || song.id != currentSong?.id) return;
+    _unavailableIds.add(song.id);
+    _cancelStallWatchdog();
+    _playbackTimer?.cancel();
+    _isPlaying = false;
+    _logDiag('marked unavailable', song: song);
+    notifyListeners();
+  }
+
+  /// Retry button in the player bar after "can't play".
+  void retryCurrentSong() {
+    final song = currentSong;
+    if (song == null) return;
+    resetEnrichmentBackoff(song.id);
+    _unavailableIds.remove(song.id);
+    _clearSilentRetry();
+    _isPlaying = true;
+    _unmuteOnPlay();
+    _lastPositionUpdate = DateTime.now();
+    _startTimer();
+    _playCurrentSongAudio();
+    notifyListeners();
+  }
 
   /// Polls reachability every 10s and reacts to changes. There is no
   /// platform connectivity callback in this app, so without this the
@@ -1547,6 +1609,13 @@ class MusicPlayerController extends ChangeNotifier {
         online = await _isDeviceOnline();
       } catch (_) {
         return;
+      }
+      // Back on Wi-Fi after mobile data: save the songs we skipped caching.
+      final metered = await _isOnMeteredConnection();
+      final wasMetered = _onMobileData;
+      _onMobileData = metered;
+      if (!_disposed && online && wasMetered && !metered) {
+        _cacheAllPendingOfflineAudio();
       }
       if (_disposed || online == _watchedOnline) return;
       _watchedOnline = online;
@@ -1565,6 +1634,7 @@ class MusicPlayerController extends ChangeNotifier {
     _fullUpgradeAttemptedAt.clear();
     _fullTrackAttemptCount.clear();
     _ytRefreshAttemptedIds.clear();
+    _unavailableIds.clear();
     final pending = _allSongs
         .where((s) =>
             s.id.startsWith('spotify-') &&
@@ -2509,6 +2579,12 @@ class MusicPlayerController extends ChangeNotifier {
       return;
     }
 
+    // Don't download whole songs over mobile data unless the user allowed it.
+    if (!await _mayDownloadNow()) {
+      _logDiag('offline cache skipped: on mobile data', song: song);
+      return;
+    }
+
     if (_cachingIds.contains(song.id)) return;
     _cachingIds.add(song.id);
 
@@ -3261,6 +3337,7 @@ class MusicPlayerController extends ChangeNotifier {
     }
     _isPlayingAudioInProgress = true;
     _loadingSongId = song.id;
+    _unavailableIds.remove(song.id);
 
     final sessionId = ++_playSessionId;
 
@@ -3585,6 +3662,7 @@ if (sessionId == _playSessionId) {
       _audioPlayerHasSource = false;
       _logDiag('NO AUDIO SOURCE AVAILABLE (no cache, no stream, no asset)',
           song: song);
+      _markUnavailable(song);
       notifyListeners();
     }
   }
@@ -3755,7 +3833,11 @@ if (sessionId == _playSessionId) {
       _silentRetrySongId = song.id;
       _silentRetryCount = 0;
     }
-    if (_silentRetryCount >= 3) return;
+    if (_silentRetryCount >= 3) {
+      // Out of retries: show "can't play" instead of a silent frozen player.
+      _markUnavailable(song);
+      return;
+    }
     _silentRetryCount += 1;
     final attempt = _silentRetryCount;
     _logDiag('silent retry #$attempt scheduled in 3s', song: song);

@@ -39,6 +39,7 @@ class _SettingsViewState extends State<SettingsView> {
   bool _canvasAnimation = true;
   bool _autoLyrics = false;
   bool _allowExplicit = true;
+  bool _downloadOnMobile = false;
 
   int _cacheSizeMb = 142;
 
@@ -107,6 +108,9 @@ class _SettingsViewState extends State<SettingsView> {
         }
         if (settings.containsKey('allow_explicit')) {
           _allowExplicit = settings['allow_explicit'] == 'true';
+        }
+        if (settings.containsKey('download_on_mobile_data')) {
+          _downloadOnMobile = settings['download_on_mobile_data'] == 'true';
         }
         if (settings.containsKey('cache_size_mb')) {
           _cacheSizeMb =
@@ -773,6 +777,17 @@ class _SettingsViewState extends State<SettingsView> {
                         ),
                       ],
                     ),
+                  ),
+                  const Divider(height: 1, color: AppTheme.border),
+                  _buildSwitchTile(
+                    title: 'Download on mobile data',
+                    subtitle:
+                        'Off: songs are saved for offline use only on Wi-Fi',
+                    value: _downloadOnMobile,
+                    onChanged: (val) {
+                      setState(() => _downloadOnMobile = val);
+                      _saveSetting('download_on_mobile_data', val.toString());
+                    },
                   ),
                 ]),
                 const SizedBox(height: 32),

@@ -132,6 +132,25 @@ class BottomPlayerBar extends StatelessWidget {
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                             ),
+                            if (song != null && controller.isUnavailable(song.id))
+                              Padding(
+                                padding: const EdgeInsets.only(top: 2),
+                                child: GestureDetector(
+                                  onTap: controller.retryCurrentSong,
+                                  child: const Text(
+                                    "CAN'T PLAY RIGHT NOW • TAP TO RETRY",
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    softWrap: false,
+                                    style: TextStyle(
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w700,
+                                      letterSpacing: 0.5,
+                                      color: AppTheme.accentPink,
+                                    ),
+                                  ),
+                                ),
+                              ),
                             if (song?.isSilentPlaceholder == true)
                               const Padding(
                                 padding: EdgeInsets.only(top: 2),
@@ -303,6 +322,25 @@ class BottomPlayerBar extends StatelessWidget {
                                       fontWeight: FontWeight.w700,
                                       letterSpacing: 0.5,
                                       color: AppTheme.accentGreen,
+                                    ),
+                                  ),
+                                ),
+                              if (song != null && controller.isUnavailable(song.id))
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 2),
+                                  child: GestureDetector(
+                                    onTap: controller.retryCurrentSong,
+                                    child: const Text(
+                                      "CAN'T PLAY RIGHT NOW • TAP TO RETRY",
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      softWrap: false,
+                                      style: TextStyle(
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.w700,
+                                        letterSpacing: 0.5,
+                                        color: AppTheme.accentPink,
+                                      ),
                                     ),
                                   ),
                                 ),
