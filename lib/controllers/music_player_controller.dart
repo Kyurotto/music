@@ -2543,8 +2543,10 @@ class MusicPlayerController extends ChangeNotifier {
     }
     // Imported tracks never get invented placeholder lyrics: an empty list
     // makes the lyrics sheet look up the real ones instead of showing a
-    // fixed fake timeline.
-    if (song.id.startsWith('spotify-') || song.id.startsWith('itunes-')) {
+    // fixed fake timeline, UNLESS this imported track matches a bundled offline asset.
+    if ((song.id.startsWith('spotify-') || song.id.startsWith('itunes-')) &&
+        !_offlineFallbackIds.contains(song.id) &&
+        !song.audioUrl.startsWith('assets/')) {
       return song.lyrics;
     }
     // Generate rhythmic, timestamped lyrics for offline tracking
@@ -2842,11 +2844,17 @@ class MusicPlayerController extends ChangeNotifier {
     if (songs.isEmpty) return;
     _queue = List<Song>.from(songs);
     _currentIndex = 0;
+    // Start on a full track when the head is still locating/preview.
+    if (needsFullTrack(_queue[_currentIndex])) {
+      final fullIndex = nextFullTrackIndex(_queue, _currentIndex, true);
+      if (fullIndex != null) _currentIndex = fullIndex;
+    }
     _currentPosition = Duration.zero;
     _audioDuration = Duration.zero;
     _lastPositionUpdate = DateTime.now();
     _unmuteOnPlay();
     _isPlaying = true;
+    _pendingHotSwapReload = false;
     _playbackTimer?.cancel();
     _cancelStallWatchdog();
     _startTimer();
@@ -3006,6 +3014,35 @@ class MusicPlayerController extends ChangeNotifier {
     }
   }
 
+  /// True when an imported track has no full audio yet (still locating
+  /// or a 30s preview) — these skip forward into full tracks.
+  static bool needsFullTrack(Song song) {
+    final imported =
+        song.id.startsWith('spotify-') || song.id.startsWith('itunes-');
+    return imported && (!song.hasAudio || song.isPreview);
+  }
+
+  /// Index of the next full track after [fromIndex] in [queue], or null
+  /// when none exists. Locating/preview placeholders are skipped; with
+  /// [wrap] the search continues from the top (repeat-all / shuffle).
+  static int? nextFullTrackIndex(
+    List<Song> queue,
+    int fromIndex,
+    bool wrap,
+  ) {
+    if (queue.isEmpty) return null;
+    final start = fromIndex.clamp(-1, queue.length - 1);
+    for (var i = start + 1; i < queue.length; i++) {
+      if (!needsFullTrack(queue[i])) return i;
+    }
+    if (wrap) {
+      for (var i = 0; i <= start && i < queue.length; i++) {
+        if (!needsFullTrack(queue[i])) return i;
+      }
+    }
+    return null;
+  }
+
   void next() {
     if (_queue.isEmpty) return;
 
@@ -3030,6 +3067,15 @@ class MusicPlayerController extends ChangeNotifier {
         pause();
         return;
       }
+    }
+    // Skip locating/preview placeholders into full tracks.
+    if (needsFullTrack(_queue[_currentIndex])) {
+      final fullIndex = nextFullTrackIndex(
+        _queue,
+        _currentIndex,
+        _repeatMode == PlaybackRepeatMode.all || _isShuffle,
+      );
+      if (fullIndex != null) _currentIndex = fullIndex;
     }
     _currentPosition = Duration.zero;
     _audioDuration = Duration.zero;
