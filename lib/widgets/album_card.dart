@@ -6,6 +6,7 @@ class AlbumCard extends StatefulWidget {
   final MusicPlaylist playlist;
   final VoidCallback onPlay;
   final VoidCallback onTap;
+  final VoidCallback? onDelete;
   final bool isSelected;
 
   const AlbumCard({
@@ -13,6 +14,7 @@ class AlbumCard extends StatefulWidget {
     required this.playlist,
     required this.onPlay,
     required this.onTap,
+    this.onDelete,
     this.isSelected = false,
   });
 
@@ -76,14 +78,57 @@ class _AlbumCardState extends State<AlbumCard> {
                           end: Alignment.bottomRight,
                         ),
                       ),
-                      child: Center(
-                        child: Icon(
-                          Icons.album_rounded,
-                          size: 54,
-                          color: Colors.white.withValues(alpha: 0.9),
-                        ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: widget.playlist.imageUrl.isNotEmpty
+                            ? Image.network(
+                                widget.playlist.imageUrl,
+                                fit: BoxFit.cover,
+                                width: double.infinity,
+                                height: double.infinity,
+                                errorBuilder: (context, error, stackTrace) => Center(
+                                  child: Icon(
+                                    Icons.album_rounded,
+                                    size: 54,
+                                    color: Colors.white.withValues(alpha: 0.9),
+                                  ),
+                                ),
+                              )
+                            : Center(
+                                child: Icon(
+                                  Icons.album_rounded,
+                                  size: 54,
+                                  color: Colors.white.withValues(alpha: 0.9),
+                                ),
+                              ),
                       ),
                     ),
+                    if (widget.onDelete != null)
+                      AnimatedPositioned(
+                        duration: const Duration(milliseconds: 200),
+                        top: 8,
+                        right: 8,
+                        child: AnimatedOpacity(
+                          duration: const Duration(milliseconds: 200),
+                          opacity: active ? 1.0 : 0.0,
+                          child: Material(
+                            color: Colors.black.withValues(alpha: 0.65),
+                            shape: const CircleBorder(),
+                            child: InkWell(
+                              customBorder: const CircleBorder(),
+                              onTap: widget.onDelete,
+                              child: const Padding(
+                                padding: EdgeInsets.all(6),
+                                child: Icon(
+                                  Icons.delete_outline_rounded,
+                                  color: Colors.white,
+                                  size: 18,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
                     // Floating play button on hover or when selected
                     AnimatedPositioned(
                       duration: const Duration(milliseconds: 200),

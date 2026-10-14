@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:music/controllers/music_player_controller.dart';
+import 'package:music/models/song_model.dart';
 import 'package:music/services/spotify_import_service.dart';
 
 void main() {
@@ -125,6 +126,20 @@ void main() {
 
     test('reuses a local library song when title and artist match', () {
       final controller = MusicPlayerController();
+      final sample = Song(
+        id: 'local-lose-yourself',
+        title: 'Lose Yourself',
+        artist: 'Eminem',
+        album: '8 Mile',
+        duration: const Duration(minutes: 5, seconds: 20),
+        genre: 'Hip-Hop',
+        imageUrl: '',
+        gradientColors: const [],
+        plays: '',
+        lyrics: const [],
+        audioUrl: 'assets/audio/lose-yourself.m4a',
+      );
+      controller.addSong(sample);
       final local = controller.allSongs.firstWhere((s) => s.title == 'Lose Yourself');
 
       final result = controller.importSpotifyTracks(
@@ -153,7 +168,7 @@ void main() {
 
       expect(result.playlistId, target.id);
       expect(target.trackCount, 1);
-      expect(controller.playlists.length, 4 + 1);
+      expect(controller.playlists.length, 1);
     });
 
     test('never creates duplicate songs across different playlists', () {
@@ -208,7 +223,11 @@ void main() {
         ],
       );
       final song = controller.songsForPlaylist(controller.playlists.last.id).single;
-      expect(song.isPreview, isTrue);
+      // Import never seeds the 30s preview — the track starts silent and
+      // enrichment must resolve a full-length stream.
+      expect(song.isPreview, isFalse);
+      expect(song.hasAudio, isFalse);
+      expect(song.isSilentPlaceholder, isTrue);
       expect(song.isFullTrack, isFalse);
 
       // Simulate enrichment resolving a full-length Saavn/YouTube stream.
@@ -274,14 +293,14 @@ void main() {
       final song = controller.songsForPlaylist(controller.playlists.last.id).single;
       expect(song.audioUrl, isEmpty); // Starts un-cached
 
-      // Verify offline asset fallback is provided
+      // Verify unbundled songs do not falsely play a different song's audio
       final fallbackAsset = controller.getOfflineAssetFallbackForTesting(song);
-      expect(fallbackAsset, startsWith('assets/audio/'));
+      expect(fallbackAsset, isEmpty);
 
-      // Verify offline lyrics are generated so the lyrics tracker moves in sync
+      // Imported tracks get no invented placeholder lyrics; the lyrics sheet
+      // looks up the real ones instead.
       final lyrics = controller.ensureOfflineLyricsForTesting(song);
-      expect(lyrics, isNotEmpty);
-      expect(lyrics.first, contains('Custom Indie Track'));
+      expect(lyrics, isEmpty);
 
       controller.dispose();
     });

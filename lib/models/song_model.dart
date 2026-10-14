@@ -22,6 +22,7 @@ class Song {
   /// True when audio comes from YouTube (URLs expire after a few hours —
   /// the player resolves a fresh one when a saved URL fails to load).
   bool isYouTubeAudio;
+  String youtubeVideoId;
   bool isEnrichingLyrics;
 
   Song({
@@ -40,6 +41,7 @@ class Song {
     this.isLiked = false,
     this.isPreview = false,
     this.isYouTubeAudio = false,
+    this.youtubeVideoId = '',
     this.isEnrichingLyrics = false,
   });
 
@@ -68,10 +70,28 @@ class Song {
   }
 
   static Duration? parseLyricTimestamp(String line) {
-    final match = RegExp(r'^\[(\d+):(\d+\.?\d*)\]').firstMatch(line);
+    final trimmed = line.trim();
+    final match = RegExp(r'^\[(\d+):(\d+)(?:[.:](\d+))?\]').firstMatch(trimmed);
     if (match != null) {
       final min = int.parse(match.group(1)!);
-      final sec = double.parse(match.group(2)!);
+      final sec = int.parse(match.group(2)!);
+      final frac = match.group(3);
+      int millis = 0;
+      if (frac != null && frac.isNotEmpty) {
+        if (frac.length == 1) {
+          millis = int.parse(frac) * 100;
+        } else if (frac.length == 2) {
+          millis = int.parse(frac) * 10;
+        } else {
+          millis = int.parse(frac.substring(0, 3));
+        }
+      }
+      return Duration(milliseconds: min * 60000 + sec * 1000 + millis);
+    }
+    final alt = RegExp(r'^\[(\d+):(\d+\.?\d*)\]').firstMatch(trimmed);
+    if (alt != null) {
+      final min = int.parse(alt.group(1)!);
+      final sec = double.parse(alt.group(2)!);
       return Duration(milliseconds: (min * 60000 + sec * 1000).round());
     }
     return null;
@@ -94,8 +114,9 @@ class Song {
     final effectiveTotal =
         total > Duration.zero ? total : const Duration(minutes: 3);
 
-    if (lyrics.any((l) => l.startsWith('['))) {
-      int lastIndex = 0;
+    final hasTimestamped = lyrics.any((l) => parseLyricTimestamp(l) != null);
+    if (hasTimestamped) {
+      int lastIndex = -1;
       for (int i = 0; i < lyrics.length; i++) {
         final time = parseLyricTimestamp(lyrics[i]);
         if (time != null) {
@@ -104,13 +125,11 @@ class Song {
           } else {
             break;
           }
-        } else {
-          if (i > 0 && lastIndex == i - 1) {
-            lastIndex = i;
-          }
         }
       }
-      return lastIndex;
+      if (lastIndex >= 0) return lastIndex;
+      final firstIdx = lyrics.indexWhere((l) => parseLyricTimestamp(l) != null);
+      return firstIdx >= 0 ? firstIdx : 0;
     }
 
     final posUs = position.inMicroseconds;
@@ -150,6 +169,7 @@ class MusicPlaylist {
   final String subtitle;
   final List<Color> gradient;
   final List<String> songIds;
+  String imageUrl;
 
   MusicPlaylist({
     required this.id,
@@ -157,520 +177,18 @@ class MusicPlaylist {
     required this.subtitle,
     required this.gradient,
     List<String>? songIds,
+    this.imageUrl = '',
   }) : songIds = songIds ?? [];
 
   int get trackCount => songIds.length;
 }
 
 class SampleMusicData {
-  static List<Song> get sampleSongs => [
-        // Eminem
-        Song(
-          id: 'lose-yourself',
-          title: 'Lose Yourself',
-          artist: 'Eminem',
-          album: '8 Mile Soundtrack',
-          duration: const Duration(minutes: 5, seconds: 21),
-          genre: 'Hip-Hop',
-          imageUrl: '',
-          gradientColors: const [Color(0xFFE52D27), Color(0xFFB31217)],
-          plays: '2.5B',
-          audioUrl: 'assets/audio/lose-yourself.m4a',
-          isFeatured: true,
-          lyrics: const [
-            "Look, if you had one shot, or one opportunity",
-            "To seize everything you ever wanted in one moment",
-            "Would you capture it, or just let it slip?",
-            "Yo, his palms are sweaty, knees weak, arms are heavy",
-            "There's vomit on his sweater already, mom's spaghetti",
-            "He's nervous, but on the surface he looks calm and ready",
-            "To drop bombs, but he keeps on forgettin'",
-            "What he wrote down, the whole crowd goes so loud",
-            "He opens his mouth, but the words won't come out",
-            "He's chokin', how? Everybody's jokin' now",
-            "The clocks run out, time's up, over, blaow",
-            "Snap back to reality, ope there goes gravity",
-            "Ope, there goes Rabbit, he choked, he's so mad",
-            "But he won't give up that easy? No, he won't have it",
-            "He knows his whole back's to these ropes, it don't matter",
-            "He's dope, he knows that, but he's broke, he's so stagnant",
-            "He knows, when he goes back to this mobile home, that's when it's",
-            "Back to the lab again, yo, this whole rhapsody",
-            "Better go capture this moment and hope it don't pass him",
-            "You better lose yourself in the music, the moment",
-            "You own it, you better never let it go",
-            "You only get one shot, do not miss your chance to blow",
-            "This opportunity comes once in a lifetime",
-            "You better lose yourself in the music, the moment",
-            "You own it, you better never let it go",
-            "You only get one shot, do not miss your chance to blow",
-            "This opportunity comes once in a lifetime, yo",
-          ],
-        ),
-        Song(
-          id: 'without-me',
-          title: 'Without Me',
-          artist: 'Eminem',
-          album: 'The Eminem Show',
-          duration: const Duration(minutes: 4, seconds: 51),
-          genre: 'Hip-Hop',
-          imageUrl: '',
-          gradientColors: const [Color(0xFF8A2387), Color(0xFFE94057)],
-          plays: '2.1B',
-          audioUrl: 'assets/audio/without-me.m4a',
-          lyrics: const [
-            "Obie Trice, real name, no gimmicks",
-            "Two trailer park girls go 'round the outside",
-            "'Round the outside, 'round the outside",
-            "Two trailer park girls go 'round the outside",
-            "'Round the outside, 'round the outside",
-            "Guess who's back, back again?",
-            "Shady's back, tell a friend",
-            "Guess who's back, guess who's back?",
-            "Guess who's back, guess who's back?",
-            "I've created a monster, 'cause nobody wants to see Marshall no more",
-            "They want Shady, I'm chopped liver",
-            "Well, if you want Shady, this is what I'll give ya",
-            "A little bit of weed mixed with some hard liquor",
-            "Some vodka that'll jumpstart my heart quicker",
-            "Than a shock when I get shocked at the hospital",
-            "By the doctor when I'm not co-operating",
-            "When I'm rocking the table while he's operating",
-            "Now this looks like a job for me",
-            "So everybody, just follow me",
-            "'Cause we need a little controversy",
-            "'Cause it feels so empty without me",
-            "I said, this looks like a job for me",
-            "So everybody, just follow me",
-            "'Cause we need a little controversy",
-            "'Cause it feels so empty without me",
-          ],
-        ),
-        Song(
-          id: 'mockingbird',
-          title: 'Mockingbird',
-          artist: 'Eminem',
-          album: 'Encore',
-          duration: const Duration(minutes: 4, seconds: 10),
-          genre: 'Hip-Hop',
-          imageUrl: '',
-          gradientColors: const [Color(0xFF434343), Color(0xFF000000)],
-          plays: '1.8B',
-          audioUrl: 'assets/audio/mockingbird.m4a',
-          lyrics: const [
-            "Yeah, I know sometimes things may not make sense to you right now",
-            "But hey, what daddy always tell you?",
-            "Straighten up little soldier, stiffen up that upper lip",
-            "What you cryin' about? You got me",
-            "Hailie, I know you miss your mom, and I know you miss your dad",
-            "When I'm gone, but I'm tryin' to give you the life that I never had",
-            "I see you sad, even when you smile, even when you laugh",
-            "I can see it in your eyes, deep inside you wanna cry",
-            "'Cause you're scared, I ain't there?",
-            "Daddy's with you in your prayers",
-            "No more cryin', wipe them tears",
-            "Daddy's here, no more nightmares",
-            "We gonna pull together through it, we gon' do it",
-            "Laney, uncle's crazy, ain't he? Yeah, but he loves you, girl",
-            "And you better know it, we're all we got in this world",
-            "Now hush little baby, don't you cry",
-            "Everything's gonna be alright",
-            "Stiffen that upper lip up, little lady, I told ya",
-            "Daddy's here to hold ya through the night",
-            "I know mommy's not here right now and we don't know why",
-            "We fear how we feel inside",
-            "It may seem a little crazy, pretty baby",
-            "But I promise mama's gon' be alright",
-          ],
-        ),
-        Song(
-          id: 'the-real-slim-shady',
-          title: 'The Real Slim Shady',
-          artist: 'Eminem',
-          album: 'The Marshall Mathers LP',
-          duration: const Duration(minutes: 4, seconds: 44),
-          genre: 'Hip-Hop',
-          imageUrl: '',
-          gradientColors: const [Color(0xFF2C3E50), Color(0xFFFD746C)],
-          plays: '1.9B',
-          audioUrl: 'assets/audio/the-real-slim-shady.m4a',
-          lyrics: const [
-            "May I have your attention, please?",
-            "May I have your attention, please?",
-            "Will the real Slim Shady please stand up?",
-            "I repeat, will the real Slim Shady please stand up?",
-            "We're gonna have a problem here",
-            "Y'all act like you never seen a white person before",
-            "Jaws all on the floor like Pam, like Tommy just burst in the door",
-            "And started whoopin' her ass worse than before",
-            "They first were divorced, throwin' her over furniture",
-            "It's the return of the 'Ah, wait, no way, you're kidding'",
-            "'He didn't just say what I think he did, did he?'",
-            "And Dr. Dre said... nothing, you idiots",
-            "Dr. Dre's dead, he's locked in my basement",
-            "'Cause I'm Slim Shady, yes, I'm the real Shady",
-            "All you other Slim Shadys are just imitating",
-            "So won't the real Slim Shady please stand up",
-            "Please stand up, please stand up?",
-            "'Cause I'm Slim Shady, yes, I'm the real Shady",
-            "All you other Slim Shadys are just imitating",
-            "So won't the real Slim Shady please stand up",
-            "Please stand up, please stand up?",
-          ],
-        ),
+  /// No pre-loaded sample songs — the app starts with an empty library.
+  static List<Song> get sampleSongs => [];
 
-        // Ed Sheeran
-        Song(
-          id: 'shape-of-you',
-          title: 'Shape of You',
-          artist: 'Ed Sheeran',
-          album: '÷ (Divide)',
-          duration: const Duration(minutes: 3, seconds: 55),
-          genre: 'Pop',
-          imageUrl: '',
-          gradientColors: const [Color(0xFF00B4DB), Color(0xFF0083B0)],
-          plays: '3.9B',
-          audioUrl: 'assets/audio/shape-of-you.m4a',
-          lyrics: const [
-            "The club isn't the best place to find a lover",
-            "So the bar is where I go",
-            "Me and my friends at the table doing shots",
-            "Drinking fast and then we talk slow",
-            "Come over and start up a conversation with just me",
-            "And trust me I'll give it a chance now",
-            "Took my hand, stop, put Van the Man on the jukebox",
-            "And then we start to dance, and now I'm singing like",
-            "Girl, you know I want your love",
-            "Your love was handmade for somebody like me",
-            "Come on now, follow my lead",
-            "I may be crazy, don't mind me",
-            "Say, boy, let's not talk too much",
-            "Grab on my waist and put that body on me",
-            "Come on now, follow my lead",
-            "Come, come on now, follow my lead",
-            "I'm in love with the shape of you",
-            "We push and pull like a magnet do",
-            "Although my heart is falling too",
-            "I'm in love with your body",
-            "And last night you were in my room",
-            "And now my bedsheets smell like you",
-            "Every day discovering something brand new",
-            "I'm in love with your body",
-            "Oh—I—oh—I—oh—I—oh—I",
-            "I'm in love with your body",
-            "Every day discovering something brand new",
-            "I'm in love with the shape of you",
-          ],
-        ),
-        Song(
-          id: 'perfect',
-          title: 'Perfect',
-          artist: 'Ed Sheeran',
-          album: '÷ (Divide)',
-          duration: const Duration(minutes: 4, seconds: 41),
-          genre: 'Acoustic',
-          imageUrl: '',
-          gradientColors: const [Color(0xFF56CCF2), Color(0xFF2F80ED)],
-          plays: '3.1B',
-          audioUrl: 'assets/audio/perfect.m4a',
-          lyrics: const [
-            "I found a love for me",
-            "Oh darling, just dive right in and follow my lead",
-            "Well, I found a girl, beautiful and sweet",
-            "Oh, I never knew you were the someone waiting for me",
-            "'Cause we were just kids when we fell in love",
-            "Not knowing what it was",
-            "I will not give you up this time",
-            "But darling, just kiss me slow",
-            "Your heart is all I own",
-            "And in your eyes, you're holding mine",
-            "Baby, I'm dancing in the dark",
-            "With you between my arms",
-            "Barefoot on the grass",
-            "Listening to our favourite song",
-            "When you said you looked a mess",
-            "I whispered underneath my breath",
-            "But you heard it",
-            "Darling, you look perfect tonight",
-            "Well, I found a woman, stronger than anyone I know",
-            "She shares my dreams, I hope that someday I'll share her home",
-            "I found a lover, to carry more than just my secrets",
-            "To carry love, to carry children of our own",
-            "Baby, I'm dancing in the dark",
-            "With you between my arms",
-            "Barefoot on the grass",
-            "Listening to our favourite song",
-            "I have faith in what I see",
-            "Now I know I have met an angel in person",
-            "And she looks perfect",
-            "I don't deserve this",
-            "You look perfect tonight",
-          ],
-        ),
-        Song(
-          id: 'bad-habits',
-          title: 'Bad Habits',
-          artist: 'Ed Sheeran',
-          album: '= (Equals)',
-          duration: const Duration(minutes: 3, seconds: 51),
-          genre: 'Pop',
-          imageUrl: '',
-          gradientColors: const [Color(0xFFFF416C), Color(0xFFFF4B2B)],
-          plays: '2.0B',
-          audioUrl: 'assets/audio/bad-habits.m4a',
-          lyrics: const [
-            "Every time you come around, you know I can't say no",
-            "Every time the sun goes down, I let you take control",
-            "I can feel the paradise before my world implodes",
-            "And tonight had something wonderful",
-            "My bad habits lead to late nights, endin' alone",
-            "Conversations with a stranger I barely know",
-            "Swearin' this will be the last, but it probably won't",
-            "I got nothin' left to lose, or use, or do",
-            "My bad habits lead to wide eyes starin' at space",
-            "And I know I'll lose control of the things that I say",
-            "Yeah, I was lookin' for a way out, now I can't escape",
-            "Nothin' happens after two, it's true, it's true",
-            "My bad habits lead to you",
-            "My bad habits lead to you",
-            "My bad habits lead to you",
-            "My bad habits lead to late nights endin' alone",
-            "Conversations with a stranger I barely know",
-            "My bad habits lead to you",
-          ],
-        ),
-        Song(
-          id: 'thinking-out-loud',
-          title: 'Thinking Out Loud',
-          artist: 'Ed Sheeran',
-          album: 'x (Multiply)',
-          duration: const Duration(minutes: 4, seconds: 52),
-          genre: 'Acoustic',
-          imageUrl: '',
-          gradientColors: const [Color(0xFFF7971E), Color(0xFFFFD200)],
-          plays: '2.4B',
-          audioUrl: 'assets/audio/thinking-out-loud.m4a',
-          lyrics: const [
-            "When your legs don't work like they used to before",
-            "And I can't sweep you off of your feet",
-            "Will your mouth still remember the taste of my love?",
-            "Will your eyes still smile from your cheeks?",
-            "And darling I will be loving you 'til we're 70",
-            "And baby my heart could still fall as hard at 23",
-            "And I'm thinking 'bout how people fall in love in mysterious ways",
-            "Maybe just the touch of a hand",
-            "Oh me I fall in love with you every single day",
-            "And I just wanna tell you I am",
-            "So honey now",
-            "Take me into your loving arms",
-            "Kiss me under the light of a thousand stars",
-            "Place your head on my beating heart",
-            "I'm thinking out loud",
-            "Maybe we found love right where we are",
-          ],
-        ),
-
-        // Taylor Swift
-        Song(
-          id: 'cruel-summer',
-          title: 'Cruel Summer',
-          artist: 'Taylor Swift',
-          album: 'Lover',
-          duration: const Duration(minutes: 2, seconds: 59),
-          genre: 'Pop',
-          imageUrl: '',
-          gradientColors: const [Color(0xFFFA709A), Color(0xFFFEE140)],
-          plays: '2.4B',
-          audioUrl: 'assets/audio/cruel-summer.m4a',
-          lyrics: const [
-            "Fever dream high in the quiet of the night",
-            "You know that I caught it",
-            "Bad, bad boy, shiny toy with a price",
-            "You know that I bought it",
-            "Killing me slow, out the window",
-            "I'm always waiting for you to be waiting below",
-            "Devils roll the dice, angels roll their eyes",
-            "What doesn't kill me makes me want you more",
-            "And it's new, the shape of your body",
-            "It's blue, the feeling I've got",
-            "And it's ooh, whoa, oh",
-            "It's a cruel summer",
-            "It's cool, that's what I tell 'em",
-            "No rules in breakable heaven",
-            "But ooh, whoa, oh",
-            "It's a cruel summer with you",
-            "Hang your head low in the glow of the vending machine",
-            "I'm not dying",
-            "We say that we'll just screw it up in these trying times",
-            "We're not trying",
-            "So cut the headlights, summer's a knife",
-            "I'm always waiting for you just to cut to the bone",
-            "Devils roll the dice, angels roll their eyes",
-            "And if I bleed, you'll be the last to know",
-            "I'm drunk in the back of the car",
-            "And I cried like a baby coming home from the bar",
-            "Said, 'I'm fine,' but it wasn't true",
-            "I don't wanna keep secrets just to keep you",
-            "And I snuck in through the garden gate",
-            "Every night that summer just to seal my fate",
-            "And I screamed for whatever it's worth",
-            "'I love you,' ain't that the worst thing you ever heard?",
-            "He looks up grinning like a devil",
-            "It's a cruel summer with you",
-          ],
-        ),
-        Song(
-          id: 'blank-space',
-          title: 'Blank Space',
-          artist: 'Taylor Swift',
-          album: '1989',
-          duration: const Duration(minutes: 3, seconds: 51),
-          genre: 'Pop',
-          imageUrl: '',
-          gradientColors: const [Color(0xFF654EA3), Color(0xFFEAAFC8)],
-          plays: '1.9B',
-          audioUrl: 'assets/audio/blank-space.m4a',
-          lyrics: const [
-            "Nice to meet you, where you been?",
-            "I could show you incredible things",
-            "Magic, madness, heaven, sin",
-            "Saw you there and I thought",
-            "'Oh, my God, look at that face'",
-            "You look like my next mistake",
-            "Love's a game, wanna play?",
-            "New money, suit and tie",
-            "I can read you like a magazine",
-            "Ain't it funny? Rumors fly",
-            "And I know you heard about me",
-            "So it's gonna be forever",
-            "Or it's gonna go down in flames",
-            "You can tell me when it's over, mm",
-            "If the high was worth the pain",
-            "Got a long list of ex-lovers",
-            "They'll tell you I'm insane",
-            "'Cause you know I love the players",
-            "And you love the game",
-            "'Cause we're young, and we're reckless",
-            "We'll take this way too far",
-            "It'll leave you breathless, mm",
-            "Or with a nasty scar",
-            "Got a long list of ex-lovers",
-            "They'll tell you I'm insane",
-            "But I've got a blank space, baby",
-            "And I'll write your name",
-          ],
-        ),
-
-        // Bruno Mars
-        Song(
-          id: 'uptown-funk',
-          title: 'Uptown Funk',
-          artist: 'Bruno Mars & Mark Ronson',
-          album: 'Uptown Special',
-          duration: const Duration(minutes: 4, seconds: 31),
-          genre: 'Funk',
-          imageUrl: '',
-          gradientColors: const [Color(0xFFFF416C), Color(0xFFFF4B2B)],
-          plays: '2.8B',
-          audioUrl: 'assets/audio/uptown-funk.m4a',
-          lyrics: const [
-            "This hit, that ice cold, Michelle Pfeiffer, that white gold",
-            "This one for them hood girls, them good girls, straight masterpieces",
-            "Stylin', wilin', livin' it up in the city",
-            "Got Chucks on with Saint Laurent, gotta kiss myself, I'm so pretty",
-            "I'm too hot (hot damn)",
-            "Called a police and a fireman",
-            "I'm too hot (hot damn)",
-            "Make a dragon wanna retire, man",
-            "I'm too hot (hot damn)",
-            "Say my name, you know who I am",
-            "I'm too hot (hot damn)",
-            "And my band 'bout that money, break it down",
-            "Girls hit your hallelujah (whoo)",
-            "Girls hit your hallelujah (whoo)",
-            "Girls hit your hallelujah (whoo)",
-            "'Cause Uptown Funk gon' give it to ya",
-            "'Cause Uptown Funk gon' give it to ya",
-            "'Cause Uptown Funk gon' give it to ya",
-            "Saturday night and we in the spot",
-            "Don't believe me, just watch! (Come on)",
-            "Don't believe me, just watch!",
-            "Don't believe me, just watch!",
-            "Don't believe me, just watch!",
-            "Hey, hey, hey, oh!",
-          ],
-        ),
-        Song(
-          id: 'just-the-way-you-are',
-          title: 'Just the Way You Are',
-          artist: 'Bruno Mars',
-          album: 'Doo-Wops & Hooligans',
-          duration: const Duration(minutes: 3, seconds: 39),
-          genre: 'Pop',
-          imageUrl: '',
-          gradientColors: const [Color(0xFF11998E), Color(0xFF38EF7D)],
-          plays: '2.3B',
-          audioUrl: 'assets/audio/just-the-way-you-are.m4a',
-          lyrics: const [
-            "Oh, her eyes, her eyes make the stars look like they're not shinin'",
-            "Her hair, her hair falls perfectly without her tryin'",
-            "She's so beautiful and I tell her everyday",
-            "Yeah, I know, I know when I compliment her, she won't believe me",
-            "And it's so, it's so sad to think that she don't see what I see",
-            "But every time she asks me, 'Do I look okay?' I say",
-            "When I see your face",
-            "There's not a thing that I would change",
-            "'Cause you're amazing",
-            "Just the way you are",
-            "And when you smile",
-            "The whole world stops and stares for a while",
-            "'Cause, girl, you're amazing",
-            "Just the way you are",
-            "Yeah",
-            "Her lips, her lips, I could kiss them all day if she'd let me",
-            "Her laugh, her laugh, she hates, but I think it's so sexy",
-            "She's so beautiful and I tell her everyday",
-            "Oh, you know, you know, you know I'd never ask you to change",
-            "If perfect's what you're searchin' for, then just stay the same",
-            "So don't even bother askin' if you look okay, you know I'll say",
-            "When I see your face",
-            "There's not a thing that I would change",
-            "'Cause you're amazing",
-            "Just the way you are",
-          ],
-        ),
-      ];
-
-  static List<MusicPlaylist> get initialPlaylists => [
-        MusicPlaylist(
-          id: 'eminem-hits',
-          title: 'This Is Eminem',
-          subtitle: 'The Real Slim Shady & hip-hop classics',
-          gradient: const [Color(0xFFE52D27), Color(0xFFB31217)],
-          songIds: ['lose-yourself', 'without-me', 'mockingbird', 'the-real-slim-shady'],
-        ),
-        MusicPlaylist(
-          id: 'ed-sheeran-hits',
-          title: 'This Is Ed Sheeran',
-          subtitle: 'Acoustic ballads and chart-topping hits',
-          gradient: const [Color(0xFF00B4DB), Color(0xFF0083B0)],
-          songIds: ['shape-of-you', 'perfect', 'bad-habits', 'thinking-out-loud'],
-        ),
-        MusicPlaylist(
-          id: 'taylor-swift-hits',
-          title: 'This Is Taylor Swift',
-          subtitle: 'Lover, 1989 & pop anthems',
-          gradient: const [Color(0xFFFA709A), Color(0xFFFEE140)],
-          songIds: ['cruel-summer', 'blank-space'],
-        ),
-        MusicPlaylist(
-          id: 'bruno-mars-hits',
-          title: 'This Is Bruno Mars',
-          subtitle: 'Funk, soul, and unforgettable pop hits',
-          gradient: const [Color(0xFFFF416C), Color(0xFFFF4B2B)],
-          songIds: ['uptown-funk', 'just-the-way-you-are'],
-        ),
-      ];
+  /// No pre-loaded artist playlists.
+  static List<MusicPlaylist> get initialPlaylists => [];
 
   static List<MusicPlaylist> get playlists => initialPlaylists;
 

@@ -403,6 +403,39 @@ void main() {
       service.dispose();
     });
 
+    test('skips iTunes/Deezer entirely when full track is required',
+        () async {
+      var previewSourceRequests = 0;
+      final service = serviceFor((request) async {
+        if (request.url.host == 'itunes.apple.com' ||
+            request.url.host == 'api.deezer.com') {
+          previewSourceRequests++;
+          return jsonOk({
+            'results': [
+              {
+                'trackName': 'Tingin',
+                'artistName': 'Cup of Joe',
+                'previewUrl': 'https://example.com/tingin-30s.m4a',
+                'kind': 'song',
+              },
+            ],
+          });
+        }
+        return http.Response('not found', 404);
+      });
+
+      final enrichment = await service.enrichTrack(
+        title: 'Tingin',
+        artist: 'Cup of Joe',
+        allowPreviewFallback: false,
+      );
+
+      expect(enrichment.hasAudio, isFalse);
+      expect(enrichment.isFullTrack, isFalse);
+      expect(previewSourceRequests, 0);
+      service.dispose();
+    });
+
     test('uses a compatible preview directly after full-track playback fails',
         () async {
       var fullSourceRequests = 0;
@@ -547,6 +580,69 @@ void main() {
         'https://example.com/multo-title-only.mp3',
       );
       expect(enrichment.isFullTrack, isTrue);
+      service.dispose();
+    });
+  });
+
+  group('TrackEnrichmentService SoundCloud full-length audio', () {
+    test('resolves full-length stream from SoundCloud when Saavn misses', () async {
+      final service = serviceFor((request) async {
+          if (request.url.host.startsWith('saavn.')) {
+            return http.Response('not found', 404);
+          }
+          if (request.url.host == 'soundcloud.com') {
+            return http.Response(
+              '<html><head><script src="https://a-v2.sndcdn.com/assets/55-app.js"></script></head></html>',
+              200,
+            );
+          }
+          if (request.url.host == 'a-v2.sndcdn.com') {
+            return http.Response('window.config={client_id:"mock_sc_client_id_123456789012"};', 200);
+          }
+          if (request.url.host == 'api-v2.soundcloud.com' &&
+              request.url.path == '/search/tracks') {
+            return http.Response(
+              jsonEncode({
+                'collection': [
+                  {
+                    'title': 'Lalim',
+                    'duration': 199000,
+                    'user': {'username': 'MATÉO'},
+                    'artwork_url': 'https://i1.sndcdn.com/artworks-large.jpg',
+                    'media': {
+                      'transcodings': [
+                        {
+                          'url': 'https://api-v2.soundcloud.com/media/stream/hls',
+                          'format': {'protocol': 'hls'},
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }),
+              200,
+            );
+          }
+          if (request.url.host == 'api-v2.soundcloud.com' &&
+              request.url.path == '/media/stream/hls') {
+            return http.Response(
+              jsonEncode({'url': 'https://playback.media-streaming.soundcloud.cloud/lalim.m3u8'}),
+              200,
+            );
+          }
+          return http.Response('not found', 404);
+        });
+
+      final enrichment = await service.enrichTrack(
+        title: 'Lalim',
+        artist: 'MATÉO',
+        duration: const Duration(seconds: 199),
+      );
+
+      expect(enrichment.previewUrl, 'https://playback.media-streaming.soundcloud.cloud/lalim.m3u8');
+      expect(enrichment.isFullTrack, isTrue);
+      expect(enrichment.previewDuration, const Duration(seconds: 199));
+      expect(enrichment.artworkUrl, 'https://i1.sndcdn.com/artworks-t500x500.jpg');
       service.dispose();
     });
   });
@@ -792,6 +888,118 @@ void main() {
       service.dispose();
     });
 
+    test('skips minus-one, no-vocals and sing-along uploads on YouTube',
+        () async {
+      final service = youtubeService((request) async {
+        if (request.url.host.startsWith('saavn.')) {
+          return http.Response('not found', 404);
+        }
+        if (request.url.host == 'www.youtube.com' &&
+            request.url.path == '/youtubei/v1/search') {
+          return ytSearchOk([
+            ytVideo(
+              videoId: 'MinusOne001',
+              title: 'You Are The Reason - Calum Scott (Minus One)',
+              channel: 'Karaoke Hub',
+              liveLengthShape: true,
+            ),
+            ytVideo(
+              videoId: 'NoVocals002',
+              title: 'You Are The Reason (No Vocals)',
+              channel: 'Backing Tracks PH',
+              liveLengthShape: true,
+            ),
+            ytVideo(
+              videoId: 'SingAlong003',
+              title: 'Calum Scott - You Are The Reason (Sing Along)',
+              channel: 'Sing Along Kings',
+              liveLengthShape: true,
+            ),
+            ytVideo(
+              videoId: 'Studio00004',
+              title: 'Calum Scott - You Are The Reason (Official Audio)',
+              channel: 'CalumScottVEVO',
+              liveLengthShape: true,
+            ),
+          ]);
+        }
+        if (request.url.host == 'www.youtube.com' &&
+            request.url.path == '/youtubei/v1/player') {
+          return ytPlayerOk(url: 'https://example.com/yatr-full.m4a');
+        }
+        if (request.url.host == 'itunes.apple.com') {
+          return jsonOk({'results': []});
+        }
+        if (request.url.host == 'api.deezer.com') {
+          return jsonOk({'data': []});
+        }
+        return http.Response('not found', 404);
+      });
+
+      final enrichment = await service.enrichTrack(
+        title: 'You Are The Reason',
+        artist: 'Calum Scott',
+        duration: const Duration(seconds: 227),
+      );
+      expect(enrichment.previewUrl, 'https://example.com/yatr-full.m4a');
+      expect(enrichment.isFullTrack, isTrue);
+      expect(enrichment.isYouTube, isTrue);
+      service.dispose();
+    });
+
+    test('googlevideo throttle cooldown gates direct stream checks', () {
+      final service = TrackEnrichmentService();
+      expect(service.googlevideoCoolingDown, isFalse);
+      service.noteGooglevideoThrottle();
+      expect(service.googlevideoCoolingDown, isTrue);
+      service.dispose();
+    });
+
+    test('non-studio guard keeps genuine requests and studio tracks', () {
+      // A wanted karaoke track still resolves karaoke.
+      expect(
+        TrackEnrichmentService.isNonStudioVariant(
+          'Multo - Cup of Joe (Karaoke Version)',
+          'Multo Karaoke Cup of Joe',
+        ),
+        isFalse,
+      );
+      // Variant uploads are rejected for normal wants.
+      expect(
+        TrackEnrichmentService.isNonStudioVariant(
+          'You Are The Reason (Minus One)',
+          'You Are The Reason Calum Scott',
+        ),
+        isTrue,
+      );
+      expect(
+        TrackEnrichmentService.isNonStudioVariant(
+          'Multo (Cover)',
+          'Multo Cup of Joe',
+        ),
+        isTrue,
+      );
+      // Studio uploads pass.
+      expect(
+        TrackEnrichmentService.isNonStudioVariant(
+          'Multo - Cup of Joe (Official Audio)',
+          'Multo Cup of Joe',
+        ),
+        isFalse,
+      );
+      // Stored karaoke-titled tracks are flagged for the refilter.
+      expect(
+        TrackEnrichmentService.isNonStudioTitle(
+          'You Are The Reason (Karaoke Version)',
+        ),
+        isTrue,
+      );
+      expect(
+        TrackEnrichmentService.isNonStudioTitle('You Are The Reason'),
+        isFalse,
+      );
+    });
+
     test('does not treat live runs-only lengthText as zero length', () async {
       // Regression: live ANDROID search ships lengthText as runs only.
       // Returning 0 discarded every video and forced the 30s iTunes path.
@@ -837,6 +1045,422 @@ void main() {
       expect(enrichment.previewUrl, 'https://example.com/multo-runs.m4a');
       expect(enrichment.isFullTrack, isTrue);
       expect(enrichment.isYouTube, isTrue);
+      service.dispose();
+    });
+
+    test('prioritizeYouTube resolves YouTube fast-path before Saavn or Archive', () async {
+      var saavnCalled = false;
+      var archiveCalled = false;
+      final service = youtubeService((request) async {
+        if (request.url.host.startsWith('saavn.')) {
+          saavnCalled = true;
+          return http.Response('server error', 500);
+        }
+        if (request.url.host == 'archive.org') {
+          archiveCalled = true;
+          return http.Response('not found', 404);
+        }
+        if (request.url.host == 'www.youtube.com' &&
+            request.url.path == '/youtubei/v1/search') {
+          return ytSearchOk([
+            ytVideo(
+              videoId: 'FastPathVid1',
+              title: 'Fast Song - Fast Artist (Official Audio)',
+              channel: 'Fast Artist - Topic',
+              length: '3:30',
+            ),
+          ]);
+        }
+        if (request.url.host == 'www.youtube.com' &&
+            request.url.path == '/youtubei/v1/player') {
+          return ytPlayerOk(url: 'https://example.com/fast-audio.m4a');
+        }
+        return http.Response('not found', 404);
+      });
+
+      final enrichment = await service.enrichTrack(
+        title: 'Fast Song',
+        artist: 'Fast Artist',
+        prioritizeYouTube: true,
+      );
+      expect(enrichment.previewUrl, 'https://example.com/fast-audio.m4a');
+      expect(enrichment.isFullTrack, isTrue);
+      expect(enrichment.isYouTube, isTrue);
+      expect(enrichment.youtubeVideoId, 'FastPathVid1');
+      expect(saavnCalled, isFalse);
+      expect(archiveCalled, isFalse);
+      service.dispose();
+    });
+
+    test('fetchYouTubeStreamByVideoId resolves direct stream without searching', () async {
+      var searchCalled = false;
+      final service = youtubeService((request) async {
+        if (request.url.path == '/youtubei/v1/search') {
+          searchCalled = true;
+          return http.Response('should not search', 500);
+        }
+        if (request.url.host == 'www.youtube.com' &&
+            request.url.path == '/youtubei/v1/player') {
+          return ytPlayerOk(url: 'https://example.com/direct-stream.m4a');
+        }
+        return http.Response('not found', 404);
+      });
+
+      final enrichment = await service.fetchYouTubeStreamByVideoId('DirectVid123');
+      expect(enrichment, isNotNull);
+      expect(enrichment!.previewUrl, 'https://example.com/direct-stream.m4a');
+      expect(enrichment.isFullTrack, isTrue);
+      expect(enrichment.youtubeVideoId, 'DirectVid123');
+      expect(searchCalled, isFalse);
+      service.dispose();
+    });
+
+    test('probe for googlevideo bypasses HEAD request and accepts Range GET 206', () async {
+      var headCalled = false;
+      var rangeGetCalled = false;
+      final service = youtubeService((request) async {
+        if (request.url.host.contains('googlevideo.com')) {
+          if (request.method == 'HEAD') {
+            headCalled = true;
+            return http.Response('', 403);
+          }
+          if (request.method == 'GET' && request.headers['range'] == 'bytes=0-1') {
+            rangeGetCalled = true;
+            return http.Response('', 206, headers: {
+              'content-type': 'audio/mp4',
+              'content-length': '2',
+            });
+          }
+        }
+        if (request.url.path == '/youtubei/v1/search') {
+          return ytSearchOk([
+            ytVideo(
+              videoId: 'GvVid999',
+              title: 'Range Test - Artist (Official Audio)',
+              channel: 'Artist - Topic',
+              length: '3:00',
+            ),
+          ]);
+        }
+        if (request.url.path == '/youtubei/v1/player') {
+          return ytPlayerOk(url: 'https://rr1---sn-abc.googlevideo.com/videoplayback?id=123');
+        }
+        return http.Response('not found', 404);
+      });
+
+      final enrichment = await service.enrichTrack(
+        title: 'Range Test',
+        artist: 'Artist',
+        prioritizeYouTube: true,
+      );
+      expect(enrichment.isFullTrack, isTrue);
+      expect(enrichment.isYouTube, isTrue);
+      expect(headCalled, isFalse);
+      expect(rangeGetCalled, isTrue);
+      expect(service.googlevideoCoolingDown, isFalse);
+      service.dispose();
+    });
+  });
+
+  group('TrackEnrichmentService automatic web search', () {
+    http.Response audioHeadOk({String type = 'audio/mpeg', String length = '4500000'}) =>
+        http.Response('', 200, headers: {
+          'content-type': type,
+          'content-length': length,
+        });
+
+    test('resolves a full-length track from the Internet Archive', () async {
+      final service = serviceFor((request) async {
+        final url = request.url;
+        if (url.host == 'archive.org' && url.path == '/advancedsearch.php') {
+          return jsonOk({
+            'response': {
+              'docs': [
+                {'identifier': 'cupofjoe-multo'},
+              ],
+            },
+          });
+        }
+        if (url.host == 'archive.org' &&
+            url.path == '/metadata/cupofjoe-multo') {
+          return jsonOk({
+            'metadata': {'title': 'Multo', 'creator': 'Cup of Joe'},
+            'files': [
+              {
+                'name': '01 Multo.mp3',
+                'size': '4500000',
+                'length': '245.0',
+              },
+            ],
+          });
+        }
+        if (request.method == 'HEAD' && url.path.startsWith('/download/')) {
+          return audioHeadOk();
+        }
+        return http.Response('not found', 404);
+      });
+
+      final enrichment = await service.enrichTrack(
+        title: 'Multo',
+        artist: 'Cup of Joe',
+      );
+
+      expect(enrichment.isFullTrack, isTrue);
+      expect(
+        enrichment.previewUrl,
+        'https://archive.org/download/cupofjoe-multo/01%20Multo.mp3',
+      );
+      expect(
+        enrichment.artworkUrl,
+        'https://archive.org/services/img/cupofjoe-multo',
+      );
+      expect(enrichment.previewDuration, const Duration(seconds: 245));
+      service.dispose();
+    });
+
+    test('exposes album siblings from an archive item for one-pass resolution',
+        () async {
+      final service = serviceFor((request) async {
+        final url = request.url;
+        if (url.host == 'archive.org' && url.path == '/advancedsearch.php') {
+          return jsonOk({
+            'response': {
+              'docs': [
+                {'identifier': 'bruno-24kmagic'},
+              ],
+            },
+          });
+        }
+        if (url.host == 'archive.org' &&
+            url.path == '/metadata/bruno-24kmagic') {
+          return jsonOk({
+            'metadata': {
+              'title': '24K Magic - Bruno Mars',
+              'creator': 'Bruno Mars'
+            },
+            'files': [
+              {
+                'name': '01. 24K Magic.mp3',
+                'size': '9680822',
+                'length': '225.99',
+              },
+              {
+                'name': '02. Chunky.mp3',
+                'size': '8120274',
+                'length': '187.01',
+              },
+            ],
+          });
+        }
+        if (request.method == 'HEAD' && url.path.startsWith('/download/')) {
+          return audioHeadOk();
+        }
+        return http.Response('not found', 404);
+      });
+
+      final enrichment = await service.enrichTrack(
+        title: '24K Magic',
+        artist: 'Bruno Mars',
+        duration: const Duration(seconds: 225),
+      );
+      expect(enrichment.isFullTrack, isTrue);
+      expect(
+        service.lastSiblingUrls['chunky'],
+        'https://archive.org/download/bruno-24kmagic/02.%20Chunky.mp3',
+      );
+      expect(service.lastSiblingSeconds['chunky'], 187);
+      service.dispose();
+    });
+
+    test('skips Archive audio shorter than a real song and falls back',
+        () async {
+      final service = serviceFor((request) async {
+        final url = request.url;
+        if (url.host == 'archive.org' && url.path == '/advancedsearch.php') {
+          return jsonOk({
+            'response': {
+              'docs': [
+                {'identifier': 'cupofjoe-clip'},
+              ],
+            },
+          });
+        }
+        if (url.host == 'archive.org' && url.path.startsWith('/metadata/')) {
+          return jsonOk({
+            'metadata': {'title': 'Tingin', 'creator': 'Cup of Joe'},
+            'files': [
+              {'name': 'tingin.mp3', 'size': '400000', 'length': '15.0'},
+            ],
+          });
+        }
+        if (url.host == 'lite.duckduckgo.com') {
+          return http.Response('no results', 404);
+        }
+        if (url.host == 'itunes.apple.com') {
+          return jsonOk({
+            'results': [
+              {
+                'trackName': 'Tingin',
+                'artistName': 'Cup of Joe',
+                'previewUrl': 'https://example.com/tingin-30s.m4a',
+                'kind': 'song',
+              },
+            ],
+          });
+        }
+        if (url.host == 'api.deezer.com') return jsonOk({'data': []});
+        return http.Response('not found', 404);
+      });
+
+      final enrichment = await service.enrichTrack(
+        title: 'Tingin',
+        artist: 'Cup of Joe',
+      );
+
+      expect(enrichment.previewUrl, 'https://example.com/tingin-30s.m4a');
+      expect(enrichment.isFullTrack, isFalse);
+      service.dispose();
+    });
+
+    test('accepts a direct audio result from an allowlisted web search hit',
+        () async {
+      final service = serviceFor((request) async {
+        final url = request.url;
+        if (url.host == 'archive.org' && url.path == '/advancedsearch.php') {
+          return jsonOk({'response': {'docs': []}});
+        }
+        if (url.host == 'lite.duckduckgo.com') {
+          return http.Response(
+            '<html><body>'
+            '<a rel="nofollow" href="https://evil.example.com/multo-full.mp3">'
+            'Multo Cup of Joe full song</a>'
+            '<a rel="nofollow" href="//duckduckgo.com/l/?uddg='
+            'https%3A%2F%2Farchive.org%2Fdownload%2Fmulto-web%2Fmulto.mp3'
+            '&amp;rut=abc">Multo Cup of Joe full song</a>'
+            '</body></html>',
+            200,
+            headers: {'content-type': 'text/html'},
+          );
+        }
+        if (url.host == 'archive.org' && url.path.startsWith('/download/')) {
+          return audioHeadOk(length: '5000000');
+        }
+        if (url.host == 'itunes.apple.com') {
+          return jsonOk({
+            'results': [
+              {
+                'trackName': 'Multo',
+                'artistName': 'Cup of Joe',
+                'previewUrl': 'https://example.com/multo-30s.m4a',
+                'kind': 'song',
+              },
+            ],
+          });
+        }
+        if (url.host == 'api.deezer.com') return jsonOk({'data': []});
+        return http.Response('not found', 404);
+      });
+
+      final enrichment = await service.enrichTrack(
+        title: 'Multo',
+        artist: 'Cup of Joe',
+      );
+
+      expect(enrichment.isFullTrack, isTrue);
+      expect(
+        enrichment.previewUrl,
+        'https://archive.org/download/multo-web/multo.mp3',
+      );
+      service.dispose();
+    });
+
+    test('rejects an allowlisted web result that does not serve audio',
+        () async {
+      final service = serviceFor((request) async {
+        final url = request.url;
+        if (url.host == 'archive.org' && url.path == '/advancedsearch.php') {
+          return jsonOk({'response': {'docs': []}});
+        }
+        if (url.host == 'lite.duckduckgo.com') {
+          return http.Response(
+            '<html><body>'
+            '<a rel="nofollow" href="https://archive.org/details/multo">'
+            'Multo Cup of Joe full song</a>'
+            '</body></html>',
+            200,
+            headers: {'content-type': 'text/html'},
+          );
+        }
+        if (url.host == 'archive.org' && url.path.startsWith('/details/')) {
+          return http.Response(
+            '<html>not audio</html>',
+            200,
+            headers: {'content-type': 'text/html; charset=utf-8'},
+          );
+        }
+        if (url.host == 'itunes.apple.com') {
+          return jsonOk({
+            'results': [
+              {
+                'trackName': 'Multo',
+                'artistName': 'Cup of Joe',
+                'previewUrl': 'https://example.com/multo-30s.m4a',
+                'kind': 'song',
+              },
+            ],
+          });
+        }
+        if (url.host == 'api.deezer.com') return jsonOk({'data': []});
+        return http.Response('not found', 404);
+      });
+
+      final enrichment = await service.enrichTrack(
+        title: 'Multo',
+        artist: 'Cup of Joe',
+      );
+
+      expect(enrichment.previewUrl, 'https://example.com/multo-30s.m4a');
+      expect(enrichment.isFullTrack, isFalse);
+      service.dispose();
+    });
+
+    test('never runs the web search during a preview-only fallback',
+        () async {
+      var webSearchRequests = 0;
+      final service = serviceFor((request) async {
+        final host = request.url.host;
+        if (host == 'archive.org' || host == 'lite.duckduckgo.com') {
+          webSearchRequests++;
+          return http.Response('should be skipped', 500);
+        }
+        if (host.startsWith('saavn.') || host == 'www.youtube.com') {
+          return http.Response('full source should be skipped', 500);
+        }
+        if (host == 'itunes.apple.com') {
+          return jsonOk({
+            'results': [
+              {
+                'trackName': 'Tingin',
+                'artistName': 'Cup of Joe',
+                'previewUrl': 'https://example.com/tingin-30s.m4a',
+                'kind': 'song',
+              },
+            ],
+          });
+        }
+        if (host == 'api.deezer.com') return jsonOk({'data': []});
+        return http.Response('not found', 404);
+      });
+
+      final enrichment = await service.enrichTrack(
+        title: 'Tingin',
+        artist: 'Cup of Joe',
+        previewFallbackOnly: true,
+      );
+
+      expect(webSearchRequests, 0);
+      expect(enrichment.previewUrl, 'https://example.com/tingin-30s.m4a');
+      expect(enrichment.isFullTrack, isFalse);
       service.dispose();
     });
   });

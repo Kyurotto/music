@@ -87,6 +87,57 @@ void main() {
     expect(retrievedSongs[1]['is_preview'], isTrue);
   });
 
+  test('getUnresolvedImportedSongs returns silent and preview tracks of every user', () async {
+    Map<String, Object?> song(
+      String id,
+      String title, {
+      String audioUrl = '',
+      int isPreview = 0,
+    }) {
+      return {
+        'id': id,
+        'title': title,
+        'artist': 'Some Artist',
+        'album': 'Some Album',
+        'duration_ms': 200000,
+        'image_url': '',
+        'audio_url': audioUrl,
+        'lyrics': ['Line 1'],
+        'genre': 'Spotify',
+        'is_preview': isPreview,
+        'is_youtube_audio': 0,
+      };
+    }
+
+    await LocalDatabase.instance.saveImportedPlaylistOffline(
+      id: 'pl-backfill-a',
+      userId: 'user-a',
+      title: 'Alice Mix',
+      songs: [
+        song('spotify-silent-1', 'Silent One'),
+        song('spotify-full-1', 'Full One',
+            audioUrl: 'https://example.com/full1.mp3'),
+        song('spotify-prev-1', 'Preview One',
+            audioUrl: 'https://example.com/prev1.mp3', isPreview: 1),
+      ],
+    );
+    await LocalDatabase.instance.saveImportedPlaylistOffline(
+      id: 'pl-backfill-b',
+      userId: 'user-b',
+      title: 'Bob Mix',
+      songs: [
+        song('spotify-silent-2', 'Silent Two'),
+      ],
+    );
+
+    final unresolved =
+        await LocalDatabase.instance.getUnresolvedImportedSongs();
+    final ids = unresolved.map((r) => r['id'] as String).toSet();
+    expect(ids,
+        {'spotify-silent-1', 'spotify-prev-1', 'spotify-silent-2'});
+    expect(ids, isNot(contains('spotify-full-1')));
+  });
+
   test('Every user has their own imported playlists (user separation)', () async {
     await LocalDatabase.instance.saveImportedPlaylist(
       id: 'pl-alice',
@@ -578,6 +629,141 @@ void main() {
     employee = await LocalDatabase.instance.getEmployeeByUserId(testUserId);
     expect(employee?['status'], 'inactive');
     expect(await LocalDatabase.instance.resolveUserRole(testUserId), 'user');
+  });
+
+  test('deleteImportedPlaylist removes playlist and playlist_songs, and cleans orphan songs', () async {
+    const userId = 'delete-user';
+    const playlistId = 'pl-to-delete';
+    const songId = 'spotify-song-to-delete';
+
+    await LocalDatabase.instance.saveImportedPlaylist(
+      id: playlistId,
+      userId: userId,
+      title: 'Playlist To Delete',
+      songs: [
+        {
+          'id': songId,
+          'title': 'Track To Delete',
+          'artist': 'Artist D',
+          'duration_ms': 180000,
+        },
+      ],
+    );
+
+    var playlists = await LocalDatabase.instance.getImportedPlaylistsForUser(userId);
+    expect(playlists.any((p) => p['id'] == playlistId), isTrue);
+
+    await LocalDatabase.instance.deleteImportedPlaylist(playlistId, userId: userId);
+
+    playlists = await LocalDatabase.instance.getImportedPlaylistsForUser(userId);
+    expect(playlists.any((p) => p['id'] == playlistId), isFalse);
+  });
+
+  test('deleteImportedSongFromPlaylist removes single song and cascades if orphaned', () async {
+    const userId = 'delete-song-user';
+    const playlistId = 'pl-song-delete';
+    const song1 = 'sp-keep-1';
+    const song2 = 'sp-del-2';
+
+    await LocalDatabase.instance.saveImportedPlaylist(
+      id: playlistId,
+      userId: userId,
+      title: 'Two Song Playlist',
+      songs: [
+        {
+          'id': song1,
+          'title': 'Keep Me',
+          'artist': 'Artist A',
+          'duration_ms': 120000,
+        },
+        {
+          'id': song2,
+          'title': 'Delete Me',
+          'artist': 'Artist B',
+          'duration_ms': 140000,
+        },
+      ],
+    );
+
+    await LocalDatabase.instance.deleteImportedSongFromPlaylist(
+      playlistId: playlistId,
+      songId: song2,
+    );
+
+    final playlists = await LocalDatabase.instance.getImportedPlaylistsForUser(userId);
+    final p = playlists.firstWhere((item) => item['id'] == playlistId);
+    final songList = p['songs'] as List;
+    expect(songList.any((s) => s['id'] == song2), isFalse);
+    expect(songList.any((s) => s['id'] == song1), isTrue);
+  });
+
+  test('MusicPlayerController deletes imported playlist and updates state', () async {
+    final controller = MusicPlayerController();
+    const userId = 'ctrl-del-pl-user';
+    const playlistId = 'ctrl-del-pl';
+    const songId = 'spotify-ctrl-del-track';
+
+    await LocalDatabase.instance.saveImportedPlaylist(
+      id: playlistId,
+      userId: userId,
+      title: 'Controller Del Test',
+      songs: [
+        {
+          'id': songId,
+          'title': 'Controller Track',
+          'artist': 'Artist C',
+          'duration_ms': 150000,
+        },
+      ],
+    );
+
+    await controller.loadSavedPlaylists(userId: userId);
+    expect(controller.playlistById(playlistId), isNotNull);
+
+    final deleted = await controller.deletePlaylist(playlistId);
+    expect(deleted, isTrue);
+    expect(controller.playlistById(playlistId), isNull);
+
+    controller.dispose();
+  });
+
+  test('MusicPlayerController deleteSongFromPlaylist removes single song and syncs DB', () async {
+    final controller = MusicPlayerController();
+    const userId = 'ctrl-del-song-user';
+    const playlistId = 'ctrl-del-song-pl';
+    const song1 = 'spotify-song-1-stay';
+    const song2 = 'spotify-song-2-remove';
+
+    await LocalDatabase.instance.saveImportedPlaylist(
+      id: playlistId,
+      userId: userId,
+      title: 'Song Deletion Test',
+      songs: [
+        {
+          'id': song1,
+          'title': 'Song 1',
+          'artist': 'Artist 1',
+          'duration_ms': 120000,
+        },
+        {
+          'id': song2,
+          'title': 'Song 2',
+          'artist': 'Artist 2',
+          'duration_ms': 130000,
+        },
+      ],
+    );
+
+    await controller.loadSavedPlaylists(userId: userId);
+    final pl = controller.playlistById(playlistId);
+    expect(pl?.songIds, contains(song2));
+
+    final success = await controller.deleteSongFromPlaylist(playlistId, song2);
+    expect(success, isTrue);
+    expect(pl?.songIds, isNot(contains(song2)));
+    expect(pl?.songIds, contains(song1));
+
+    controller.dispose();
   });
 }
 

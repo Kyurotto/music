@@ -184,6 +184,14 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
     );
   }
 
+  /// Pull-to-refresh: reload saved playlists (picks up tracks the
+  /// background backfill resolved) and kick another resolve pass.
+  /// The spinner shows while reloading; resolving keeps running after.
+  Future<void> _handleRefresh() async {
+    await _controller.loadSavedPlaylists();
+    _controller.kickBackfill();
+  }
+
   Future<void> _showAddToPlaylistSheet(Song song) async {
     final selectedPlaylist = await showModalBottomSheet<MusicPlaylist>(
       context: context,
@@ -228,6 +236,166 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
       if (added && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Added to ${selectedPlaylist.title}.')),
+        );
+      }
+    }
+  }
+
+  Future<void> _confirmDeletePlaylist(MusicPlaylist playlist) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        backgroundColor: AppTheme.cardSurface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: AppTheme.border),
+        ),
+        title: const Text(
+          'Delete Playlist',
+          style: TextStyle(
+            color: AppTheme.textPrimary,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        content: Text(
+          'Are you sure you want to delete "${playlist.title}" from your library and database?',
+          style: const TextStyle(color: AppTheme.textSecondary),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(false),
+            child: const Text('Cancel', style: TextStyle(color: AppTheme.textMuted)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.accentPink,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () => Navigator.of(dialogCtx).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      final title = playlist.title;
+      if (_selectedPlaylistId == playlist.id) {
+        setState(() => _selectedPlaylistId = null);
+      }
+      await _controller.deletePlaylist(playlist.id);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Deleted "$title" from library and database.'),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _confirmDeleteSongFromPlaylist(
+    MusicPlaylist playlist,
+    Song song,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        backgroundColor: AppTheme.cardSurface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: AppTheme.border),
+        ),
+        title: const Text(
+          'Delete Song',
+          style: TextStyle(
+            color: AppTheme.textPrimary,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        content: Text(
+          'Are you sure you want to remove "${song.title}" from "${playlist.title}" and delete it from the database?',
+          style: const TextStyle(color: AppTheme.textSecondary),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(false),
+            child: const Text('Cancel', style: TextStyle(color: AppTheme.textMuted)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.accentPink,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () => Navigator.of(dialogCtx).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      await _controller.deleteSongFromPlaylist(playlist.id, song.id);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Deleted "${song.title}" from database.'),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _confirmDeleteSong(Song song) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        backgroundColor: AppTheme.cardSurface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: AppTheme.border),
+        ),
+        title: const Text(
+          'Delete Song',
+          style: TextStyle(
+            color: AppTheme.textPrimary,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        content: Text(
+          'Are you sure you want to delete "${song.title}" from your library and database?',
+          style: const TextStyle(color: AppTheme.textSecondary),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(false),
+            child: const Text('Cancel', style: TextStyle(color: AppTheme.textMuted)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.accentPink,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () => Navigator.of(dialogCtx).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      await _controller.deleteSong(song.id);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Deleted "${song.title}" from database.'),
+            duration: const Duration(seconds: 2),
+          ),
         );
       }
     }
@@ -290,14 +458,22 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                             // Top App Bar / Search Header
                             _buildTopHeader(isMobile, isDesktop),
 
-                            // Scrollable Feed
+                            // Scrollable Feed (pull down to refresh +
+                            // re-resolve locating tracks)
                             Expanded(
-                              child: SingleChildScrollView(
-                                padding: EdgeInsets.symmetric(
-                                  horizontal: isMobile ? 16 : 28,
-                                  vertical: 20,
+                              child: RefreshIndicator(
+                                onRefresh: _handleRefresh,
+                                color: AppTheme.primary,
+                                backgroundColor: AppTheme.cardSurface,
+                                child: SingleChildScrollView(
+                                  physics:
+                                      const AlwaysScrollableScrollPhysics(),
+                                  padding: EdgeInsets.symmetric(
+                                    horizontal: isMobile ? 16 : 28,
+                                    vertical: 20,
+                                  ),
+                                  child: _buildCurrentTabContent(isMobile),
                                 ),
-                                child: _buildCurrentTabContent(isMobile),
                               ),
                             ),
                           ],
@@ -422,11 +598,76 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
     }
   }
 
+  /// Selected-playlist detail shared by the Library tab and the dashboard,
+  /// so tapping a featured playlist on the dashboard opens it right here
+  /// instead of jumping to the Library tab.
+  Widget _buildSelectedPlaylistDetail(MusicPlaylist selectedPlaylist) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildHeaderWithActions(
+          title: selectedPlaylist.title,
+          subtitle:
+              '${selectedPlaylist.trackCount} ${selectedPlaylist.trackCount == 1 ? 'song' : 'songs'}',
+          actions: [
+            if (_controller.songsForPlaylist(selectedPlaylist.id).isNotEmpty)
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primary,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+                onPressed: () => _playPlaylistWithLyrics(selectedPlaylist.id),
+                icon: const Icon(Icons.play_arrow_rounded),
+                label: const Text('Play'),
+              ),
+            ElevatedButton.icon(
+              key: const ValueKey('delete_selected_playlist_btn'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.cardSurface,
+                foregroundColor: AppTheme.accentPink,
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  side: BorderSide(
+                    color: AppTheme.accentPink.withValues(alpha: 0.6),
+                    width: 1,
+                  ),
+                ),
+              ),
+              onPressed: () => _confirmDeletePlaylist(selectedPlaylist),
+              icon: const Icon(Icons.delete_outline_rounded, size: 18),
+              label: const Text('Delete playlist'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        Container(
+          decoration: BoxDecoration(
+            color: AppTheme.cardSurface,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: AppTheme.border, width: 1),
+          ),
+          child: TrackListView(
+            songs: _controller.songsForPlaylist(selectedPlaylist.id),
+            controller: _controller,
+            onSongTap: _playSongWithLyrics,
+            onAddToPlaylist: _showAddToPlaylistSheet,
+            onDelete: (song) => _confirmDeleteSongFromPlaylist(selectedPlaylist, song),
+            emptyTitle: 'No songs in this playlist yet',
+            emptySubtitle: 'Add songs from "All saved songs" below by clicking "+"',
+          ),
+        ),
+        const SizedBox(height: 32),
+      ],
+    );
+  }
+
   Widget _buildHomeFeed(bool isMobile) {
     final featuredSong = _controller.allSongs.where((s) => s.isFeatured).firstOrNull ??
         _controller.allSongs.firstOrNull;
     final playlists = _controller.playlists;
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -497,7 +738,8 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                 return AlbumCard(
                   playlist: playlist,
                   isSelected: playlist.id == _selectedPlaylistId,
-                  onTap: () => _openPlaylist(playlist.id),
+                  // Stay on the dashboard: the detail opens inline above.
+                  onTap: () => _selectPlaylist(playlist.id),
                   onPlay: () => _playPlaylistWithLyrics(playlist.id),
                 );
               },
@@ -584,7 +826,22 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                             end: Alignment.bottomRight,
                           ),
                         ),
-                        child: const Icon(Icons.music_note_rounded, color: Colors.white, size: 24),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: song.imageUrl.isNotEmpty
+                              ? Image.network(
+                                  song.imageUrl,
+                                  width: 48,
+                                  height: 48,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (context, error, stackTrace) => const Center(
+                                    child: Icon(Icons.music_note_rounded, color: Colors.white, size: 24),
+                                  ),
+                                )
+                              : const Center(
+                                  child: Icon(Icons.music_note_rounded, color: Colors.white, size: 24),
+                                ),
+                        ),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
@@ -793,49 +1050,14 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                 isSelected: playlist.id == _selectedPlaylistId,
                 onTap: () => _selectPlaylist(playlist.id),
                 onPlay: () => _playPlaylistWithLyrics(playlist.id),
+                onDelete: () => _confirmDeletePlaylist(playlist),
               );
             },
           ),
         ),
         const SizedBox(height: 32),
-        if (selectedPlaylist != null) ...[
-          _buildHeaderWithActions(
-            title: selectedPlaylist.title,
-            subtitle:
-                '${selectedPlaylist.trackCount} ${selectedPlaylist.trackCount == 1 ? 'song' : 'songs'}',
-            actions: [
-              if (_controller.songsForPlaylist(selectedPlaylist.id).isNotEmpty)
-                ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppTheme.primary,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                  ),
-                  onPressed: () => _playPlaylistWithLyrics(selectedPlaylist.id),
-                  icon: const Icon(Icons.play_arrow_rounded),
-                  label: const Text('Play'),
-                ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Container(
-            decoration: BoxDecoration(
-              color: AppTheme.cardSurface,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: AppTheme.border, width: 1),
-            ),
-            child: TrackListView(
-              songs: _controller.songsForPlaylist(selectedPlaylist.id),
-              controller: _controller,
-              onSongTap: _playSongWithLyrics,
-              onAddToPlaylist: _showAddToPlaylistSheet,
-              emptyTitle: 'No songs in this playlist yet',
-              emptySubtitle: 'Add songs from "All saved songs" below by clicking "+"',
-            ),
-          ),
-          const SizedBox(height: 32),
-        ],
+        if (selectedPlaylist != null)
+          _buildSelectedPlaylistDetail(selectedPlaylist),
         _buildSectionHeader('All saved songs', 'Add any song to a playlist'),
         const SizedBox(height: 14),
         Container(
@@ -849,6 +1071,7 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
             controller: _controller,
             onSongTap: _playSongWithLyrics,
             onAddToPlaylist: _showAddToPlaylistSheet,
+            onDelete: (song) => _confirmDeleteSong(song),
           ),
         ),
       ],

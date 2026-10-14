@@ -407,10 +407,25 @@ class _PlaylistItem extends StatelessWidget {
                     gradient: LinearGradient(colors: playlist.gradient),
                     borderRadius: BorderRadius.circular(6),
                   ),
-                  child: const Icon(
-                    Icons.music_note_rounded,
-                    size: 14,
-                    color: Colors.white,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(6),
+                    child: playlist.imageUrl.isNotEmpty
+                        ? Image.network(
+                            playlist.imageUrl,
+                            width: 24,
+                            height: 24,
+                            fit: BoxFit.cover,
+                            errorBuilder: (context, error, stackTrace) => const Icon(
+                              Icons.music_note_rounded,
+                              size: 14,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Icon(
+                            Icons.music_note_rounded,
+                            size: 14,
+                            color: Colors.white,
+                          ),
                   ),
                 ),
                 const SizedBox(width: 12),

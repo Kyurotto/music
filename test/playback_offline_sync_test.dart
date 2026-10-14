@@ -73,7 +73,20 @@ void main() {
       controller.toggleMute();
       expect(controller.isMuted, isTrue);
 
-      final sample = controller.allSongs.first;
+      final sample = controller.allSongs.isNotEmpty
+          ? controller.allSongs.first
+          : Song(
+              id: 'test-sample',
+              title: 'Test Sample',
+              artist: 'Test Artist',
+              album: 'Test Album',
+              duration: const Duration(minutes: 3),
+              genre: 'Pop',
+              imageUrl: '',
+              gradientColors: const [],
+              plays: '',
+              lyrics: const [],
+            );
       controller.playSong(sample);
 
       expect(controller.isMuted, isFalse);
@@ -81,10 +94,10 @@ void main() {
       expect(controller.isPlaying, isTrue);
     });
 
-    test('offline asset fallback is selected for imported tracks with invalid or expired audio', () {
-      final songWithExpiredYt = Song(
+    test('offline asset fallback is selected for imported tracks matching bundled audio titles', () {
+      final matchingSong = Song(
         id: 'spotify-test-expired',
-        title: 'Bruno Mars Hit',
+        title: 'Just the Way You Are',
         artist: 'Bruno Mars',
         album: 'Doo-Wops',
         duration: const Duration(minutes: 3),
@@ -96,13 +109,28 @@ void main() {
         audioUrl: 'https://rr1---sn-googlevideo.com/videoplayback?expire=123',
       );
 
-      final fallbackAsset = controller.getOfflineAssetFallbackForTesting(songWithExpiredYt);
+      final fallbackAsset = controller.getOfflineAssetFallbackForTesting(matchingSong);
       expect(fallbackAsset, isNotEmpty);
       expect(fallbackAsset.endsWith('.m4a'), isTrue);
 
-      final offlineLyrics = controller.ensureOfflineLyricsForTesting(songWithExpiredYt);
-      expect(offlineLyrics, isNotEmpty);
-      expect(offlineLyrics.any((l) => l.contains('♫')), isTrue);
+      // Verify that an unrelated song by the same artist does NOT falsely play a different song
+      final nonMatchingSong = Song(
+        id: 'spotify-test-unrelated',
+        title: 'Grenade',
+        artist: 'Bruno Mars',
+        album: 'Doo-Wops',
+        duration: const Duration(minutes: 3),
+        genre: 'Pop',
+        imageUrl: '',
+        gradientColors: const [],
+        plays: '',
+        lyrics: const [],
+      );
+      expect(controller.getOfflineAssetFallbackForTesting(nonMatchingSong), isEmpty);
+
+      // Imported tracks never get invented placeholder lyrics.
+      final offlineLyrics = controller.ensureOfflineLyricsForTesting(matchingSong);
+      expect(offlineLyrics.any((l) => l.contains('Playing in Offline Mode')), isFalse);
     });
 
     test('displayDurationFor matches song duration when audio stream duration is not yet available', () {

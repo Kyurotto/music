@@ -238,7 +238,7 @@ void main() {
   });
 
   group('MusicPlayerController artist import', () {
-    test('artist tracks arrive with playable previews, no silent gap',
+    test('artist tracks import full-track-only, no 30s preview seeding',
         () async {
       // Fictional artist: must NOT collide with bundled sample songs,
       // otherwise the controller (correctly) reuses the local copies.
@@ -278,10 +278,12 @@ void main() {
       );
       final songs = controller.songsForPlaylist(outcome.playlistId);
       expect(songs, hasLength(2));
-      expect(songs.first.hasAudio, isTrue);
-      expect(songs.first.isPreview, isTrue);
-      expect(songs.first.audioUrl, 'https://example.com/neon.m4a');
-      expect(songs.first.isSilentPlaceholder, isFalse);
+      // Strict full-track mode: the baked-in 30s iTunes previews are never
+      // seeded as playable audio — songs start silent until a full-length
+      // stream resolves.
+      expect(songs.first.hasAudio, isFalse);
+      expect(songs.first.isPreview, isFalse);
+      expect(songs.first.isSilentPlaceholder, isTrue);
       controller.dispose();
     });
   });
