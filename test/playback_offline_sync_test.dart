@@ -128,9 +128,9 @@ void main() {
       );
       expect(controller.getOfflineAssetFallbackForTesting(nonMatchingSong), isEmpty);
 
+      // Imported tracks never get invented placeholder lyrics.
       final offlineLyrics = controller.ensureOfflineLyricsForTesting(matchingSong);
-      expect(offlineLyrics, isNotEmpty);
-      expect(offlineLyrics.any((l) => l.contains('♫')), isTrue);
+      expect(offlineLyrics.any((l) => l.contains('Playing in Offline Mode')), isFalse);
     });
 
     test('displayDurationFor matches song duration when audio stream duration is not yet available', () {

@@ -297,10 +297,10 @@ void main() {
       final fallbackAsset = controller.getOfflineAssetFallbackForTesting(song);
       expect(fallbackAsset, isEmpty);
 
-      // Verify offline lyrics are generated so the lyrics tracker moves in sync
+      // Imported tracks get no invented placeholder lyrics; the lyrics sheet
+      // looks up the real ones instead.
       final lyrics = controller.ensureOfflineLyricsForTesting(song);
-      expect(lyrics, isNotEmpty);
-      expect(lyrics.first, contains('Custom Indie Track'));
+      expect(lyrics, isEmpty);
 
       controller.dispose();
     });

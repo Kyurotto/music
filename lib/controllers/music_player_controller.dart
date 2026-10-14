@@ -744,21 +744,11 @@ class MusicPlayerController extends ChangeNotifier {
             }
           }
 
-          if ((s['title'] as String? ?? '').toLowerCase().contains('lips of an angel')) {
-            isPreview = false;
-            isYouTubeAudio = false;
-            resolvedAudio = 'assets/audio/lips-of-an-angel.mp3';
-          }
-
-          final matchingAsset = _cleanAssetUri(_getOfflineAssetFallbackForFields(
-            s['title'] as String? ?? '',
-            s['artist'] as String? ?? '',
-            songId,
-          ));
-          if (matchingAsset.isNotEmpty) {
-            resolvedAudio = matchingAsset;
-            _offlineFallbackIds.add(songId);
-          }
+          // Library tracks used to be forced onto a bundled default clip here
+          // whenever their title matched one of the sample songs, so the real
+          // track was never even tried. Leave resolvedAudio alone: the real
+          // source is resolved at play time and the bundled copy is only a
+          // last-resort fallback there.
 
           final existingIdx = _allSongs.indexWhere((existing) => existing.id == songId);
           if (existingIdx < 0) {
@@ -772,7 +762,8 @@ class MusicPlayerController extends ChangeNotifier {
               imageUrl: s['image_url'] as String? ?? '',
               gradientColors: _gradientFor('${s['title']}${s['artist']}').colors,
               plays: '',
-              lyrics: (s['lyrics'] as List<dynamic>? ?? []).map((e) => e.toString()).toList(),
+              lyrics: _withoutPlaceholderLyrics(
+                  (s['lyrics'] as List<dynamic>? ?? []).map((e) => e.toString()).toList()),
               audioUrl: resolvedAudio,
               isPreview: isPreview,
               isYouTubeAudio: isYouTubeAudio,
@@ -821,7 +812,8 @@ class MusicPlayerController extends ChangeNotifier {
               existing.isYouTubeAudio = true;
               hasChanges = true;
             }
-            final dbLyrics = (s['lyrics'] as List<dynamic>? ?? []).map((e) => e.toString()).toList();
+            final dbLyrics = _withoutPlaceholderLyrics(
+                (s['lyrics'] as List<dynamic>? ?? []).map((e) => e.toString()).toList());
             if (existing.lyrics.isEmpty && dbLyrics.isNotEmpty) {
               existing.lyrics = dbLyrics;
               hasChanges = true;
@@ -2511,6 +2503,17 @@ class MusicPlayerController extends ChangeNotifier {
     return completer.future;
   }
 
+  /// Drops the generated "Playing in Offline Mode" placeholder lines that
+  /// older builds saved to the database. Kept, they looked like real synced
+  /// lyrics, so the lyrics sheet never looked the real ones up and the
+  /// highlight sat on one line for up to 25 seconds at a time.
+  static List<String> _withoutPlaceholderLyrics(List<String> lines) {
+    if (lines.any((l) => l.contains('Playing in Offline Mode'))) {
+      return <String>[];
+    }
+    return lines;
+  }
+
   List<String> _ensureOfflineLyrics(Song song) {
     // Real lyrics (or already-generated fake) stay — but never block a future
     // real lookup: fake lines are tracked so enrichment can overwrite them.
@@ -2525,12 +2528,24 @@ class MusicPlayerController extends ChangeNotifier {
     for (final sample in SampleMusicData.sampleSongs) {
       final sampleT = _cleanSongTitle(sample.title).toLowerCase();
       if (cleanT.isNotEmpty && (cleanT == sampleT || cleanT.contains(sampleT) || sampleT.contains(cleanT))) {
-        if (sample.lyrics.isNotEmpty) {
+        // Same title is not enough: another artist's "Perfect" must not get
+        // Ed Sheeran's lyrics.
+        final a = _normalizeKey(song.artist);
+        final sa = _normalizeKey(sample.artist);
+        final sameArtist =
+            a.isNotEmpty && sa.isNotEmpty && (a.contains(sa) || sa.contains(a));
+        if (sample.lyrics.isNotEmpty && sameArtist) {
           song.lyrics = List<String>.from(sample.lyrics);
           _offlineFakeLyricsIds.remove(song.id);
           return song.lyrics;
         }
       }
+    }
+    // Imported tracks never get invented placeholder lyrics: an empty list
+    // makes the lyrics sheet look up the real ones instead of showing a
+    // fixed fake timeline.
+    if (song.id.startsWith('spotify-') || song.id.startsWith('itunes-')) {
+      return song.lyrics;
     }
     // Generate rhythmic, timestamped lyrics for offline tracking
     final durationSeconds = song.duration.inSeconds > 0 ? song.duration.inSeconds : 180;
@@ -3360,6 +3375,19 @@ class MusicPlayerController extends ChangeNotifier {
     final sessionId = ++_playSessionId;
 
     try {
+      // Library tracks are imported and resolve their audio at play time.
+      // Until the new source loads, the player still holds the PREVIOUS track:
+      // its position kept feeding the new song's progress slider and lyrics
+      // tracker (stuck / wrong) and its volume state leaked into the new track.
+      // Drop it first. Bundled songs resolve instantly and are left as they are.
+      if (song.id.startsWith('spotify-') || song.id.startsWith('itunes-')) {
+        _audioPlayerHasSource = false;
+        try {
+          await _audioPlayer.stop().timeout(const Duration(seconds: 1));
+        } catch (_) {}
+      }
+      if (sessionId != _playSessionId || _disposed) return;
+
       final playStart = DateTime.now();
       _logDiag('PLAY REQUESTED', song: song);
       final online = await _isDeviceOnline();
