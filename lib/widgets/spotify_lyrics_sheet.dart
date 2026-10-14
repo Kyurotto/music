@@ -92,6 +92,9 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
 
   Future<void> _retryLyrics() async {
     final song = widget.controller.currentSong ?? widget.song;
+    // Retry means retry now: drop the per-song failure backoff so the lookup
+    // also re-resolves a stuck preview/fallback source.
+    widget.controller.resetEnrichmentBackoff(song.id);
     setState(() {
       _lyricsLookupFailed = false;
       _highlightedLineIndex = null;

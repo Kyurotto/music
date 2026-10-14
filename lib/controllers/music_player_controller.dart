@@ -177,6 +177,7 @@ class MusicPlayerController extends ChangeNotifier {
 
     _initAudioPlayer();
     _startImportRetryLoop();
+    _startConnectivityWatcher();
     // Load previously imported playlists for the active user
     unawaited(loadSavedPlaylists().catchError((e) {
       debugPrint('[MusicPlayerController] Initial loadSavedPlaylists skipped: $e');
@@ -198,10 +199,40 @@ class MusicPlayerController extends ChangeNotifier {
       final session = await AudioSession.instance;
       await session.configure(const AudioSessionConfiguration.music());
       await session.setActive(true);
+
+      // Another app (call, other player) took audio focus: when it hands
+      // focus back, re-activate the session and re-assert volume/playback.
+      // Without this the track resumed with the output still silent.
+      await _interruptionSub?.cancel();
+      _interruptionSub = session.interruptionEventStream.listen((event) {
+        if (_disposed || event.begin) return;
+        if (_isPlaying && _audioPlayerHasSource) {
+          _activateAudioSession();
+          _assertNativeVolume();
+          _scheduleVolumeReasserts();
+          try {
+            if (!_audioPlayer.playing) {
+              // ignore: discarded_futures
+              _audioPlayer.play().catchError((_) {});
+            }
+          } catch (_) {}
+        }
+      });
+
+      // Headphones unplugged / Bluetooth disconnected: pause instead of
+      // blasting the speaker or playing to nowhere.
+      await _noisySub?.cancel();
+      _noisySub = session.becomingNoisyEventStream.listen((_) {
+        if (_disposed) return;
+        pause();
+      });
     } catch (e) {
       debugPrint('[MusicPlayerController] AudioSession configure error: $e');
     }
   }
+
+  StreamSubscription<AudioInterruptionEvent>? _interruptionSub;
+  StreamSubscription<void>? _noisySub;
 
   void _initAudioPlayer() {
     try {
@@ -1475,10 +1506,18 @@ class MusicPlayerController extends ChangeNotifier {
     _importRetryTimer?.cancel();
     _importRetryTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       if (_disposed || _importEnrichPasses > 0) return;
+      // Nothing to resolve while offline; the connectivity watcher re-runs
+      // this the moment the network returns.
+      if (!_cachedOnline) return;
+      // Tracks on an offline fallback or a 30s preview are included too:
+      // before, only tracks with no audio at all were ever retried, so a
+      // fallback/preview track never upgraded after connectivity returned.
       final stuck = _allSongs
           .where((s) =>
               s.id.startsWith('spotify-') &&
-              !s.hasAudio &&
+              (!s.hasAudio ||
+                  s.isPreview ||
+                  _offlineFallbackIds.contains(s.id)) &&
               !_enrichingIds.contains(s.id) &&
               _shouldAttemptFullUpgrade(s.id))
           .toList();
@@ -1486,6 +1525,68 @@ class MusicPlayerController extends ChangeNotifier {
       _logDiag('import retry loop: ${stuck.length} silent imported track(s)');
       _enrichImportedSongs(stuck);
     });
+  }
+
+  // ---------------------------------------------------------------------
+  // Connectivity watcher (Wi-Fi / mobile data / offline)
+  // ---------------------------------------------------------------------
+
+  Timer? _connectivityTimer;
+  bool _watchedOnline = true;
+
+  /// Polls reachability every 10s and reacts to changes. There is no
+  /// platform connectivity callback in this app, so without this the
+  /// controller only noticed the network had returned when the user pressed
+  /// play or the 30s retry loop happened to run.
+  void _startConnectivityWatcher() {
+    _connectivityTimer?.cancel();
+    _connectivityTimer = Timer.periodic(const Duration(seconds: 10), (_) async {
+      if (_disposed) return;
+      bool online;
+      try {
+        online = await _isDeviceOnline();
+      } catch (_) {
+        return;
+      }
+      if (_disposed || online == _watchedOnline) return;
+      _watchedOnline = online;
+      _logDiag('connectivity changed: online=$online');
+      if (online) {
+        _onBackOnline();
+      }
+      notifyListeners();
+    });
+  }
+
+  /// Network came back: forget the failure backoff (it was caused by being
+  /// offline, not by the tracks) and upgrade every silent, fallback or
+  /// preview imported track, current song first.
+  void _onBackOnline() {
+    _fullUpgradeAttemptedAt.clear();
+    _fullTrackAttemptCount.clear();
+    _ytRefreshAttemptedIds.clear();
+    final pending = _allSongs
+        .where((s) =>
+            s.id.startsWith('spotify-') &&
+            (!s.hasAudio ||
+                s.isPreview ||
+                _offlineFallbackIds.contains(s.id) ||
+                _offlineFakeLyricsIds.contains(s.id)) &&
+            !_enrichingIds.contains(s.id))
+        .toList();
+    if (pending.isNotEmpty) {
+      _enrichImportedSongs(pending);
+    }
+    // A song that never got a source while offline should start now.
+    if (_isPlaying && !_audioPlayerHasSource && !_isPlayingAudioInProgress) {
+      _playCurrentSongAudio();
+    }
+  }
+
+  /// Lets the lyrics sheet's Retry button bypass the per-song backoff.
+  void resetEnrichmentBackoff(String songId) {
+    _fullUpgradeAttemptedAt.remove(songId);
+    _fullTrackAttemptCount.remove(songId);
   }
 
   bool _shouldAttemptFullUpgrade(String songId) {
@@ -2281,6 +2382,31 @@ class MusicPlayerController extends ChangeNotifier {
               )
               .timeout(const Duration(milliseconds: 2500));
           // Any HTTP answer (even a 4xx or redirect) proves the network is up.
+          return res.statusCode > 0 && res.statusCode < 500;
+        }),
+        // Hosts this app really needs. Some carriers and Wi-Fi networks block
+        // Google's check hosts while Spotify/iTunes work, so a Google-only
+        // probe reported "offline" on a perfectly usable connection.
+        Future<bool>(() async {
+          final res = await http
+              .head(
+                Uri.parse('https://itunes.apple.com/'),
+                headers: {
+                  'User-Agent': TrackEnrichmentService.browserUserAgent,
+                },
+              )
+              .timeout(const Duration(milliseconds: 2500));
+          return res.statusCode > 0 && res.statusCode < 500;
+        }),
+        Future<bool>(() async {
+          final res = await http
+              .head(
+                Uri.parse('https://open.spotify.com/'),
+                headers: {
+                  'User-Agent': TrackEnrichmentService.browserUserAgent,
+                },
+              )
+              .timeout(const Duration(milliseconds: 2500));
           return res.statusCode > 0 && res.statusCode < 500;
         }),
       ]);
@@ -3567,6 +3693,30 @@ if (sessionId == _playSessionId) {
           return;
         }
 
+        // Only bridge the gap between ticks while the native player is truly
+        // playing. During a buffering stall or a lost audio focus it is not,
+        // and interpolating then made the slider and lyrics keep moving over
+        // silence. Instead make sure the stall watchdog is armed so the track
+        // recovers rather than looking alive.
+        var nativeReady = true;
+        var nativeLoading = false;
+        try {
+          final ps = _audioPlayer.playerState;
+          nativeReady =
+              ps.playing && ps.processingState == ProcessingState.ready;
+          nativeLoading = ps.processingState == ProcessingState.buffering ||
+              ps.processingState == ProcessingState.loading;
+        } catch (_) {}
+        if (!nativeReady) {
+          // Stuck loading/buffering: arm recovery. Ready-but-paused means the
+          // system paused us (audio focus); the interruption listener resumes
+          // it, so it must not be treated as a dead stream.
+          if (nativeLoading && _stallWatchdog?.isActive != true) {
+            _startStallWatchdog();
+          }
+          return;
+        }
+
         // Native stream is temporarily between position ticks.
         // Smoothly interpolate currentPosition while bounded by actual duration.
         if (_currentPosition < currentDuration) {
@@ -3691,6 +3841,9 @@ if (sessionId == _playSessionId) {
     _playbackTimer?.cancel();
     _silentRetryTimer?.cancel();
     _importRetryTimer?.cancel();
+    _connectivityTimer?.cancel();
+    _interruptionSub?.cancel();
+    _noisySub?.cancel();
     _stallWatchdog?.cancel();
     _positionSub?.cancel();
     _durationSub?.cancel();
