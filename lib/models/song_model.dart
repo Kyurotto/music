@@ -22,6 +22,7 @@ class Song {
   /// True when audio comes from YouTube (URLs expire after a few hours —
   /// the player resolves a fresh one when a saved URL fails to load).
   bool isYouTubeAudio;
+  String youtubeVideoId;
   bool isEnrichingLyrics;
 
   Song({
@@ -40,6 +41,7 @@ class Song {
     this.isLiked = false,
     this.isPreview = false,
     this.isYouTubeAudio = false,
+    this.youtubeVideoId = '',
     this.isEnrichingLyrics = false,
   });
 

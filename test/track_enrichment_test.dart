@@ -584,6 +584,69 @@ void main() {
     });
   });
 
+  group('TrackEnrichmentService SoundCloud full-length audio', () {
+    test('resolves full-length stream from SoundCloud when Saavn misses', () async {
+      final service = serviceFor((request) async {
+          if (request.url.host.startsWith('saavn.')) {
+            return http.Response('not found', 404);
+          }
+          if (request.url.host == 'soundcloud.com') {
+            return http.Response(
+              '<html><head><script src="https://a-v2.sndcdn.com/assets/55-app.js"></script></head></html>',
+              200,
+            );
+          }
+          if (request.url.host == 'a-v2.sndcdn.com') {
+            return http.Response('window.config={client_id:"mock_sc_client_id_123456789012"};', 200);
+          }
+          if (request.url.host == 'api-v2.soundcloud.com' &&
+              request.url.path == '/search/tracks') {
+            return http.Response(
+              jsonEncode({
+                'collection': [
+                  {
+                    'title': 'Lalim',
+                    'duration': 199000,
+                    'user': {'username': 'MATÉO'},
+                    'artwork_url': 'https://i1.sndcdn.com/artworks-large.jpg',
+                    'media': {
+                      'transcodings': [
+                        {
+                          'url': 'https://api-v2.soundcloud.com/media/stream/hls',
+                          'format': {'protocol': 'hls'},
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }),
+              200,
+            );
+          }
+          if (request.url.host == 'api-v2.soundcloud.com' &&
+              request.url.path == '/media/stream/hls') {
+            return http.Response(
+              jsonEncode({'url': 'https://playback.media-streaming.soundcloud.cloud/lalim.m3u8'}),
+              200,
+            );
+          }
+          return http.Response('not found', 404);
+        });
+
+      final enrichment = await service.enrichTrack(
+        title: 'Lalim',
+        artist: 'MATÉO',
+        duration: const Duration(seconds: 199),
+      );
+
+      expect(enrichment.previewUrl, 'https://playback.media-streaming.soundcloud.cloud/lalim.m3u8');
+      expect(enrichment.isFullTrack, isTrue);
+      expect(enrichment.previewDuration, const Duration(seconds: 199));
+      expect(enrichment.artworkUrl, 'https://i1.sndcdn.com/artworks-t500x500.jpg');
+      service.dispose();
+    });
+  });
+
   group('TrackEnrichmentService YouTube full-length audio', () {
     Map<String, dynamic> ytVideo({
       required String videoId,
@@ -982,6 +1045,119 @@ void main() {
       expect(enrichment.previewUrl, 'https://example.com/multo-runs.m4a');
       expect(enrichment.isFullTrack, isTrue);
       expect(enrichment.isYouTube, isTrue);
+      service.dispose();
+    });
+
+    test('prioritizeYouTube resolves YouTube fast-path before Saavn or Archive', () async {
+      var saavnCalled = false;
+      var archiveCalled = false;
+      final service = youtubeService((request) async {
+        if (request.url.host.startsWith('saavn.')) {
+          saavnCalled = true;
+          return http.Response('server error', 500);
+        }
+        if (request.url.host == 'archive.org') {
+          archiveCalled = true;
+          return http.Response('not found', 404);
+        }
+        if (request.url.host == 'www.youtube.com' &&
+            request.url.path == '/youtubei/v1/search') {
+          return ytSearchOk([
+            ytVideo(
+              videoId: 'FastPathVid1',
+              title: 'Fast Song - Fast Artist (Official Audio)',
+              channel: 'Fast Artist - Topic',
+              length: '3:30',
+            ),
+          ]);
+        }
+        if (request.url.host == 'www.youtube.com' &&
+            request.url.path == '/youtubei/v1/player') {
+          return ytPlayerOk(url: 'https://example.com/fast-audio.m4a');
+        }
+        return http.Response('not found', 404);
+      });
+
+      final enrichment = await service.enrichTrack(
+        title: 'Fast Song',
+        artist: 'Fast Artist',
+        prioritizeYouTube: true,
+      );
+      expect(enrichment.previewUrl, 'https://example.com/fast-audio.m4a');
+      expect(enrichment.isFullTrack, isTrue);
+      expect(enrichment.isYouTube, isTrue);
+      expect(enrichment.youtubeVideoId, 'FastPathVid1');
+      expect(saavnCalled, isFalse);
+      expect(archiveCalled, isFalse);
+      service.dispose();
+    });
+
+    test('fetchYouTubeStreamByVideoId resolves direct stream without searching', () async {
+      var searchCalled = false;
+      final service = youtubeService((request) async {
+        if (request.url.path == '/youtubei/v1/search') {
+          searchCalled = true;
+          return http.Response('should not search', 500);
+        }
+        if (request.url.host == 'www.youtube.com' &&
+            request.url.path == '/youtubei/v1/player') {
+          return ytPlayerOk(url: 'https://example.com/direct-stream.m4a');
+        }
+        return http.Response('not found', 404);
+      });
+
+      final enrichment = await service.fetchYouTubeStreamByVideoId('DirectVid123');
+      expect(enrichment, isNotNull);
+      expect(enrichment!.previewUrl, 'https://example.com/direct-stream.m4a');
+      expect(enrichment.isFullTrack, isTrue);
+      expect(enrichment.youtubeVideoId, 'DirectVid123');
+      expect(searchCalled, isFalse);
+      service.dispose();
+    });
+
+    test('probe for googlevideo bypasses HEAD request and accepts Range GET 206', () async {
+      var headCalled = false;
+      var rangeGetCalled = false;
+      final service = youtubeService((request) async {
+        if (request.url.host.contains('googlevideo.com')) {
+          if (request.method == 'HEAD') {
+            headCalled = true;
+            return http.Response('', 403);
+          }
+          if (request.method == 'GET' && request.headers['range'] == 'bytes=0-1') {
+            rangeGetCalled = true;
+            return http.Response('', 206, headers: {
+              'content-type': 'audio/mp4',
+              'content-length': '2',
+            });
+          }
+        }
+        if (request.url.path == '/youtubei/v1/search') {
+          return ytSearchOk([
+            ytVideo(
+              videoId: 'GvVid999',
+              title: 'Range Test - Artist (Official Audio)',
+              channel: 'Artist - Topic',
+              length: '3:00',
+            ),
+          ]);
+        }
+        if (request.url.path == '/youtubei/v1/player') {
+          return ytPlayerOk(url: 'https://rr1---sn-abc.googlevideo.com/videoplayback?id=123');
+        }
+        return http.Response('not found', 404);
+      });
+
+      final enrichment = await service.enrichTrack(
+        title: 'Range Test',
+        artist: 'Artist',
+        prioritizeYouTube: true,
+      );
+      expect(enrichment.isFullTrack, isTrue);
+      expect(enrichment.isYouTube, isTrue);
+      expect(headCalled, isFalse);
+      expect(rangeGetCalled, isTrue);
+      expect(service.googlevideoCoolingDown, isFalse);
       service.dispose();
     });
   });

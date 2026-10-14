@@ -35,6 +35,7 @@ class TrackEnrichment {
   /// True when the stream comes from YouTube. YouTube URLs expire after a
   /// few hours, so the player resolves a fresh one when a saved URL fails.
   final bool isYouTube;
+  final String? youtubeVideoId;
   final List<String> lyrics;
 
   const TrackEnrichment({
@@ -43,6 +44,7 @@ class TrackEnrichment {
     this.previewDuration,
     this.isFullTrack = false,
     this.isYouTube = false,
+    this.youtubeVideoId,
     this.lyrics = const [],
   });
 
@@ -66,6 +68,8 @@ class TrackEnrichmentService {
   /// when offline or when no match is found.
   ///
   /// Set [allowPreviewFallback] to false to require full-length audio only.
+  /// Set [prioritizeYouTube] to true (default on Spotify imports) to query
+  /// YouTube first for sub-2-second full-track resolution on WiFi and mobile data.
   Future<TrackEnrichment> enrichTrack({
     required String title,
     required String artist,
@@ -73,6 +77,7 @@ class TrackEnrichmentService {
     Duration? duration,
     bool previewFallbackOnly = false,
     bool allowPreviewFallback = true,
+    bool prioritizeYouTube = false,
   }) async {
     final t = title.trim();
     final a = artist.trim();
@@ -87,6 +92,7 @@ class TrackEnrichmentService {
           duration: duration,
           previewFallbackOnly: previewFallbackOnly,
           allowPreviewFallback: allowPreviewFallback,
+          prioritizeYouTube: prioritizeYouTube,
         ),
         _fetchLyrics(
           title: t,
@@ -103,6 +109,7 @@ class TrackEnrichmentService {
         previewDuration: preview?.duration,
         isFullTrack: preview?.isFullLength ?? false,
         isYouTube: preview?.isYouTube ?? false,
+        youtubeVideoId: preview?.youtubeVideoId,
         lyrics: lyrics,
       );
     } catch (_) {
@@ -122,6 +129,7 @@ class TrackEnrichmentService {
     Duration? duration,
     bool previewFallbackOnly = false,
     bool allowPreviewFallback = true,
+    bool prioritizeYouTube = false,
   }) async {
     final lowerTitle = title.toLowerCase();
 
@@ -139,6 +147,23 @@ class TrackEnrichmentService {
 
     if (!previewFallbackOnly) {
       final sw = Stopwatch()..start();
+
+      // YouTube Fast-Path: when prioritizeYouTube is enabled (Spotify imports),
+      // resolve YouTube immediately to avoid slow/failing proxy delays.
+      if (prioritizeYouTube) {
+        try {
+          final yt = await _fetchYouTubeFullAudio(
+            title: title,
+            artist: artist,
+            duration: duration,
+          );
+          _stageLog('yt-fastpath', sw, yt != null ? 'HIT' : 'miss');
+          if (yt != null) return yt;
+        } catch (e) {
+          _stageLog('yt-fastpath', sw, 'error $e');
+        }
+      }
+
       try {
         final full =
             await _fetchSaavnFullAudio(title: title, artist: artist);
@@ -149,6 +174,18 @@ class TrackEnrichmentService {
         _stageLog('saavn', sw, 'error $e');
       }
       try {
+        final sc = await _fetchSoundCloudFullAudio(
+          title: title,
+          artist: artist,
+          duration: duration,
+        );
+        _stageLog('soundcloud', sw,
+            sc != null ? 'HIT ${Uri.tryParse(sc.previewUrl)?.host}' : 'miss');
+        if (sc != null) return sc;
+      } catch (e) {
+        _stageLog('soundcloud', sw, 'error $e');
+      }
+      try {
         final web = await _fetchWebFullAudio(
           title: title,
           artist: artist,
@@ -156,7 +193,11 @@ class TrackEnrichmentService {
         );
         _stageLog('web', sw,
             web != null ? 'HIT ${Uri.tryParse(web.previewUrl)?.host}' : 'miss');
-        if (web != null) return web;
+        if (web != null &&
+            (!allowPreviewFallback ||
+                !web.previewUrl.contains('googlevideo.com'))) {
+          return web;
+        }
       } catch (e) {
         _stageLog('web', sw, 'error $e');
       }
@@ -536,10 +577,15 @@ class TrackEnrichmentService {
     return until != null && DateTime.now().isBefore(until);
   }
 
-  /// Record a googlevideo throttle signal (call on 403/429).
+  /// Record a googlevideo throttle signal (call only on 429).
   void noteGooglevideoThrottle() {
     _googlevideoCoolDownUntil =
-        DateTime.now().add(const Duration(minutes: 3));
+        DateTime.now().add(const Duration(seconds: 45));
+  }
+
+  /// Explicitly reset any active cooldown when user demands playback.
+  void clearGooglevideoThrottle() {
+    _googlevideoCoolDownUntil = null;
   }
 
   /// Snapshot of sibling download URLs (normalized title -> URL).
@@ -550,6 +596,35 @@ class TrackEnrichmentService {
   Map<String, int> get lastSiblingSeconds =>
       _archiveSiblings.map((k, v) => MapEntry(k, v.seconds));
 
+  /// Direct stream resolution using a known YouTube video ID.
+  /// Skips searching and candidate scoring completely (<300ms on WiFi/data).
+  Future<TrackEnrichment?> fetchYouTubeStreamByVideoId(String videoId) async {
+    final vid = videoId.trim();
+    if (vid.isEmpty) return null;
+    try {
+      final stream = await _ytAudioStream(vid);
+      if (stream == null || stream.url.isEmpty) return null;
+
+      if (stream.url.contains('googlevideo.com')) {
+        final bytes = await _probeAudioUrl(stream.url);
+        if (bytes == null) return null;
+      }
+
+      return TrackEnrichment(
+        previewUrl: stream.url,
+        artworkUrl: 'https://i.ytimg.com/vi/$vid/hqdefault.jpg',
+        previewDuration: stream.lengthSeconds > 0
+            ? Duration(seconds: stream.lengthSeconds)
+            : null,
+        isFullTrack: true,
+        isYouTube: true,
+        youtubeVideoId: vid,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<_PreviewHit?> _fetchYouTubeFullAudio({
     required String title,
     required String artist,
@@ -559,9 +634,8 @@ class TrackEnrichmentService {
     final cleanArtist = _cleanQuery(artist);
     if (cleanTitle.isEmpty) return null;
     final queries = <String>[
-      '$cleanTitle $cleanArtist official audio'.trim(),
-      '$cleanTitle $cleanArtist audio'.trim(),
       '$cleanTitle $cleanArtist'.trim(),
+      '$cleanTitle $cleanArtist official audio'.trim(),
       cleanTitle,
     ];
 
@@ -675,6 +749,7 @@ class TrackEnrichmentService {
             : null,
         isFullLength: true,
         isYouTube: true,
+        youtubeVideoId: entry.c.videoId,
       );
     }
     return null;
@@ -1181,6 +1256,190 @@ class TrackEnrichmentService {
     return best;
   }
 
+  static String? _scCachedClientId;
+  static DateTime? _scClientIdExpiry;
+
+  Future<String?> _getSoundCloudClientId() async {
+    if (_scCachedClientId != null &&
+        _scClientIdExpiry != null &&
+        DateTime.now().isBefore(_scClientIdExpiry!)) {
+      return _scCachedClientId;
+    }
+
+    try {
+      final homeRes = await _client.get(
+        Uri.parse('https://soundcloud.com'),
+        headers: {'User-Agent': _browserUserAgent},
+      ).timeout(const Duration(seconds: 4));
+
+      if (homeRes.statusCode == 200) {
+        final jsRegex = RegExp(r'<script[^>]+src="([^">]+\.js)"');
+        final scriptUrls = jsRegex
+            .allMatches(homeRes.body)
+            .map((m) => m.group(1)!)
+            .where((u) => u.contains('sndcdn.com'))
+            .toList();
+
+        final cidRegex = RegExp(r'client_id[:=]"([a-zA-Z0-9]{32})"');
+        for (final sUrl in scriptUrls.reversed) {
+          try {
+            final jsRes = await _client
+                .get(Uri.parse(sUrl))
+                .timeout(const Duration(seconds: 3));
+            final match = cidRegex.firstMatch(jsRes.body);
+            if (match != null) {
+              _scCachedClientId = match.group(1);
+              _scClientIdExpiry = DateTime.now().add(const Duration(hours: 6));
+              return _scCachedClientId;
+            }
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+
+    // Fallback known live client ID so resolution never stalls
+    _scCachedClientId = 'vI5BsvpTIlavDLl7RDbbcFAPg8kls8Bg';
+    _scClientIdExpiry = DateTime.now().add(const Duration(hours: 1));
+    return _scCachedClientId;
+  }
+
+  Future<_PreviewHit?> _fetchSoundCloudFullAudio({
+    required String title,
+    required String artist,
+    Duration? duration,
+  }) async {
+    final cleanTitle = _cleanQuery(title);
+    final cleanArtist = _cleanQuery(artist);
+    if (cleanTitle.isEmpty) return null;
+
+    final clientId = await _getSoundCloudClientId();
+    if (clientId == null || clientId.isEmpty) return null;
+
+    final primaryArtist = cleanArtist.split(RegExp(r'[,&/]')).first.trim();
+    final queries = <String>[
+      '$cleanTitle $cleanArtist'.trim(),
+      if (primaryArtist.isNotEmpty && primaryArtist != cleanArtist)
+        '$cleanTitle $primaryArtist'.trim(),
+      cleanTitle,
+    ];
+
+    final wantTitle = _normalize(title);
+    final wantArtist = _normalize(artist);
+    final wantSec = duration?.inSeconds ?? 0;
+
+    for (final q in queries) {
+      try {
+        final uri = Uri.parse(
+          'https://api-v2.soundcloud.com/search/tracks?q=${Uri.encodeComponent(q)}&client_id=$clientId&limit=8',
+        );
+        final res = await _client.get(uri).timeout(const Duration(seconds: 5));
+        if (res.statusCode != 200) continue;
+
+        final Object? decoded;
+        try {
+          decoded = jsonDecode(
+            utf8.decode(res.bodyBytes, allowMalformed: true),
+          );
+        } catch (_) {
+          continue;
+        }
+        if (decoded is! Map<String, dynamic>) continue;
+        final collection = decoded['collection'] as List?;
+        if (collection == null || collection.isEmpty) continue;
+
+        var bestScore = -1;
+        _PreviewHit? bestHit;
+
+        for (final item in collection) {
+          if (item is! Map<String, dynamic>) continue;
+          final durMs = (item['duration'] as int?) ?? 0;
+          final durSec = durMs ~/ 1000;
+          if (durSec <= 0) continue;
+
+          // If expected song length is > 60s, skip short previews < 35s
+          if (wantSec > 60 && durSec < 35) continue;
+
+          final hitTitle = _normalize(item['title']?.toString() ?? '');
+          if (hitTitle.isEmpty) continue;
+
+          final titleExact = hitTitle == wantTitle;
+          final titleOverlaps = titleExact ||
+              hitTitle.contains(wantTitle) ||
+              wantTitle.contains(hitTitle);
+          if (!titleOverlaps) continue;
+
+          final uName = _normalize(item['user']?['username']?.toString() ?? '');
+          var score = titleExact ? 5 : 2;
+          if (wantArtist.isNotEmpty &&
+              (hitTitle.contains(wantArtist) ||
+                  uName.contains(wantArtist) ||
+                  wantArtist.contains(uName))) {
+            score += 4;
+          }
+
+          if (wantSec > 60) {
+            final diff = (durSec - wantSec).abs();
+            if (diff <= 10) {
+              score += 6;
+            } else if (diff <= 30) {
+              score += 3;
+            }
+          }
+
+          if (score > bestScore) {
+            final transcodings = item['media']?['transcodings'] as List?;
+            if (transcodings == null || transcodings.isEmpty) continue;
+
+            String? streamUrl;
+            for (final t in transcodings) {
+              if (t is! Map<String, dynamic>) continue;
+              final infoUrl = t['url']?.toString();
+              if (infoUrl == null || infoUrl.isEmpty) continue;
+              try {
+                final resolveRes = await _client
+                    .get(Uri.parse('$infoUrl?client_id=$clientId'))
+                    .timeout(const Duration(seconds: 4));
+                if (resolveRes.statusCode == 200) {
+                  final Object? sDecoded;
+                  try {
+                    sDecoded = jsonDecode(
+                      utf8.decode(resolveRes.bodyBytes, allowMalformed: true),
+                    );
+                  } catch (_) {
+                    continue;
+                  }
+                  if (sDecoded is Map<String, dynamic>) {
+                    final mediaUrl = sDecoded['url']?.toString();
+                    if (mediaUrl != null && mediaUrl.isNotEmpty) {
+                      streamUrl = mediaUrl;
+                      break;
+                    }
+                  }
+                }
+              } catch (_) {}
+            }
+
+            if (streamUrl != null && streamUrl.isNotEmpty) {
+              bestScore = score;
+              final artwork = item['artwork_url']
+                  ?.toString()
+                  .replaceAll('large.jpg', 't500x500.jpg');
+              bestHit = _PreviewHit(
+                previewUrl: streamUrl,
+                artworkUrl: artwork,
+                duration: Duration(seconds: durSec),
+                isFullLength: true,
+              );
+            }
+          }
+        }
+
+        if (bestHit != null) return bestHit;
+      } catch (_) {}
+    }
+    return null;
+  }
+
   /// Full-length hunt: the archive catalog and YouTube race concurrently
   /// (archive URLs are permanent, so an archive hit wins); DuckDuckGo
   /// direct-audio follows. Each leg is capped: without caps, a slow
@@ -1196,12 +1455,12 @@ class TrackEnrichmentService {
           title: title,
           artist: artist,
           duration: duration,
-        ).timeout(const Duration(seconds: 45)),
+        ).timeout(const Duration(seconds: 15)),
         _fetchYouTubeFullAudio(
           title: title,
           artist: artist,
           duration: duration,
-        ).timeout(const Duration(seconds: 60)),
+        ).timeout(const Duration(seconds: 20)),
       ]);
       final archive = results[0];
       if (archive != null) {
@@ -1612,34 +1871,34 @@ class TrackEnrichmentService {
     if (isGoogleVideo && googlevideoCoolingDown) return null;
 
     void noteThrottle(int status) {
-      if (isGoogleVideo && (status == 403 || status == 429)) {
+      if (isGoogleVideo && status == 429) {
         noteGooglevideoThrottle();
       }
     }
 
-    try {
-      final head = await _client
-          .head(parsed, headers: {'User-Agent': _browserUserAgent})
-          .timeout(const Duration(seconds: 6));
-      if (head.statusCode >= 200 && head.statusCode < 400) {
-        final contentType = head.headers['content-type'] ?? '';
-        if (!_looksLikeAudio(contentType)) {
-          debugPrint('[Enrich] probe HEAD not-audio $contentType $url');
+    // googlevideo CDN actively rejects HEAD requests with 403 Forbidden.
+    // Skip HEAD for googlevideo to save roundtrips and avoid false throttles.
+    if (!isGoogleVideo) {
+      try {
+        final head = await _client
+            .head(parsed, headers: {'User-Agent': _browserUserAgent})
+            .timeout(const Duration(seconds: 4));
+        if (head.statusCode >= 200 && head.statusCode < 400) {
+          final contentType = head.headers['content-type'] ?? '';
+          if (!_looksLikeAudio(contentType)) {
+            debugPrint('[Enrich] probe HEAD not-audio $contentType $url');
+            return null;
+          }
+          return int.tryParse(head.headers['content-length'] ?? '') ?? 0;
+        }
+        if (head.statusCode != 403 &&
+            head.statusCode != 405 &&
+            head.statusCode != 501) {
           return null;
         }
-        return int.tryParse(head.headers['content-length'] ?? '') ?? 0;
+      } catch (e) {
+        debugPrint('[Enrich] probe HEAD error $e $url');
       }
-      debugPrint('[Enrich] probe HEAD ${head.statusCode} $url');
-      noteThrottle(head.statusCode);
-      if (head.statusCode != 403 &&
-          head.statusCode != 405 &&
-          head.statusCode != 501) {
-        return null;
-      }
-      // else fall through to the Range GET (googlevideo often 403s HEAD
-      // while serving Range GETs fine).
-    } catch (e) {
-      debugPrint('[Enrich] probe HEAD error $e $url');
     }
 
     try {
@@ -2005,8 +2264,18 @@ class TrackEnrichmentService {
   }
 
   static String _normalize(String value) {
-    return value
+    var v = value
         .toLowerCase()
+        .replaceAll('é', 'e')
+        .replaceAll('è', 'e')
+        .replaceAll('á', 'a')
+        .replaceAll('à', 'a')
+        .replaceAll('ó', 'o')
+        .replaceAll('ò', 'o')
+        .replaceAll('í', 'i')
+        .replaceAll('ú', 'u')
+        .replaceAll('ñ', 'n');
+    return v
         .replaceAll(RegExp(r'[^a-z0-9 ]+'), ' ')
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
@@ -2058,6 +2327,7 @@ class _PreviewHit {
   final Duration? duration;
   final bool isFullLength;
   final bool isYouTube;
+  final String? youtubeVideoId;
 
   const _PreviewHit({
     required this.previewUrl,
@@ -2065,5 +2335,6 @@ class _PreviewHit {
     this.duration,
     this.isFullLength = false,
     this.isYouTube = false,
+    this.youtubeVideoId,
   });
 }

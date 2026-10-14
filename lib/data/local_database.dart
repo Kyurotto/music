@@ -505,6 +505,9 @@ class LocalDatabase {
     try {
       await database.execute('ALTER TABLE imported_playlists ADD COLUMN image_url TEXT');
     } catch (_) {}
+    try {
+      await database.execute('ALTER TABLE imported_songs ADD COLUMN youtube_video_id TEXT');
+    } catch (_) {}
     await database.execute('''
       CREATE TABLE IF NOT EXISTS imported_songs (
         id TEXT PRIMARY KEY,
@@ -518,6 +521,7 @@ class LocalDatabase {
         genre TEXT,
         is_preview INTEGER NOT NULL DEFAULT 0,
         is_youtube_audio INTEGER NOT NULL DEFAULT 0,
+        youtube_video_id TEXT,
         updated_at INTEGER NOT NULL
       )
     ''');
@@ -1479,6 +1483,8 @@ class LocalDatabase {
                   song['is_youtube_audio'] == 1)
               ? 1
               : 0,
+          if (song['youtube_video_id'] != null)
+            'youtube_video_id': song['youtube_video_id'] as String,
           'updated_at': now,
         }, conflictAlgorithm: ConflictAlgorithm.replace);
 
@@ -1500,6 +1506,7 @@ class LocalDatabase {
     String? audioUrl,
     bool? isPreview,
     bool? isYouTubeAudio,
+    String? youtubeVideoId,
     int? durationMs,
     String? imageUrl,
     List<String>? lyrics,
@@ -1511,6 +1518,9 @@ class LocalDatabase {
     if (isPreview != null) values['is_preview'] = isPreview ? 1 : 0;
     if (isYouTubeAudio != null) {
       values['is_youtube_audio'] = isYouTubeAudio ? 1 : 0;
+    }
+    if (youtubeVideoId != null) {
+      values['youtube_video_id'] = youtubeVideoId;
     }
     if (durationMs != null) values['duration_ms'] = durationMs;
     if (imageUrl != null) values['image_url'] = imageUrl;
@@ -1533,6 +1543,8 @@ class LocalDatabase {
         SELECT DISTINCT s.id AS id, s.title AS title, s.artist AS artist,
                s.album AS album, s.duration_ms AS duration_ms,
                s.audio_url AS audio_url, s.is_preview AS is_preview,
+               s.is_youtube_audio AS is_youtube_audio,
+               s.youtube_video_id AS youtube_video_id,
                s.lyrics AS lyrics
         FROM imported_songs s
         INNER JOIN imported_playlist_songs ps ON ps.song_id = s.id
@@ -1634,6 +1646,7 @@ class LocalDatabase {
           'genre': row['genre'] as String? ?? 'Spotify',
           'is_preview': (row['is_preview'] as int? ?? 0) == 1,
           'is_youtube_audio': (row['is_youtube_audio'] as int? ?? 0) == 1,
+          'youtube_video_id': row['youtube_video_id'] as String? ?? '',
         };
       }).toList();
 
