@@ -56,6 +56,9 @@ class MusicPlayerController extends ChangeNotifier {
   StreamSubscription<PlaybackEvent>? _playbackEventSub;
   bool _audioPlayerHasSource = false;
   bool _isPlayingAudioInProgress = false;
+  /// Id of the song whose audio load is currently in flight, so a request for
+  /// a different song can supersede it instead of being dropped.
+  String? _loadingSongId;
   int _playSessionId = 0;
 
   /// When an enrichment hot-swap arrives while [_isPlayingAudioInProgress] is
@@ -3110,8 +3113,28 @@ class MusicPlayerController extends ChangeNotifier {
   Future<void> _playCurrentSongAudio() async {
     final song = currentSong;
     if (song == null) return;
-    if (_isPlayingAudioInProgress) return;
+    if (_isPlayingAudioInProgress) {
+      // A different song was requested (skip / previous / tap) while another
+      // load is still running. Previously this returned silently, so the new
+      // song never loaded and the old attempt finished against the old song:
+      // muted, frozen slider, frozen lyrics. Supersede the old attempt and
+      // have its `finally` block start the current song.
+      final loadingId = _loadingSongId;
+      if (loadingId != null && loadingId != song.id) {
+        _playSessionId++;
+        _pendingHotSwapReload = true;
+        _pendingHotSwapResumePosition = Duration.zero;
+        _audioPlayerHasSource = false;
+        _logDiag('play superseded by a newer request — aborting old load', song: song);
+        try {
+          // ignore: discarded_futures
+          _audioPlayer.stop().catchError((_) {});
+        } catch (_) {}
+      }
+      return;
+    }
     _isPlayingAudioInProgress = true;
+    _loadingSongId = song.id;
 
     final sessionId = ++_playSessionId;
 
@@ -3172,6 +3195,9 @@ class MusicPlayerController extends ChangeNotifier {
 
 final mediaItem = await _createSafeMediaItem(song);
       final audioSource = await _resolveAudioSource(song, mediaItem);
+      // The user skipped while the source was resolving: never load the old
+      // song's source over the new request.
+      if (sessionId != _playSessionId || _disposed) return;
       _logDiag('source resolved, loading', song: song, since: DateTime.now().difference(playStart));
       unawaited(_logPlaybackDiagnostics('PRE-LOAD', song));
 
@@ -3189,6 +3215,9 @@ final mediaItem = await _createSafeMediaItem(song);
       } on MissingPluginException {
         _audioPlayerHasSource = false;
       } catch (loadErr) {
+        // Aborted because a newer play request superseded this one: skip the
+        // slow online recovery chain, the new attempt takes over.
+        if (sessionId != _playSessionId || _disposed) return;
         _logDiag(
           'setAudioSource FAILED in ${DateTime.now().difference(loadStart).inMilliseconds}ms: $loadErr',
           song: song,
@@ -3211,7 +3240,11 @@ final mediaItem = await _createSafeMediaItem(song);
             final failedUrl = song.audioUrl;
             _enrichment.clearGooglevideoThrottle();
             song.audioUrl = '';
-            await _ensureRecoverableAudio(song);
+            // Bound the whole re-resolve: the inner chain can otherwise run
+            // up to ~35s with the player silent and the slider frozen.
+            await _ensureRecoverableAudio(song)
+                .timeout(const Duration(seconds: 12), onTimeout: () {});
+            if (sessionId != _playSessionId || _disposed) return;
             final retryUrl = song.audioUrl;
             // Retry whatever the resolve produced (excluding googlevideo).
             if (retryUrl.isNotEmpty &&
@@ -3222,7 +3255,7 @@ final mediaItem = await _createSafeMediaItem(song);
                 headers: {'User-Agent': TrackEnrichmentService.browserUserAgent},
                 tag: mediaItem,
               );
-              await _audioPlayer.setAudioSource(retrySource).timeout(const Duration(seconds: 10));
+              await _audioPlayer.setAudioSource(retrySource).timeout(const Duration(seconds: 8));
               _audioPlayerHasSource = true;
               recovered = true;
               // Crucial: clear pending hot swap so finally block does not trigger a duplicate reload
@@ -3314,6 +3347,7 @@ if (sessionId == _playSessionId) {
       await _handleAudioLoadFailure(song);
     } finally {
       _isPlayingAudioInProgress = false;
+      _loadingSongId = null;
       _logDiag('play attempt finished: hasSource=$_audioPlayerHasSource '
           'session=$sessionId/$_playSessionId playing=$_isPlaying '
           'pendingSwap=$_pendingHotSwapReload', song: song);

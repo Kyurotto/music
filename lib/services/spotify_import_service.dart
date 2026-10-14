@@ -146,7 +146,22 @@ class SpotifyImportService {
   /// Also accepts Spotify artist links (imported as top songs via a free
   /// catalog lookup) and plain artist names like "Bruno Mars" (anything
   /// that is not a URL is treated as an artist search).
-  Future<SpotifyImportResult> importFromLink(String input) async {
+  Future<SpotifyImportResult> importFromLink(String input) {
+    // One overall deadline so no single slow step (short-link redirects,
+    // embed page, iTunes lookups) can leave the import dialog spinning
+    // forever on a weak Wi-Fi or mobile-data connection.
+    return _importFromLinkImpl(input).timeout(
+      _importDeadline,
+      onTimeout: () => throw const SpotifyImportException(
+        'Spotify is taking too long to respond. Check your connection and try again.',
+      ),
+    );
+  }
+
+  static const Duration _importDeadline = Duration(seconds: 25);
+  static const Duration _requestTimeout = Duration(seconds: 12);
+
+  Future<SpotifyImportResult> _importFromLinkImpl(String input) async {
     if (kIsWeb) {
       throw const SpotifyImportException(
         'Spotify import is not supported on web builds. Use the desktop or mobile app.',
@@ -417,8 +432,11 @@ class SpotifyImportService {
     for (var hop = 0; hop < 6; hop++) {
       final http.Response response;
       try {
-        response = await _client.get(uri, headers: {'User-Agent': _browserUserAgent});
+        response = await _client
+            .get(uri, headers: {'User-Agent': _browserUserAgent})
+            .timeout(const Duration(seconds: 8));
       } on Exception {
+        // Includes TimeoutException and SocketException.
         return null;
       }
 
@@ -440,17 +458,28 @@ class SpotifyImportService {
   Future<Map<String, dynamic>> _fetchEmbedEntity(SpotifyLink link) async {
     final embedUrl = Uri.https('open.spotify.com', '/embed/${link.type.name}/${link.id}');
 
-    final http.Response response;
-    try {
-      response = await _client.get(embedUrl, headers: {
-        'User-Agent': _browserUserAgent,
-        'Accept': 'text/html,application/xhtml+xml',
-      });
-    } on Exception {
+    // Mobile data often drops the first request, so try twice with a bounded
+    // wait each time instead of hanging on a dead socket.
+    http.Response? fetched;
+    for (var attempt = 0; attempt < 2 && fetched == null; attempt++) {
+      try {
+        fetched = await _client.get(embedUrl, headers: {
+          'User-Agent': _browserUserAgent,
+          'Accept': 'text/html,application/xhtml+xml',
+        }).timeout(_requestTimeout);
+      } on Exception {
+        // Includes TimeoutException and SocketException.
+        if (attempt == 0) {
+          await Future<void>.delayed(const Duration(seconds: 1));
+        }
+      }
+    }
+    if (fetched == null) {
       throw const SpotifyImportException(
         'Could not reach Spotify. Check your internet connection and try again.',
       );
     }
+    final http.Response response = fetched;
 
     if (response.statusCode == 404) {
       throw const SpotifyImportException(

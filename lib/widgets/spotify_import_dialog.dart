@@ -33,6 +33,9 @@ class _SpotifyImportDialogState extends State<SpotifyImportDialog> {
   final _formKey = GlobalKey<FormState>();
 
   bool _isLoading = false;
+  // Bumped on every link check and on cancel so a cancelled or superseded
+  // request can never overwrite the dialog state when it finally answers.
+  int _previewRequestId = 0;
   String? _error;
   String? _targetPlaylistId;
   SpotifyImportResult? _preview;
@@ -59,6 +62,7 @@ class _SpotifyImportDialogState extends State<SpotifyImportDialog> {
       setState(() => _error = 'Paste a Spotify link first.');
       return;
     }
+    final requestId = ++_previewRequestId;
     setState(() {
       _isLoading = true;
       _error = null;
@@ -66,19 +70,20 @@ class _SpotifyImportDialogState extends State<SpotifyImportDialog> {
     });
     try {
       final result = await _service.importFromLink(link);
-      if (!mounted) return;
+      // Ignore a late answer for a request the user already cancelled.
+      if (!mounted || requestId != _previewRequestId) return;
       setState(() {
         _preview = result;
         _isLoading = false;
       });
     } on SpotifyImportException catch (e) {
-      if (!mounted) return;
+      if (!mounted || requestId != _previewRequestId) return;
       setState(() {
         _error = e.message;
         _isLoading = false;
       });
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted || requestId != _previewRequestId) return;
       setState(() {
         _error = 'Something went wrong. Please try again.';
         _isLoading = false;
@@ -339,7 +344,16 @@ class _SpotifyImportDialogState extends State<SpotifyImportDialog> {
       ),
       actions: [
         TextButton(
-          onPressed: _isLoading ? null : () => Navigator.of(context).pop(),
+          onPressed: () {
+            if (_isLoading && _preview == null) {
+              // Cancel an in-flight link check instead of being locked out.
+              _previewRequestId++;
+              setState(() => _isLoading = false);
+              return;
+            }
+            if (_isLoading) return; // saving the playlist is instant; wait
+            Navigator.of(context).pop();
+          },
           child: const Text(
             'Cancel',
             style: TextStyle(color: AppTheme.textSecondary),
