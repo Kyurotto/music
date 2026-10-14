@@ -94,12 +94,17 @@ class TrackEnrichmentService {
           allowPreviewFallback: allowPreviewFallback,
           prioritizeYouTube: prioritizeYouTube,
         ),
-        _fetchLyrics(
-          title: t,
-          artist: a,
-          album: album,
-          duration: duration,
-        ),
+        // A preview-only pass exists to get something audible quickly while
+        // the full pass is still running (and that pass fetches the lyrics).
+        // Waiting on a slow lyrics lookup here delayed first sound by 10-25s.
+        previewFallbackOnly
+            ? Future<List<String>>.value(const <String>[])
+            : _fetchLyrics(
+                title: t,
+                artist: a,
+                album: album,
+                duration: duration,
+              ),
       ]);
       final preview = results[0] as _PreviewHit?;
       final lyrics = results[1] as List<String>;

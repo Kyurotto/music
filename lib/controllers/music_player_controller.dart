@@ -275,7 +275,10 @@ class MusicPlayerController extends ChangeNotifier {
               dur <= const Duration(seconds: 35) &&
               song.duration > const Duration(seconds: 60)) {
             song.isPreview = true;
-            if (!_enrichingIds.contains(song.id)) {
+            // Skip when the full-track pass is already running (the quick
+            // preview pass clears the flag in _enrichingIds when it ends).
+            if (!_enrichingIds.contains(song.id) &&
+                !_pendingEnrichment.containsKey(song.id)) {
               _fullUpgradeAttemptedAt.remove(song.id);
               _enrichingIds.add(song.id);
               // ignore: discarded_futures
@@ -3257,11 +3260,26 @@ class MusicPlayerController extends ChangeNotifier {
 
         if (needsFreshAudio) {
           if (song.audioUrl.isEmpty && song.id.startsWith('spotify-')) {
-            // Brand new track with empty audio: await fast enrichment briefly (1-3s)
-            // instead of immediately throwing StateError and stalling the player.
+            // Imported track with no saved audio (every Library track after a
+            // restart). Race the full-track lookup against a quick 30s preview
+            // and play whichever lands first, instead of sitting silent with a
+            // frozen slider and lyrics for up to 35s. A full track that lands
+            // later hot-swaps in at the same position.
+            final fullPass = _ensureEnrichment(song);
+            final quickPass =
+                _ensureEnrichment(song, previewFallbackOnly: true);
             try {
-              await _ensureEnrichment(song).timeout(const Duration(seconds: 4));
+              await Future.any<void>([fullPass, quickPass])
+                  .timeout(const Duration(seconds: 8));
+              if (song.audioUrl.isEmpty) {
+                // The first one to finish found nothing; give the other a go.
+                await Future.wait<void>([fullPass, quickPass])
+                    .timeout(const Duration(seconds: 6));
+              }
             } catch (_) {}
+            // The URL is read below, so a hot-swap queued while we waited
+            // would only reload the same source a second later.
+            if (currentSong?.id == song.id) _pendingHotSwapReload = false;
           } else {
             unawaited(_ensureEnrichment(song));
           }
