@@ -1414,6 +1414,16 @@ class MusicPlayerController extends ChangeNotifier {
                           cleanTitleKey.contains(songCleanTitleKey)))));
       if (!titleMatches) continue;
 
+      // "X (Tagalog Version)" and "X (English Version)" clean to the same
+      // title, so the second one used to be merged into the first and dropped
+      // from the playlist. Different versions are different songs.
+      final importedTags = TrackEnrichmentService.versionTags(imported.title);
+      final songTags = TrackEnrichmentService.versionTags(song.title);
+      if (importedTags.length != songTags.length ||
+          !importedTags.containsAll(songTags)) {
+        continue;
+      }
+
       final songArtist = _normalizeKey(song.artist);
       if (songArtist.isNotEmpty &&
           (songArtist == artistKey ||
@@ -2339,6 +2349,9 @@ class MusicPlayerController extends ChangeNotifier {
   };
 
   String _getOfflineAssetFallbackForFields(String title, String artist, String songId) {
+    // A Tagalog/English/acoustic version is a different recording: never
+    // substitute the bundled original for it.
+    if (TrackEnrichmentService.versionTags(title).isNotEmpty) return '';
     final cleanT = _cleanSongTitle(title).toLowerCase();
     final cleanA = _normalizeKey(artist);
 
