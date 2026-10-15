@@ -612,8 +612,8 @@ void main() {
                     'media': {
                       'transcodings': [
                         {
-                          'url': 'https://api-v2.soundcloud.com/media/stream/hls',
-                          'format': {'protocol': 'hls'},
+                          'url': 'https://api-v2.soundcloud.com/media/stream/progressive',
+                          'format': {'protocol': 'progressive'},
                         }
                       ]
                     }
@@ -624,9 +624,9 @@ void main() {
             );
           }
           if (request.url.host == 'api-v2.soundcloud.com' &&
-              request.url.path == '/media/stream/hls') {
+              request.url.path == '/media/stream/progressive') {
             return http.Response(
-              jsonEncode({'url': 'https://playback.media-streaming.soundcloud.cloud/lalim.m3u8'}),
+              jsonEncode({'url': 'https://cf-media.sndcdn.com/lalim.mp3'}),
               200,
             );
           }
@@ -639,10 +639,77 @@ void main() {
         duration: const Duration(seconds: 199),
       );
 
-      expect(enrichment.previewUrl, 'https://playback.media-streaming.soundcloud.cloud/lalim.m3u8');
+      expect(enrichment.previewUrl, 'https://cf-media.sndcdn.com/lalim.mp3');
       expect(enrichment.isFullTrack, isTrue);
       expect(enrichment.previewDuration, const Duration(seconds: 199));
       expect(enrichment.artworkUrl, 'https://i1.sndcdn.com/artworks-t500x500.jpg');
+      service.dispose();
+    });
+
+    test('rejects SoundCloud HLS m3u8 streams and falls back to iTunes preview', () async {
+      final service = serviceFor((request) async {
+        if (request.url.host.startsWith('saavn.')) {
+          return http.Response('not found', 404);
+        }
+        if (request.url.host == 'soundcloud.com') {
+          return http.Response(
+            '<html><head><script src="https://a-v2.sndcdn.com/assets/55-app.js"></script></head></html>',
+            200,
+          );
+        }
+        if (request.url.host == 'a-v2.sndcdn.com') {
+          return http.Response('window.config={client_id:"mock_sc_client_id_123456789012"};', 200);
+        }
+        if (request.url.host == 'api-v2.soundcloud.com' &&
+            request.url.path == '/search/tracks') {
+          return http.Response(
+            jsonEncode({
+              'collection': [
+                {
+                  'title': 'Kathang Isip',
+                  'duration': 318000,
+                  'user': {'username': 'Ben&Ben'},
+                  'media': {
+                    'transcodings': [
+                      {
+                        'url': 'https://api-v2.soundcloud.com/media/stream/hls',
+                        'format': {'protocol': 'hls'},
+                      }
+                    ]
+                  }
+                }
+              ]
+            }),
+            200,
+          );
+        }
+        if (request.url.host == 'itunes.apple.com') {
+          return http.Response(
+            jsonEncode({
+              'results': [
+                {
+                  'trackName': 'Kathang Isip',
+                  'artistName': 'Ben&Ben',
+                  'previewUrl': 'https://audio-ssl.itunes.apple.com/kathang-isip.m4a',
+                  'kind': 'song',
+                }
+              ]
+            }),
+            200,
+          );
+        }
+        return http.Response('not found', 404);
+      });
+
+      final enrichment = await service.enrichTrack(
+        title: 'Kathang Isip',
+        artist: 'Ben&Ben',
+        duration: const Duration(seconds: 318),
+      );
+
+      // Must NOT be the SoundCloud HLS stream; must fall back to the playable iTunes preview
+      expect(enrichment.previewUrl, 'https://audio-ssl.itunes.apple.com/kathang-isip.m4a');
+      expect(enrichment.isFullTrack, isFalse);
       service.dispose();
     });
   });

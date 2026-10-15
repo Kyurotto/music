@@ -78,6 +78,7 @@ class TrackEnrichmentService {
     bool previewFallbackOnly = false,
     bool allowPreviewFallback = true,
     bool prioritizeYouTube = false,
+    bool fastImport = false,
   }) async {
     final t = title.trim();
     final a = artist.trim();
@@ -93,6 +94,7 @@ class TrackEnrichmentService {
           previewFallbackOnly: previewFallbackOnly,
           allowPreviewFallback: allowPreviewFallback,
           prioritizeYouTube: prioritizeYouTube,
+          fastImport: fastImport,
         ),
         // A preview-only pass exists to get something audible quickly while
         // the full pass is still running (and that pass fetches the lyrics).
@@ -135,6 +137,7 @@ class TrackEnrichmentService {
     bool previewFallbackOnly = false,
     bool allowPreviewFallback = true,
     bool prioritizeYouTube = false,
+    bool fastImport = false,
   }) async {
     final lowerTitle = title.toLowerCase();
 
@@ -169,6 +172,30 @@ class TrackEnrichmentService {
         }
       }
 
+      if (fastImport) {
+        try {
+          final results = await Future.wait([
+            _fetchSoundCloudFullAudio(title: title, artist: artist, duration: duration)
+                .timeout(const Duration(seconds: 4), onTimeout: () => null),
+            _fetchSaavnFullAudio(title: title, artist: artist)
+                .timeout(const Duration(seconds: 4), onTimeout: () => null),
+            _fetchArchiveOrgFullAudio(title: title, artist: artist, duration: duration)
+                .timeout(const Duration(seconds: 4), onTimeout: () => null),
+          ]);
+          for (final hit in results) {
+            if (hit != null &&
+                hit.previewUrl.isNotEmpty &&
+                !hit.previewUrl.toLowerCase().contains('.m3u8') &&
+                !hit.previewUrl.contains('googlevideo.com')) {
+              _stageLog('fast-import', sw, 'HIT ${Uri.tryParse(hit.previewUrl)?.host}');
+              return hit;
+            }
+          }
+        } catch (e) {
+          _stageLog('fast-import', sw, 'error $e');
+        }
+      }
+
       try {
         final full =
             await _fetchSaavnFullAudio(title: title, artist: artist);
@@ -186,7 +213,7 @@ class TrackEnrichmentService {
         );
         _stageLog('soundcloud', sw,
             sc != null ? 'HIT ${Uri.tryParse(sc.previewUrl)?.host}' : 'miss');
-        if (sc != null) return sc;
+        if (sc != null && !sc.previewUrl.toLowerCase().contains('.m3u8')) return sc;
       } catch (e) {
         _stageLog('soundcloud', sw, 'error $e');
       }
@@ -1361,8 +1388,11 @@ class TrackEnrichmentService {
           final durSec = durMs ~/ 1000;
           if (durSec <= 0) continue;
 
-          // If expected song length is > 60s, skip short previews < 35s
-          if (wantSec > 60 && durSec < 35) continue;
+          // If expected song length is > 60s, skip short previews < 35s or snipped tracks
+          final isSnipped = item['snipped'] == true ||
+              item['policy'] == 'SNIP' ||
+              (wantSec > 60 && durSec < 35);
+          if (isSnipped) continue;
 
           final hitTitle = _normalize(item['title']?.toString() ?? '');
           if (hitTitle.isEmpty) continue;
@@ -1398,8 +1428,16 @@ class TrackEnrichmentService {
             String? streamUrl;
             for (final t in transcodings) {
               if (t is! Map<String, dynamic>) continue;
+              final format = t['format'];
+              final protocol = (format is Map ? format['protocol']?.toString() : null)?.toLowerCase() ?? '';
               final infoUrl = t['url']?.toString();
               if (infoUrl == null || infoUrl.isEmpty) continue;
+
+              // Strictly reject HLS streams: ExoPlayer fails on SoundCloud m3u8 manifests with gzip/source errors,
+              // and m3u8 text playlists cannot be cached or played as direct audio files.
+              if (protocol == 'hls' || infoUrl.contains('/hls')) continue;
+              if (protocol.isNotEmpty && protocol != 'progressive' && !infoUrl.contains('/progressive')) continue;
+
               try {
                 final resolveRes = await _client
                     .get(Uri.parse('$infoUrl?client_id=$clientId'))
@@ -1415,7 +1453,10 @@ class TrackEnrichmentService {
                   }
                   if (sDecoded is Map<String, dynamic>) {
                     final mediaUrl = sDecoded['url']?.toString();
-                    if (mediaUrl != null && mediaUrl.isNotEmpty) {
+                    if (mediaUrl != null &&
+                        mediaUrl.isNotEmpty &&
+                        !mediaUrl.toLowerCase().contains('.m3u8') &&
+                        !mediaUrl.toLowerCase().contains('/hls')) {
                       streamUrl = mediaUrl;
                       break;
                     }
@@ -1424,7 +1465,9 @@ class TrackEnrichmentService {
               } catch (_) {}
             }
 
-            if (streamUrl != null && streamUrl.isNotEmpty) {
+            if (streamUrl != null &&
+                streamUrl.isNotEmpty &&
+                !streamUrl.toLowerCase().contains('.m3u8')) {
               bestScore = score;
               final artwork = item['artwork_url']
                   ?.toString()
@@ -1935,6 +1978,9 @@ class TrackEnrichmentService {
 
   static bool _looksLikeAudio(String contentType) {
     final ct = contentType.toLowerCase();
+    if (ct.contains('mpegurl') || ct.contains('m3u8') || ct.contains('x-scpls')) {
+      return false;
+    }
     return ct.startsWith('audio/') ||
         ct.contains('mpeg') ||
         ct.contains('mp4') ||
