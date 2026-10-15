@@ -1,4 +1,3 @@
-
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -573,6 +572,9 @@ class MusicPlayerController extends ChangeNotifier {
     notifyListeners();
     // Best-effort: resolve playable previews + lyrics without blocking import.
     if (newlyAdded.isNotEmpty) _enrichImportedSongs(newlyAdded);
+    // Every import also stores what is already resolvable in the cache
+    // (full tracks located later are cached by _applyEnrichment).
+    _cacheAllPendingOfflineAudio();
 
     // Persist imported playlist & tracks to local database for current user
     _persistPlaylistToDb(playlist, spotifyUrl);
@@ -2642,9 +2644,9 @@ class MusicPlayerController extends ChangeNotifier {
 
   Future<void> _cacheAudioOffline(Song song) async {
     final remoteUrl = song.audioUrl;
-    if (remoteUrl.isEmpty) return;
 
-    // Check if a valid local offline file already exists
+    // Check if a valid local offline file already exists (also when the
+    // stream URL is empty/expired, so a re-import reuses the saved file).
     final cached = await _findCachedAudioFile(song.id);
     if (cached != null) {
       if (song.audioUrl != cached.path || (song.isPreview && cached.lengthSync() >= 1600000)) {
@@ -2659,9 +2661,13 @@ class MusicPlayerController extends ChangeNotifier {
       return;
     }
 
+    if (remoteUrl.isEmpty) return;
     if (!remoteUrl.startsWith('http://') && !remoteUrl.startsWith('https://')) {
       return;
     }
+    // 30s previews are never cached; the full track is cached as soon as
+    // it is located (see _applyEnrichment).
+    if (song.isPreview) return;
 
     // Don't download whole songs over mobile data unless the user allowed it.
     if (!await _mayDownloadNow()) {
@@ -2819,7 +2825,8 @@ class MusicPlayerController extends ChangeNotifier {
     final pending = _allSongs
         .where((s) =>
             s.id.startsWith('spotify-') &&
-            s.audioUrl.startsWith('http') &&
+            (s.audioUrl.isEmpty ||
+                (s.audioUrl.startsWith('http') && !s.isPreview)) &&
             !_cachingIds.contains(s.id))
         .toList();
     if (pending.isEmpty) return;
@@ -2957,6 +2964,11 @@ class MusicPlayerController extends ChangeNotifier {
     if (songs.isEmpty) return;
     _queue = List<Song>.from(songs);
     _currentIndex = 0;
+    // Start on a full track when the head is still locating/preview.
+    if (needsFullTrack(_queue[_currentIndex])) {
+      final fullIndex = nextFullTrackIndex(_queue, _currentIndex, true);
+      if (fullIndex != null) _currentIndex = fullIndex;
+    }
     _currentPosition = Duration.zero;
     _audioDuration = Duration.zero;
     _lastPositionUpdate = DateTime.now();
@@ -3174,6 +3186,27 @@ class MusicPlayerController extends ChangeNotifier {
       } else {
         pause();
         return;
+      }
+    }
+    // Skip locating/preview placeholders into full tracks.
+    if (needsFullTrack(_queue[_currentIndex])) {
+      final fullIndex = nextFullTrackIndex(
+        _queue,
+        _currentIndex,
+        _repeatMode == PlaybackRepeatMode.all || _isShuffle,
+      );
+      if (fullIndex != null) {
+        // Keep locating the full audio of the tracks we jumped over so
+        // they are full (and cached) by the time the user comes back.
+        final skipped = <Song>[];
+        for (var i = _currentIndex; i < fullIndex; i++) {
+          if (needsFullTrack(_queue[i])) skipped.add(_queue[i]);
+        }
+        _currentIndex = fullIndex;
+        for (final s in skipped) {
+          _fullUpgradeAttemptedAt.remove(s.id);
+        }
+        if (skipped.isNotEmpty) _enrichImportedSongs(skipped);
       }
     }
     _currentPosition = Duration.zero;
@@ -3896,8 +3929,41 @@ final mediaItem = await _createSafeMediaItem(song);
       _playCurrentSongAudio();
       _startTimer();
       notifyListeners();
-    } else {
+      return;
+    }
+    final song = currentSong;
+    // A 30s preview just ended: go to this song's full track audio first
+    // instead of skipping to the next song.
+    if (song != null && song.isPreview && needsFullTrack(song)) {
+      // ignore: discarded_futures
+      _proceedToFullTrack(song);
+      return;
+    }
+    next();
+  }
+
+  final Set<String> _fullTrackHandoffIds = {};
+
+  /// The preview indicator ended (or was skipped): resolve the full track
+  /// audio and continue the same song from where the preview stopped.
+  /// [_applyEnrichment] hot-swaps the full audio in and resumes in place.
+  /// Only when no full audio exists does playback move to the next full track.
+  Future<void> _proceedToFullTrack(Song song) async {
+    if (!_fullTrackHandoffIds.add(song.id)) return;
+    try {
+      _fullUpgradeAttemptedAt.remove(song.id);
+      try {
+        await _ensureEnrichment(song).timeout(const Duration(seconds: 12));
+      } catch (_) {}
+    } finally {
+      _fullTrackHandoffIds.remove(song.id);
+    }
+    if (_disposed || currentSong?.id != song.id) return;
+    if (needsFullTrack(song)) {
+      _logDiag('no full track yet — skipping to next full track', song: song);
       next();
+    } else {
+      _logDiag('preview -> full track audio', song: song);
     }
   }
 
@@ -4161,4 +4227,3 @@ final mediaItem = await _createSafeMediaItem(song);
     super.dispose();
   }
 }
-
