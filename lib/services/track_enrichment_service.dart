@@ -263,7 +263,9 @@ class TrackEnrichmentService {
     final cleanArtist = _cleanQuery(artist);
     if (cleanTitle.isEmpty) return null;
     final primaryArtist = cleanArtist.split(RegExp(r'[,&/]')).first.trim();
+    final versionQ = _versionQuery(title);
     final queries = <String>[
+      if (versionQ.isNotEmpty) '$cleanTitle $versionQ $cleanArtist'.trim(),
       '$cleanTitle $cleanArtist'.trim(),
       if (primaryArtist.isNotEmpty && primaryArtist != cleanArtist)
         '$cleanTitle $primaryArtist'.trim(),
@@ -346,6 +348,7 @@ class TrackEnrichmentService {
           hitTitle.contains(wantTitle) ||
           wantTitle.contains(hitTitle);
       if (!titleOverlaps) continue;
+      if (!versionCompatible(wantTitle, hitTitle)) continue;
 
       final hitArtist = _normalize(_saavnArtistNames(item));
       if (wantArtist.isNotEmpty) {
@@ -542,16 +545,105 @@ class TrackEnrichmentService {
     'slowed',
   ];
 
+  /// Whole-word patterns for the markers above. Plain `contains` matched
+  /// inside unrelated words ("Discovery", "Recover", "Drummer"), so genuine
+  /// studio tracks were skipped and could not be played.
+  static final Map<String, RegExp> _markerPatterns = {
+    for (final m in [..._nonStudioMarkers, ..._alwaysSkipMarkers])
+      m: RegExp('\\b${RegExp.escape(m)}(?:s|es)?\\b'),
+  };
+
+  /// Language words that name a different recording of the same song, e.g.
+  /// "Perfect (Tagalog Version)" vs "Perfect (English Version)".
+  static const _languageVersionWords = <String>[
+    'tagalog',
+    'filipino',
+    'english',
+    'spanish',
+    'korean',
+    'japanese',
+    'chinese',
+    'mandarin',
+    'hindi',
+    'thai',
+    'indonesian',
+    'portuguese',
+    'french',
+    'german',
+    'italian',
+  ];
+
+  /// Other markers of a distinct recording (compared only when both sides
+  /// carry one).
+  static const _otherVersionWords = <String>[
+    'acoustic',
+    'remix',
+    'live',
+    'demo',
+  ];
+
+  static final RegExp _versionRegex = RegExp(
+    '\\b(${[..._languageVersionWords, ..._otherVersionWords].join('|')})\\b',
+  );
+
+  /// The version words found in [text] (title), lowercased.
+  static Set<String> versionTags(String text) => _versionRegex
+      .allMatches(text.toLowerCase())
+      .map((m) => m.group(1)!)
+      .toSet();
+
+  /// True when a candidate titled [hitText] is an acceptable recording for a
+  /// request titled [wantText].
+  ///
+  /// - An untagged candidate is the base song, so it is always acceptable
+  ///   (a Tagalog request still plays instead of staying silent).
+  /// - A candidate tagged with a language the request does not ask for is
+  ///   rejected, so a plain "Perfect" never plays "Perfect (Tagalog Version)"
+  ///   and a Tagalog request never gets the English version.
+  static bool versionCompatible(String wantText, String hitText) {
+    final want = versionTags(wantText);
+    final hit = versionTags(hitText);
+    if (hit.isEmpty) return true;
+    final langs = _languageVersionWords.toSet();
+    final wantLang = want.intersection(langs);
+    final hitLang = hit.intersection(langs);
+    if (hitLang.isNotEmpty) {
+      if (wantLang.isEmpty || wantLang.intersection(hitLang).isEmpty) {
+        return false;
+      }
+    }
+    final wantOther = want.difference(langs);
+    final hitOther = hit.difference(langs);
+    if (wantOther.isNotEmpty &&
+        hitOther.isNotEmpty &&
+        wantOther.intersection(hitOther).isEmpty) {
+      return false;
+    }
+    return true;
+  }
+
+  /// Search words that keep the version in a query ("tagalog version"), since
+  /// [_cleanQuery] drops the parenthesised part of the title.
+  static String _versionQuery(String title) {
+    final tags = versionTags(title).intersection(_languageVersionWords.toSet());
+    return tags.isEmpty ? '' : '${tags.join(' ')} version';
+  }
+
   /// True when [candidateText] (title + artist/channel) looks like a
   /// non-studio variant while [wantText] does not ask for one.
   static bool isNonStudioVariant(String candidateText, String wantText) {
     final combined = candidateText.toLowerCase();
     final wantLower = wantText.toLowerCase();
     for (final marker in _alwaysSkipMarkers) {
-      if (combined.contains(marker)) return true;
+      if (_markerPatterns[marker]!.hasMatch(combined)) return true;
     }
+    // A Tagalog/English "version" is normally a recording by another artist,
+    // so the cover/tribute markers must not reject it.
+    final wantsVersion = versionTags(wantLower).isNotEmpty;
     for (final marker in _nonStudioMarkers) {
-      if (!wantLower.contains(marker) && combined.contains(marker)) {
+      if (wantsVersion && (marker == 'cover' || marker == 'tribute')) continue;
+      final pattern = _markerPatterns[marker]!;
+      if (!pattern.hasMatch(wantLower) && pattern.hasMatch(combined)) {
         return true;
       }
     }
@@ -563,8 +655,11 @@ class TrackEnrichmentService {
   /// audio is likely a cover/karaoke upload.
   static bool isNonStudioTitle(String title) {
     final lower = title.toLowerCase();
-    return _nonStudioMarkers.any(lower.contains) ||
-        _alwaysSkipMarkers.any(lower.contains);
+    final isVersion = versionTags(lower).isNotEmpty;
+    return _nonStudioMarkers.any((m) =>
+            !(isVersion && (m == 'cover' || m == 'tribute')) &&
+            _markerPatterns[m]!.hasMatch(lower)) ||
+        _alwaysSkipMarkers.any((m) => _markerPatterns[m]!.hasMatch(lower));
   }
 
   /// Lowercase alphanumeric matching key shared with the backfill so both
@@ -665,7 +760,9 @@ class TrackEnrichmentService {
     final cleanTitle = _cleanQuery(title);
     final cleanArtist = _cleanQuery(artist);
     if (cleanTitle.isEmpty) return null;
+    final versionQ = _versionQuery(title);
     final queries = <String>[
+      if (versionQ.isNotEmpty) '$cleanTitle $versionQ $cleanArtist'.trim(),
       '$cleanTitle $cleanArtist'.trim(),
       '$cleanTitle $cleanArtist official audio'.trim(),
       cleanTitle,
@@ -712,6 +809,7 @@ class TrackEnrichmentService {
           hitTitle.contains(wantTitle) ||
           wantTitle.contains(hitTitle);
       if (!titleOverlaps) continue;
+      if (!versionCompatible(wantTitle, hitTitle)) continue;
 
       final lowered = '${c.title} ${c.channel}'.toLowerCase();
       if (isNonStudioVariant(lowered, '$title $artist')) continue;
@@ -1149,6 +1247,7 @@ class TrackEnrichmentService {
       final hitTitle = _normalize(item['trackName']?.toString() ?? '');
       final hitArtist = _normalize(item['artistName']?.toString() ?? '');
       if (hitTitle.isEmpty) continue;
+      if (!versionCompatible(wantTitle, hitTitle)) continue;
 
       final rawTitle = (item['trackName']?.toString() ?? '').toLowerCase();
       final rawArtist = (item['artistName']?.toString() ?? '').toLowerCase();
@@ -1244,6 +1343,7 @@ class TrackEnrichmentService {
         artistObj is Map ? (artistObj['name']?.toString() ?? '') : '',
       );
       if (hitTitle.isEmpty) continue;
+      if (!versionCompatible(wantTitle, hitTitle)) continue;
 
       final rawTitle = (item['title']?.toString() ?? '').toLowerCase();
       final rawArtist = (artistObj is Map ? (artistObj['name']?.toString() ?? '') : '').toLowerCase();
@@ -1402,6 +1502,7 @@ class TrackEnrichmentService {
               hitTitle.contains(wantTitle) ||
               wantTitle.contains(hitTitle);
           if (!titleOverlaps) continue;
+          if (!versionCompatible(wantTitle, hitTitle)) continue;
 
           final uName = _normalize(item['user']?['username']?.toString() ?? '');
           var score = titleExact ? 5 : 2;
@@ -1639,7 +1740,8 @@ class TrackEnrichmentService {
     if (itemTitle.isEmpty ||
         !(itemTitle == wantTitle ||
             itemTitle.contains(wantTitle) ||
-            wantTitle.contains(itemTitle))) {
+            wantTitle.contains(itemTitle)) ||
+        !versionCompatible(wantTitle, itemTitle)) {
       return null;
     }
     if (itemTitle.contains('playlist') ||
