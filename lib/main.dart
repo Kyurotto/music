@@ -70,7 +70,7 @@ class MusicApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Pulse Music Player & Dashboard',
+      title: 'Pulse Studio',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.darkTheme,
       // Always go through AuthGate when enabled (local session works on every platform).

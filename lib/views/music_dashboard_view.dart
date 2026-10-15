@@ -12,6 +12,7 @@ import '../widgets/right_panel.dart';
 import '../widgets/bottom_player_bar.dart';
 import '../widgets/spotify_lyrics_sheet.dart';
 import '../widgets/spotify_import_dialog.dart';
+import '../widgets/song_artwork_widget.dart';
 import '../services/display_rate_service.dart';
 import 'settings_view.dart';
 
@@ -815,33 +816,10 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                   ),
                   child: Row(
                     children: [
-                      Container(
-                        width: 48,
-                        height: 48,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(8),
-                          gradient: LinearGradient(
-                            colors: song.gradientColors,
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                          ),
-                        ),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(8),
-                          child: song.imageUrl.isNotEmpty
-                              ? Image.network(
-                                  song.imageUrl,
-                                  width: 48,
-                                  height: 48,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (context, error, stackTrace) => const Center(
-                                    child: Icon(Icons.music_note_rounded, color: Colors.white, size: 24),
-                                  ),
-                                )
-                              : const Center(
-                                  child: Icon(Icons.music_note_rounded, color: Colors.white, size: 24),
-                                ),
-                        ),
+                      SongArtworkWidget(
+                        song: song,
+                        size: 48,
+                        borderRadius: 8,
                       ),
                       const SizedBox(width: 12),
                       Expanded(

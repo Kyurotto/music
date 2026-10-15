@@ -763,14 +763,20 @@ class MusicPlayerController extends ChangeNotifier {
 
           final existingIdx = _allSongs.indexWhere((existing) => existing.id == songId);
           if (existingIdx < 0) {
+            final songTitle = s['title'] as String? ?? 'Unknown';
+            final songArtist = s['artist'] as String? ?? 'Unknown Artist';
+            var img = (s['image_url'] as String? ?? '').trim();
+            if (img.isEmpty) img = _curatedCoverForTitle(songTitle);
+            if (img.isEmpty) img = _curatedCoverForTitle(songArtist);
+
             final song = Song(
               id: songId,
-              title: s['title'] as String? ?? 'Unknown',
-              artist: s['artist'] as String? ?? 'Unknown Artist',
+              title: songTitle,
+              artist: songArtist,
               album: s['album'] as String? ?? '',
               duration: Duration(milliseconds: s['duration_ms'] as int? ?? 180000),
               genre: s['genre'] as String? ?? 'Spotify',
-              imageUrl: s['image_url'] as String? ?? '',
+              imageUrl: img,
               gradientColors: _gradientFor('${s['title']}${s['artist']}').colors,
               plays: '',
               lyrics: _withoutPlaceholderLyrics(
@@ -781,6 +787,9 @@ class MusicPlayerController extends ChangeNotifier {
               youtubeVideoId: youtubeVideoId,
             );
             _ensureOfflineLyrics(song);
+            if (song.imageUrl.isEmpty) {
+              _resolveMissingSongArtwork(song);
+            }
             _allSongs.add(song);
             if (!_queue.any((existing) => existing.id == songId)) {
               _queue.add(song);
@@ -788,6 +797,11 @@ class MusicPlayerController extends ChangeNotifier {
             hasChanges = true;
           } else {
             final existing = _allSongs[existingIdx];
+            final incomingImage = (s['image_url'] as String? ?? '').trim();
+            if (existing.imageUrl.isEmpty && incomingImage.isNotEmpty) {
+              existing.imageUrl = incomingImage;
+              hasChanges = true;
+            }
             if (youtubeVideoId.isNotEmpty && existing.youtubeVideoId.isEmpty) {
               existing.youtubeVideoId = youtubeVideoId;
             }
@@ -1150,6 +1164,9 @@ class MusicPlayerController extends ChangeNotifier {
       // in the background (results are saved permanently).
       // ignore: discarded_futures
       _backfillSilentTracks();
+
+      // Backfill missing song artworks across the entire library from iTunes
+      _backfillMissingSongArtworks();
     } catch (e) {
       debugPrint('[MusicPlayerController] loadSavedPlaylists skipped: $e');
     }
@@ -1380,6 +1397,85 @@ class MusicPlayerController extends ChangeNotifier {
     return null;
   }
 
+  /// Queries the iTunes Search API for a cover image matching a specific [title] and [artist].
+  static Future<String?> _fetchItunesCoverForSong(String title, String artist) async {
+    try {
+      final cleanTitle = _cleanSongTitle(title);
+      final query = Uri.encodeQueryComponent('$cleanTitle $artist');
+      final url = Uri.parse(
+        'https://itunes.apple.com/search?term=$query&entity=song&limit=1',
+      );
+      final client = http.Client();
+      try {
+        final res = await client.get(url).timeout(const Duration(seconds: 4));
+        if (res.statusCode == 200) {
+          final data = jsonDecode(res.body) as Map<String, dynamic>?;
+          final results = data?['results'] as List<dynamic>?;
+          if (results != null && results.isNotEmpty) {
+            final item = results.first as Map<String, dynamic>?;
+            var art = (item?['artworkUrl100'] as String? ?? '').trim();
+            if (art.isNotEmpty) {
+              return art.replaceAll('/100x100bb.', '/600x600bb.');
+            }
+          }
+        }
+      } finally {
+        client.close();
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  void _resolveMissingSongArtwork(Song song) {
+    if (song.imageUrl.isNotEmpty) return;
+    unawaited(() async {
+      try {
+        var art = _curatedCoverForTitle(song.title);
+        if (art.isEmpty) art = _curatedCoverForTitle(song.artist);
+        if (art.isEmpty) {
+          art = await _fetchItunesCoverForSong(song.title, song.artist) ?? '';
+        }
+        if (art.isNotEmpty && !_disposed) {
+          if (song.imageUrl.isEmpty) {
+            song.imageUrl = art;
+            await LocalDatabase.instance.updateImportedSong(
+              id: song.id,
+              imageUrl: art,
+            );
+            notifyListeners();
+          }
+        }
+      } catch (_) {}
+    }());
+  }
+
+  void _backfillMissingSongArtworks() {
+    final missing = _allSongs.where((s) => s.imageUrl.isEmpty).toList();
+    if (missing.isEmpty) return;
+
+    unawaited(() async {
+      for (final song in missing) {
+        if (_disposed) break;
+        if (song.imageUrl.isNotEmpty) continue;
+        var art = _curatedCoverForTitle(song.title);
+        if (art.isEmpty) art = _curatedCoverForTitle(song.artist);
+        if (art.isEmpty) {
+          art = await _fetchItunesCoverForSong(song.title, song.artist) ?? '';
+        }
+        if (art.isNotEmpty && !_disposed) {
+          song.imageUrl = art;
+          try {
+            await LocalDatabase.instance.updateImportedSong(
+              id: song.id,
+              imageUrl: art,
+            );
+          } catch (_) {}
+          notifyListeners();
+        }
+      }
+    }());
+  }
+
   MusicPlaylist? _playlistByTitle(String title) {
     final needle = _normalizeKey(title);
     if (needle.isEmpty) return null;
@@ -1450,6 +1546,14 @@ class MusicPlayerController extends ChangeNotifier {
     ));
     final initialAudio = directAsset.isNotEmpty ? directAsset : '';
 
+    var artwork = imported.artworkUrl.trim();
+    if (artwork.isEmpty) {
+      artwork = _curatedCoverForTitle(imported.title);
+    }
+    if (artwork.isEmpty) {
+      artwork = _curatedCoverForTitle(imported.artist);
+    }
+
     final song = Song(
       id: 'spotify-${imported.spotifyId}',
       title: imported.title,
@@ -1457,7 +1561,7 @@ class MusicPlayerController extends ChangeNotifier {
       album: imported.album,
       duration: duration,
       genre: 'Spotify',
-      imageUrl: imported.artworkUrl,
+      imageUrl: artwork,
       gradientColors: _gradientFor('${imported.title}${imported.artist}').colors,
       plays: '',
       lyrics: const [],
@@ -1468,6 +1572,9 @@ class MusicPlayerController extends ChangeNotifier {
       _offlineFallbackIds.add(song.id);
     }
     _ensureOfflineLyrics(song);
+    if (song.imageUrl.isEmpty) {
+      _resolveMissingSongArtwork(song);
+    }
     return song;
   }
 
@@ -2316,7 +2423,7 @@ class MusicPlayerController extends ChangeNotifier {
 
     return MediaItem(
       id: song.id,
-      album: song.album.isNotEmpty ? song.album : 'Pulse Music',
+      album: song.album.isNotEmpty ? song.album : 'Pulse Studio',
       title: song.title,
       artist: song.artist,
       artUri: safeArtUri,
@@ -2629,7 +2736,7 @@ class MusicPlayerController extends ChangeNotifier {
       '[01:50.00] (Instrumental Melody)',
       '[02:15.00] ♫ Seamless offline listening experience ♫',
       if (durationSeconds > 150) '[02:35.00] (Dynamic Bridge)',
-      if (durationSeconds > 180) '[03:00.00] ♫ Pulse Music Player ♫',
+      if (durationSeconds > 180) '[03:00.00] ♫ Pulse Studio ♫',
     ];
     song.lyrics = lines;
     _offlineFakeLyricsIds.add(song.id);
@@ -2901,7 +3008,7 @@ class MusicPlayerController extends ChangeNotifier {
             '[01:25.00] (Dynamic Melody & Rhythm)',
             '[01:50.00] ♫ Seamless listening experience ♫',
             if (durationSeconds > 150) '[02:15.00] (Harmonic Bridge)',
-            if (durationSeconds > 180) '[02:40.00] ♫ Pulse Music Player ♫',
+            if (durationSeconds > 180) '[02:40.00] ♫ Pulse Studio ♫',
           ];
           _offlineFakeLyricsIds.add(song.id);
         }
@@ -2924,7 +3031,7 @@ class MusicPlayerController extends ChangeNotifier {
           '[01:25.00] (Dynamic Melody & Rhythm)',
           '[01:50.00] ♫ Seamless listening experience ♫',
           if (durationSeconds > 150) '[02:15.00] (Harmonic Bridge)',
-          if (durationSeconds > 180) '[02:40.00] ♫ Pulse Music Player ♫',
+          if (durationSeconds > 180) '[02:40.00] ♫ Pulse Studio ♫',
         ];
         _offlineFakeLyricsIds.add(song.id);
       }

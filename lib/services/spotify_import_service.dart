@@ -648,7 +648,11 @@ class SpotifyImportService {
 
     switch (link.type) {
       case SpotifyLinkType.track:
-        final track = _trackFromEntity(entity, fallbackAlbum: subtitle);
+        final track = _trackFromEntity(
+          entity,
+          fallbackAlbum: subtitle,
+          fallbackArtworkUrl: imageUrl,
+        );
         if (track == null) {
           throw const SpotifyImportException('This track could not be read from Spotify.');
         }
@@ -666,7 +670,12 @@ class SpotifyImportService {
         if (trackList is List) {
           for (final item in trackList) {
             if (item is! Map<String, dynamic>) continue;
-            final track = _trackFromListEntry(item, fallbackArtist: subtitle, fallbackAlbum: name);
+            final track = _trackFromListEntry(
+              item,
+              fallbackArtist: subtitle,
+              fallbackAlbum: name,
+              fallbackArtworkUrl: imageUrl,
+            );
             if (track != null) tracks.add(track);
           }
         }
@@ -698,7 +707,54 @@ class SpotifyImportService {
     }
   }
 
-  SpotifyImportedTrack? _trackFromEntity(Map<String, dynamic> entity, {required String fallbackAlbum}) {
+  static String _extractArtworkFromMap(Map<String, dynamic> map) {
+    final coverArt = map['coverArt'];
+    if (coverArt is Map) {
+      final sources = coverArt['sources'];
+      if (sources is List && sources.isNotEmpty) {
+        final last = sources.last;
+        if (last is Map && last['url'] is String) {
+          final u = (last['url'] as String).trim();
+          if (u.isNotEmpty) return u;
+        }
+      }
+    }
+    final visualIdentity = map['visualIdentity'];
+    if (visualIdentity is Map && visualIdentity['image'] is List) {
+      final images = visualIdentity['image'] as List;
+      if (images.isNotEmpty) {
+        final last = images.last;
+        if (last is Map && last['url'] is String) {
+          final u = (last['url'] as String).trim();
+          if (u.isNotEmpty) return u;
+        }
+      }
+    }
+    final album = map['album'];
+    if (album is Map<String, dynamic>) {
+      final albumArt = _extractArtworkFromMap(album);
+      if (albumArt.isNotEmpty) return albumArt;
+    }
+    final images = map['images'];
+    if (images is List && images.isNotEmpty) {
+      final first = images.first;
+      if (first is Map && first['url'] is String) {
+        final u = (first['url'] as String).trim();
+        if (u.isNotEmpty) return u;
+      }
+    }
+    final direct = map['artworkUrl'] ?? map['thumbnail'] ?? map['image'] ?? map['artworkUrl100'];
+    if (direct is String && direct.trim().isNotEmpty) {
+      return direct.trim();
+    }
+    return '';
+  }
+
+  SpotifyImportedTrack? _trackFromEntity(
+    Map<String, dynamic> entity, {
+    required String fallbackAlbum,
+    String fallbackArtworkUrl = '',
+  }) {
     var id = _spotifyIdFromUri(_stringValue(entity, 'uri'));
     if (id.isEmpty) id = _stringValue(entity, 'id');
     final title = _stringValue(entity, 'title', 'name');
@@ -712,12 +768,16 @@ class SpotifyImportService {
     final album = _stringValue(entity, 'album');
     final durationMs = _intValue(entity, 'duration');
 
+    var artwork = _extractArtworkFromMap(entity);
+    if (artwork.isEmpty) artwork = fallbackArtworkUrl;
+
     return SpotifyImportedTrack(
       spotifyId: id.isEmpty ? _fallbackId(title, artist) : id,
       title: title,
       artist: artist,
       album: album.isEmpty ? fallbackAlbum : album,
       duration: _durationFromMs(durationMs),
+      artworkUrl: artwork,
     );
   }
 
@@ -725,6 +785,7 @@ class SpotifyImportService {
     Map<String, dynamic> entry, {
     required String fallbackArtist,
     required String fallbackAlbum,
+    String fallbackArtworkUrl = '',
   }) {
     final title = _stringValue(entry, 'title', 'name');
     if (title.isEmpty) return null;
@@ -738,12 +799,16 @@ class SpotifyImportService {
     final album = _stringValue(entry, 'album');
     final durationMs = _intValue(entry, 'duration');
 
+    var artwork = _extractArtworkFromMap(entry);
+    if (artwork.isEmpty) artwork = fallbackArtworkUrl;
+
     return SpotifyImportedTrack(
       spotifyId: (id.isEmpty) ? _fallbackId(title, artist) : id,
       title: title,
       artist: artist,
       album: album.isEmpty ? fallbackAlbum : album,
       duration: _durationFromMs(durationMs),
+      artworkUrl: artwork,
     );
   }
 

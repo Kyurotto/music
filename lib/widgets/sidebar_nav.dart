@@ -4,6 +4,7 @@ import '../controllers/music_player_controller.dart';
 import '../models/song_model.dart';
 import '../auth/auth_service.dart';
 import '../views/settings_view.dart';
+import 'song_artwork_widget.dart';
 
 class SidebarNav extends StatelessWidget {
   final MusicPlayerController controller;
@@ -400,33 +401,13 @@ class _PlaylistItem extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             child: Row(
               children: [
-                Container(
-                  width: 24,
-                  height: 24,
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(colors: playlist.gradient),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(6),
-                    child: playlist.imageUrl.isNotEmpty
-                        ? Image.network(
-                            playlist.imageUrl,
-                            width: 24,
-                            height: 24,
-                            fit: BoxFit.cover,
-                            errorBuilder: (context, error, stackTrace) => const Icon(
-                              Icons.music_note_rounded,
-                              size: 14,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Icon(
-                            Icons.music_note_rounded,
-                            size: 14,
-                            color: Colors.white,
-                          ),
-                  ),
+                SongArtworkWidget(
+                  imageUrl: playlist.imageUrl,
+                  title: playlist.title,
+                  artist: playlist.subtitle,
+                  gradientColors: playlist.gradient,
+                  size: 24,
+                  borderRadius: 6,
                 ),
                 const SizedBox(width: 12),
                 Expanded(

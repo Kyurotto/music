@@ -5,6 +5,7 @@ import '../models/song_model.dart';
 import '../theme/app_theme.dart';
 import '../controllers/music_player_controller.dart';
 import 'animated_visualizer.dart';
+import 'song_artwork_widget.dart';
 
 class BottomPlayerBar extends StatelessWidget {
   final MusicPlayerController controller;
@@ -70,42 +71,10 @@ class BottomPlayerBar extends StatelessWidget {
                   onTap: onOpenLyrics,
                   child: Row(
                     children: [
-                      Container(
-                        width: 44,
-                        height: 44,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(8),
-                          gradient: LinearGradient(
-                            colors:
-                                song?.gradientColors ??
-                                const [Color(0xFF334155), Color(0xFF1E293B)],
-                          ),
-                        ),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(8),
-                          child: (song != null && song.imageUrl.isNotEmpty)
-                              ? Image.network(
-                                  song.imageUrl,
-                                  width: 44,
-                                  height: 44,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (context, error, stackTrace) =>
-                                      const Center(
-                                        child: Icon(
-                                          Icons.music_note_rounded,
-                                          color: Colors.white,
-                                          size: 20,
-                                        ),
-                                      ),
-                                )
-                              : const Center(
-                                  child: Icon(
-                                    Icons.music_note_rounded,
-                                    color: Colors.white,
-                                    size: 20,
-                                  ),
-                                ),
-                        ),
+                      SongArtworkWidget(
+                        song: song,
+                        size: 44,
+                        borderRadius: 8,
                       ),
                       const SizedBox(width: 12),
                       Expanded(

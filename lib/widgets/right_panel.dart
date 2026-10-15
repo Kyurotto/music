@@ -3,6 +3,7 @@ import '../models/song_model.dart';
 import '../theme/app_theme.dart';
 import '../controllers/music_player_controller.dart';
 import 'animated_visualizer.dart';
+import 'song_artwork_widget.dart';
 
 class RightActivityPanel extends StatefulWidget {
   final MusicPlayerController controller;
@@ -168,20 +169,13 @@ class _RightActivityPanelState extends State<RightActivityPanel>
                             ),
                           ),
                           child: Center(
-                            child: Container(
-                              width: 80,
-                              height: 80,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                gradient: LinearGradient(
-                                  colors: currentSong?.gradientColors ??
-                                      const [Color(0xFF334155), Color(0xFF1E293B)],
-                                ),
-                              ),
-                              child: const Icon(
-                                Icons.album_rounded,
-                                color: Colors.white,
-                                size: 36,
+                            child: SongArtworkWidget(
+                              song: currentSong,
+                              size: 80,
+                              isCircle: true,
+                              border: Border.all(
+                                color: Colors.white.withValues(alpha: 0.3),
+                                width: 2,
                               ),
                             ),
                           ),
