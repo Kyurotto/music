@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/song_model.dart';
 import '../theme/app_theme.dart';
+import 'song_artwork_widget.dart';
 
 class AlbumCard extends StatefulWidget {
   final MusicPlaylist playlist;
@@ -69,39 +70,14 @@ class _AlbumCardState extends State<AlbumCard> {
                 aspectRatio: 1.0,
                 child: Stack(
                   children: [
-                    Container(
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(12),
-                        gradient: LinearGradient(
-                          colors: widget.playlist.gradient,
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                        ),
-                      ),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(12),
-                        child: widget.playlist.imageUrl.isNotEmpty
-                            ? Image.network(
-                                widget.playlist.imageUrl,
-                                fit: BoxFit.cover,
-                                width: double.infinity,
-                                height: double.infinity,
-                                errorBuilder: (context, error, stackTrace) => Center(
-                                  child: Icon(
-                                    Icons.album_rounded,
-                                    size: 54,
-                                    color: Colors.white.withValues(alpha: 0.9),
-                                  ),
-                                ),
-                              )
-                            : Center(
-                                child: Icon(
-                                  Icons.album_rounded,
-                                  size: 54,
-                                  color: Colors.white.withValues(alpha: 0.9),
-                                ),
-                              ),
-                      ),
+                    SongArtworkWidget(
+                      imageUrl: widget.playlist.imageUrl,
+                      title: widget.playlist.title,
+                      artist: widget.playlist.subtitle,
+                      gradientColors: widget.playlist.gradient,
+                      borderRadius: 12,
+                      width: double.infinity,
+                      height: double.infinity,
                     ),
                     if (widget.onDelete != null)
                       AnimatedPositioned(

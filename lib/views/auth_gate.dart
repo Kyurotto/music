@@ -204,7 +204,7 @@ class _AuthViewState extends State<AuthView> {
                     Text(
                       _isRegistering
                           ? 'Enter your email and choose a password to get started.'
-                          : 'Sign in to continue to Pulse Music.',
+                          : 'Sign in to continue to Pulse Studio.',
                       textAlign: TextAlign.center,
                       style: const TextStyle(color: AppTheme.textSecondary),
                     ),
@@ -390,7 +390,7 @@ class _AuthViewState extends State<AuthView> {
                     const SizedBox(height: 24),
                     Text.rich(
                       TextSpan(
-                        text: 'By continuing, you agree to Pulse Music\'s ',
+                        text: 'By continuing, you agree to Pulse Studio\'s ',
                         children: [
                           TextSpan(
                             text: 'Terms of Service',

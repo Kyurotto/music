@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/song_model.dart';
 import '../theme/app_theme.dart';
 import '../controllers/music_player_controller.dart';
+import 'song_artwork_widget.dart';
 
 class SpotifyLyricsSheet extends StatefulWidget {
   final Song song;
@@ -316,41 +317,12 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
                   child: Row(
                     children: [
                       // Thumbnail
-                      Container(
-                        width: 58,
-                        height: 58,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(12),
-                          gradient: LinearGradient(
-                            colors: currentSong.gradientColors,
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: currentSong.gradientColors.first.withValues(alpha: 0.4),
-                              blurRadius: 10,
-                              offset: const Offset(0, 4),
-                            ),
-                          ],
+                        SongArtworkWidget(
+                          song: currentSong,
+                          size: 58,
+                          borderRadius: 12,
+                          showGlow: true,
                         ),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(12),
-                          child: currentSong.imageUrl.isNotEmpty
-                              ? Image.network(
-                                  currentSong.imageUrl,
-                                  width: 58,
-                                  height: 58,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (context, error, stackTrace) => const Center(
-                                    child: Icon(Icons.music_note_rounded, color: Colors.white, size: 28),
-                                  ),
-                                )
-                              : const Center(
-                                  child: Icon(Icons.music_note_rounded, color: Colors.white, size: 28),
-                                ),
-                        ),
-                      ),
                       const SizedBox(width: 14),
 
                       // Info

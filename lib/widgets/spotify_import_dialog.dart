@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import '../controllers/music_player_controller.dart';
 import '../services/spotify_import_service.dart';
 import '../theme/app_theme.dart';
+import 'song_artwork_widget.dart';
 
 /// Dialog that accepts a Spotify track/playlist/album link and imports it
 /// into a new or existing playlist.
@@ -225,20 +226,14 @@ class _SpotifyImportDialogState extends State<SpotifyImportDialog> {
                   ),
                   child: Row(
                     children: [
-                      if (preview.imageUrl.isNotEmpty) ...[
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(8),
-                          child: Image.network(
-                            preview.imageUrl,
-                            width: 52,
-                            height: 52,
-                            fit: BoxFit.cover,
-                            errorBuilder: (context, error, stackTrace) =>
-                                const SizedBox.shrink(),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                      ],
+                      SongArtworkWidget(
+                        imageUrl: preview.imageUrl,
+                        title: preview.title,
+                        artist: preview.subtitle,
+                        size: 52,
+                        borderRadius: 8,
+                      ),
+                      const SizedBox(width: 12),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,

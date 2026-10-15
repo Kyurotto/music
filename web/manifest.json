@@ -1,6 +1,6 @@
 {
-    "name": "music",
-    "short_name": "music",
+    "name": "Pulse Studio",
+    "short_name": "Pulse Studio",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

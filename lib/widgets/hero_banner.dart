@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/song_model.dart';
 import '../theme/app_theme.dart';
 import '../controllers/music_player_controller.dart';
+import 'song_artwork_widget.dart';
 
 class HeroBanner extends StatelessWidget {
   final Song? song;
@@ -147,7 +148,7 @@ class HeroBanner extends StatelessWidget {
 
                           // Title
                           Text(
-                            currentSong != null ? currentSong.title : 'Welcome to Pulse Music',
+                            currentSong != null ? currentSong.title : 'Welcome to Pulse Studio',
                             style: TextStyle(
                               fontSize: isCompact ? 22 : 28,
                               fontWeight: FontWeight.w900,
@@ -296,10 +297,11 @@ class HeroBanner extends StatelessWidget {
                         child: Stack(
                           alignment: Alignment.center,
                           children: [
-                            Icon(
-                              Icons.album_rounded,
-                              size: isCompact ? 52 : 72,
-                              color: Colors.white.withValues(alpha: 0.85),
+                            SongArtworkWidget(
+                              song: currentSong,
+                              size: isCompact ? 110 : 150,
+                              borderRadius: 18,
+                              fit: BoxFit.cover,
                             ),
                             if (isCurrentPlaying)
                               Container(

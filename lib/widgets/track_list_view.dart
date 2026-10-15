@@ -3,6 +3,7 @@ import '../models/song_model.dart';
 import '../theme/app_theme.dart';
 import '../controllers/music_player_controller.dart';
 import 'animated_visualizer.dart';
+import 'song_artwork_widget.dart';
 
 class TrackListView extends StatelessWidget {
   final List<Song> songs;
@@ -275,41 +276,10 @@ class _TrackRowState extends State<_TrackRow> {
                 const SizedBox(width: 12),
 
                 // Artwork Thumbnail
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(8),
-                    gradient: LinearGradient(
-                      colors: widget.song.gradientColors,
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: widget.song.imageUrl.isNotEmpty
-                        ? Image.network(
-                            widget.song.imageUrl,
-                            width: 44,
-                            height: 44,
-                            fit: BoxFit.cover,
-                            errorBuilder: (context, error, stackTrace) => const Center(
-                              child: Icon(
-                                Icons.music_note_rounded,
-                                color: Colors.white,
-                                size: 20,
-                              ),
-                            ),
-                          )
-                        : const Center(
-                            child: Icon(
-                              Icons.music_note_rounded,
-                              color: Colors.white,
-                              size: 20,
-                            ),
-                          ),
-                  ),
+                SongArtworkWidget(
+                  song: widget.song,
+                  size: 44,
+                  borderRadius: 8,
                 ),
                 const SizedBox(width: 14),
 

@@ -827,7 +827,7 @@ class _SettingsViewState extends State<SettingsView> {
                 // Footer branding
                 const Center(
                   child: Text(
-                    'Pulse Music • Crafted for audiophiles',
+                    'Pulse Studio • Crafted for audiophiles',
                     style: TextStyle(fontSize: 11, color: AppTheme.textMuted),
                   ),
                 ),
