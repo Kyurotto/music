@@ -1578,7 +1578,11 @@ class MusicPlayerController extends ChangeNotifier {
     return song;
   }
 
-  void _enrichImportedSongs(List<Song> songs, {bool fastImport = true}) {
+  void _enrichImportedSongs(
+    List<Song> songs, {
+    bool fastImport = true,
+    int maxConcurrency = 3,
+  }) {
     final pending = songs.where((s) {
       if (_enrichingIds.contains(s.id)) return false;
       final isFallback = _offlineFallbackIds.contains(s.id);
@@ -1616,7 +1620,6 @@ class MusicPlayerController extends ChangeNotifier {
           }
         }
 
-        const maxConcurrency = 3;
         var nextIdx = 0;
 
         Future<void> worker() async {
@@ -2119,6 +2122,22 @@ class MusicPlayerController extends ChangeNotifier {
     song.isEnrichingLyrics = true;
     final enrichStart = DateTime.now();
     try {
+      // Fast check: if a valid offline full-track audio file already exists on device,
+      // attach it immediately with 0ms network latency.
+      final cached = await _findCachedAudioFile(song.id);
+      if (cached != null && cached.existsSync() && cached.lengthSync() >= 1600000) {
+        final changed = _applyEnrichment(
+          song,
+          TrackEnrichment(
+            previewUrl: cached.path,
+            isFullTrack: true,
+          ),
+        );
+        song.isEnrichingLyrics = false;
+        if (changed) notifyListeners();
+        return;
+      }
+
       final enrichment = await _enrichment.enrichTrack(
         title: song.title,
         artist: song.artist,
@@ -3090,6 +3109,47 @@ class MusicPlayerController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Plays [songs] as the active queue starting at [startIndex], without
+  /// adding them to the saved library. Used by the dashboard discovery rows
+  /// and their playlist pages.
+  void playSongList(List<Song> songs, {int startIndex = 0}) {
+    if (songs.isEmpty) return;
+    var start = startIndex;
+    if (start < 0) start = 0;
+    if (start > songs.length - 1) start = songs.length - 1;
+    _queue = List<Song>.from(songs);
+    _currentIndex = start;
+    _currentPosition = Duration.zero;
+    _audioDuration = Duration.zero;
+    _lastPositionUpdate = DateTime.now();
+    _unmuteOnPlay();
+    _isPlaying = true;
+    _pendingHotSwapReload = false;
+    _playbackTimer?.cancel();
+    _cancelStallWatchdog();
+    _startTimer();
+    _clearSilentRetry();
+    _playCurrentSongAudio();
+    notifyListeners();
+  }
+
+  /// Fast-locates full tracks, audio and lyrics for discovery tracks across
+  /// Quick Picks, Covers & Remixes, Community Favorites, and Trending For You.
+  /// Bypasses retry backoff cooldowns so refreshing immediately locates the songs.
+  void fastLocateDiscoverySongs(List<Song> songs) {
+    if (songs.isEmpty || _disposed) return;
+    final seen = <String>{};
+    final unique = <Song>[];
+    for (final s in songs) {
+      if (!seen.add(s.id)) continue;
+      _fullUpgradeAttemptedAt.remove(s.id);
+      _fullTrackAttemptCount.remove(s.id);
+      unique.add(s);
+    }
+    // Earlier rows (Quick Picks first) are located first, 6 at a time.
+    _enrichImportedSongs(unique, fastImport: true, maxConcurrency: 6);
+  }
+  
   void addSong(Song song) {
     _allSongs.add(song);
     _queue.add(song);
