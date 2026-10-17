@@ -15,6 +15,8 @@ import '../widgets/spotify_import_dialog.dart';
 import '../widgets/song_artwork_widget.dart';
 import '../services/display_rate_service.dart';
 import 'settings_view.dart';
+import 'discovery_sections.dart';
+import '../services/discovery_service.dart';
 
 class MusicDashboardView extends StatefulWidget {
   const MusicDashboardView({super.key});
@@ -27,6 +29,8 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
   late final MusicPlayerController _controller;
   final TextEditingController _searchTextController = TextEditingController();
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  final GlobalKey<DiscoverySectionsState> _discoveryKey = GlobalKey<DiscoverySectionsState>();
+  bool _pullToRefreshActive = false;
   String? _selectedPlaylistId;
   StreamSubscription<Object?>? _authSub;
 
@@ -185,12 +189,26 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
     );
   }
 
-  /// Pull-to-refresh: reload saved playlists (picks up tracks the
-  /// background backfill resolved) and kick another resolve pass.
-  /// The spinner shows while reloading; resolving keeps running after.
+  /// Pull-to-refresh: reloads saved playlists and forces fresh discovery
+  /// rows (Quick Picks, Covers & Remixes, Community Favorites, Trending For You)
+  /// and immediately fast-locates their tracks.
   Future<void> _handleRefresh() async {
-    await _controller.loadSavedPlaylists();
+    await Future.wait([
+      _controller.loadSavedPlaylists(),
+      _refreshDiscovery(),
+    ]);
     _controller.kickBackfill();
+  }
+
+  Future<void> _refreshDiscovery() async {
+    final discoveryState = _discoveryKey.currentState;
+    if (discoveryState != null) {
+      await discoveryState.refresh();
+    } else {
+      final sections = await DiscoveryService.instance.loadAll(forceRefresh: true);
+      final allSongs = sections.expand((s) => s.songs).toList();
+      _controller.fastLocateDiscoverySongs(allSongs);
+    }
   }
 
   Future<void> _showAddToPlaylistSheet(Song song) async {
@@ -466,6 +484,28 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                                 onRefresh: _handleRefresh,
                                 color: AppTheme.primary,
                                 backgroundColor: AppTheme.cardSurface,
+                                notificationPredicate: (notification) {
+                                  // Only the page's own vertical scroll counts. Horizontal
+                                  // discovery carousels (depth > 0, pixels == 0) used to flip
+                                  // the flag on, so scrolling up from below showed the circle.
+                                  if (notification.depth != 0 ||
+                                      notification.metrics.axis != Axis.vertical) {
+                                    return false;
+                                  }
+                                  if (notification is ScrollStartNotification) {
+                                    // Pull-to-refresh only when the drag began at the very top.
+                                    _pullToRefreshActive =
+                                        notification.metrics.pixels <= 0;
+                                  }
+                                  final active = _pullToRefreshActive;
+                                  if (notification is ScrollEndNotification) {
+                                    // The indicator must still see this end event; reset
+                                    // afterwards so a fling that overscrolls the top (started
+                                    // lower down) can never trigger the circle.
+                                    _pullToRefreshActive = false;
+                                  }
+                                  return active;
+                                },
                                 child: SingleChildScrollView(
                                   physics:
                                       const AlwaysScrollableScrollPhysics(),
@@ -712,6 +752,14 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
             song: featuredSong,
             controller: _controller,
             onPlaySong: _playSongWithLyrics,
+          ),
+          const SizedBox(height: 32),
+        ],
+
+        if (_controller.searchQuery.isEmpty && _controller.selectedGenre == 'All') ...[
+          DiscoverySections(
+            key: _discoveryKey,
+            controller: _controller,
           ),
           const SizedBox(height: 32),
         ],
