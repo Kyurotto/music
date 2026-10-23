@@ -53,7 +53,10 @@ Future<void> main() async {
   try {
     if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
       await Firebase.initializeApp();
-    } else if (kIsWeb || Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+    } else if (kIsWeb ||
+        Platform.isWindows ||
+        Platform.isLinux ||
+        Platform.isMacOS) {
       await Firebase.initializeApp();
     }
   } catch (e) {
