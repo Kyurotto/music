@@ -8,6 +8,7 @@ class AnimatedVisualizer extends StatefulWidget {
   final double maxHeight;
   final double barWidth;
   final List<Color>? gradientColors;
+  final List<double>? equalizerBands;
 
   const AnimatedVisualizer({
     super.key,
@@ -16,6 +17,7 @@ class AnimatedVisualizer extends StatefulWidget {
     this.maxHeight = 48,
     this.barWidth = 3.5,
     this.gradientColors,
+    this.equalizerBands,
   });
 
   @override
@@ -83,6 +85,13 @@ class _AnimatedVisualizerState extends State<AnimatedVisualizer>
                 final wave1 = sin(t * 1.5 + phase);
                 final wave2 = cos(t * 2.2 + phase * 1.8);
                 value = ((wave1 + wave2) / 2).abs() * _randomFactors[index % _randomFactors.length];
+
+                final bands = widget.equalizerBands;
+                if (bands != null && bands.isNotEmpty) {
+                  final bandIndex = ((index / widget.barCount) * bands.length).clamp(0, bands.length - 1).toInt();
+                  final boost = 1.0 + (bands[bandIndex] / 20.0);
+                  value = value * boost;
+                }
                 value = value.clamp(0.15, 1.0);
               } else {
                 value = 0.12;

@@ -236,13 +236,38 @@ class _RightActivityPanelState extends State<RightActivityPanel>
                                 color: AppTheme.textMuted,
                               ),
                             ),
-                            Text(
-                              '${(widget.controller.volume * 100).toInt()}% Vol',
-                              style: const TextStyle(
-                                fontSize: 11,
-                                color: AppTheme.secondary,
-                                fontWeight: FontWeight.w600,
-                              ),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: AppTheme.primary.withValues(alpha: 0.15),
+                                    borderRadius: BorderRadius.circular(6),
+                                    border: Border.all(
+                                      color: AppTheme.primary.withValues(alpha: 0.3),
+                                      width: 0.8,
+                                    ),
+                                  ),
+                                  child: Text(
+                                    widget.controller.equalizerPreset,
+                                    style: const TextStyle(
+                                      fontSize: 9.5,
+                                      color: AppTheme.primary,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  '${(widget.controller.volume * 100).toInt()}% Vol',
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    color: AppTheme.secondary,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
                             ),
                           ],
                         ),
@@ -256,6 +281,7 @@ class _RightActivityPanelState extends State<RightActivityPanel>
                               maxHeight: 34,
                               barWidth: 4.5,
                               gradientColors: currentSong?.gradientColors,
+                              equalizerBands: widget.controller.currentEqualizer.bands,
                             ),
                           ),
                         ),

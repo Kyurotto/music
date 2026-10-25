@@ -208,9 +208,13 @@ class SidebarNav extends StatelessWidget {
             ),
           ),
 
-          // User Profile Footer
+          // User Profile Footer - Click to edit profile account
           InkWell(
-            onTap: () => SettingsView.show(context, controller: controller),
+            onTap: () => SettingsView.show(
+              context,
+              controller: controller,
+              openProfileEdit: true,
+            ),
             borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
             child: Container(
               padding: const EdgeInsets.all(16),
@@ -221,31 +225,49 @@ class SidebarNav extends StatelessWidget {
               ),
               child: Row(
                 children: [
-                  Container(
-                    width: 36,
-                    height: 36,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: const LinearGradient(
-                        colors: [Color(0xFF8B5CF6), Color(0xFFEC4899)],
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: AppTheme.primary.withValues(alpha: 0.3),
-                          blurRadius: 8,
+                  Stack(
+                    children: [
+                      Container(
+                        width: 36,
+                        height: 36,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          gradient: const LinearGradient(
+                            colors: [Color(0xFF8B5CF6), Color(0xFFEC4899)],
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: AppTheme.primary.withValues(alpha: 0.3),
+                              blurRadius: 8,
+                            ),
+                          ],
                         ),
-                      ],
-                    ),
-                    child: Center(
-                      child: Text(
-                        AuthService.instance.userInitials,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
+                        child: Center(
+                          child: Text(
+                            AuthService.instance.userInitials,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
                         ),
                       ),
-                    ),
+                      Positioned(
+                        right: 0,
+                        bottom: 0,
+                        child: Container(
+                          width: 13,
+                          height: 13,
+                          decoration: BoxDecoration(
+                            color: AppTheme.primary,
+                            shape: BoxShape.circle,
+                            border: Border.all(color: AppTheme.cardSurface, width: 1.5),
+                          ),
+                          child: const Icon(Icons.edit, size: 7, color: Colors.white),
+                        ),
+                      ),
+                    ],
                   ),
                   const SizedBox(width: 10),
                   Expanded(
@@ -274,7 +296,20 @@ class SidebarNav extends StatelessWidget {
                     ),
                   ),
                   IconButton(
-                    tooltip: 'Settings & Account',
+                    tooltip: 'Edit Profile Account',
+                    icon: const Icon(Icons.edit_outlined, size: 16, color: AppTheme.textSecondary),
+                    onPressed: () => SettingsView.show(
+                      context,
+                      controller: controller,
+                      openProfileEdit: true,
+                    ),
+                    splashRadius: 16,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                  ),
+                  const SizedBox(width: 4),
+                  IconButton(
+                    tooltip: 'Settings & Preferences',
                     icon: const Icon(Icons.settings_outlined, size: 18, color: AppTheme.textSecondary),
                     onPressed: () => SettingsView.show(context, controller: controller),
                     splashRadius: 16,
