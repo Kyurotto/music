@@ -135,7 +135,7 @@ class TrackEnrichmentService {
     required String artist,
     Duration? duration,
     bool previewFallbackOnly = false,
-    bool allowPreviewFallback = true,
+    bool allowPreviewFallback = false,
     bool prioritizeYouTube = false,
     bool fastImport = false,
   }) async {
@@ -175,6 +175,8 @@ class TrackEnrichmentService {
       if (fastImport) {
         try {
           final results = await Future.wait([
+            _fetchYouTubeFullAudio(title: title, artist: artist, duration: duration)
+                .timeout(const Duration(seconds: 5), onTimeout: () => null),
             _fetchSoundCloudFullAudio(title: title, artist: artist, duration: duration)
                 .timeout(const Duration(seconds: 4), onTimeout: () => null),
             _fetchSaavnFullAudio(title: title, artist: artist)
@@ -185,8 +187,7 @@ class TrackEnrichmentService {
           for (final hit in results) {
             if (hit != null &&
                 hit.previewUrl.isNotEmpty &&
-                !hit.previewUrl.toLowerCase().contains('.m3u8') &&
-                !hit.previewUrl.contains('googlevideo.com')) {
+                !hit.previewUrl.toLowerCase().contains('.m3u8')) {
               _stageLog('fast-import', sw, 'HIT ${Uri.tryParse(hit.previewUrl)?.host}');
               return hit;
             }
@@ -225,13 +226,22 @@ class TrackEnrichmentService {
         );
         _stageLog('web', sw,
             web != null ? 'HIT ${Uri.tryParse(web.previewUrl)?.host}' : 'miss');
-        if (web != null &&
-            (!allowPreviewFallback ||
-                !web.previewUrl.contains('googlevideo.com'))) {
+        if (web != null && web.previewUrl.isNotEmpty) {
           return web;
         }
       } catch (e) {
         _stageLog('web', sw, 'error $e');
+      }
+      try {
+        final yt = await _fetchYouTubeFullAudio(
+          title: title,
+          artist: artist,
+          duration: duration,
+        );
+        _stageLog('yt', sw, yt != null ? 'HIT' : 'miss');
+        if (yt != null) return yt;
+      } catch (e) {
+        _stageLog('yt', sw, 'error $e');
       }
     }
 

@@ -286,5 +286,140 @@ void main() {
       expect(songs.first.isSilentPlaceholder, isTrue);
       controller.dispose();
     });
+
+    test('matchesArtist strictly validates target artist inclusion', () {
+      expect(SpotifyImportService.matchesArtist('Adie', 'Adie'), isTrue);
+      expect(SpotifyImportService.matchesArtist('Adie, Janine Berdin', 'Adie'), isTrue);
+      expect(SpotifyImportService.matchesArtist('Dom Guyot, Adie', 'Adie'), isTrue);
+      expect(SpotifyImportService.matchesArtist('Arthur Nery, Adie', 'Adie'), isTrue);
+      expect(SpotifyImportService.matchesArtist('Adie & Flow G', 'Adie'), isTrue);
+      expect(SpotifyImportService.matchesArtist('Jeremy Camp', 'Adie'), isFalse);
+      expect(SpotifyImportService.matchesArtist('Wooden Wand', 'Adie'), isFalse);
+      expect(SpotifyImportService.matchesArtist('Bruno Mars', 'Adie'), isFalse);
+
+      expect(SpotifyImportService.matchesArtist('Bruno Mars', 'Bruno Mars'), isTrue);
+      expect(SpotifyImportService.matchesArtist('Lady Gaga & Bruno Mars', 'Bruno Mars'), isTrue);
+      expect(SpotifyImportService.matchesArtist('Silk Sonic (Bruno Mars & Anderson .Paak)', 'Bruno Mars'), isTrue);
+      expect(SpotifyImportService.matchesArtist('Adele', 'Bruno Mars'), isFalse);
+      expect(SpotifyImportService.matchesArtist('Janine Berdin', 'Bruno Mars'), isFalse);
+
+      // Works dynamically for any other artist:
+      expect(SpotifyImportService.matchesArtist('Taylor Swift', 'Taylor Swift'), isTrue);
+      expect(SpotifyImportService.matchesArtist('Taylor Swift feat. Post Malone', 'Taylor Swift'), isTrue);
+      expect(SpotifyImportService.matchesArtist('Ed Sheeran', 'Taylor Swift'), isFalse);
+
+      expect(SpotifyImportService.matchesArtist('The Weeknd', 'The Weeknd'), isTrue);
+      expect(SpotifyImportService.matchesArtist('The Weeknd, Playboi Carti', 'The Weeknd'), isTrue);
+      expect(SpotifyImportService.matchesArtist('Drake', 'The Weeknd'), isFalse);
+
+      expect(SpotifyImportService.matchesArtist('Arthur Nery', 'Arthur Nery'), isTrue);
+      expect(SpotifyImportService.matchesArtist('Arthur Nery, Adie', 'Arthur Nery'), isTrue);
+      expect(SpotifyImportService.matchesArtist('Ben&Ben', 'Arthur Nery'), isFalse);
+    });
+
+    test('deleting playlist removes songs from dashboard and library in memory', () async {
+      final controller = MusicPlayerController();
+      final outcome = controller.importSpotifyTracks(
+        playlistName: 'Adie Top Hits',
+        tracks: [
+          const SpotifyImportedTrack(
+            spotifyId: 'track-adie-1',
+            title: 'Paraluman',
+            artist: 'Adie',
+            album: 'Paraluman - Single',
+            duration: Duration(minutes: 5, seconds: 12),
+          ),
+          const SpotifyImportedTrack(
+            spotifyId: 'track-adie-2',
+            title: 'Mahika',
+            artist: 'Adie, Janine Berdin',
+            album: 'Mahika - Single',
+            duration: Duration(minutes: 3, seconds: 21),
+          ),
+        ],
+      );
+
+      final songs = controller.songsForPlaylist(outcome.playlistId);
+      expect(songs, hasLength(2));
+
+      // Delete the playlist
+      final deleted = await controller.deletePlaylist(outcome.playlistId);
+      expect(deleted, isTrue);
+
+      // Playlist is gone from memory
+      expect(controller.playlistById(outcome.playlistId), isNull);
+
+      // Songs are removed from _allSongs so they do NOT appear in dashboard or library
+      expect(controller.allSongs.any((s) => s.id == songs[0].id), isFalse);
+      expect(controller.allSongs.any((s) => s.id == songs[1].id), isFalse);
+      expect(controller.filteredSongs.any((s) => s.id == songs[0].id), isFalse);
+      expect(controller.filteredSongs.any((s) => s.id == songs[1].id), isFalse);
+
+      controller.dispose();
+    });
+
+    test('isSameArtistPlaylist accurately matches variations of artist playlist titles', () {
+      expect(MusicPlayerController.isSameArtistPlaylist('Adie', 'Adie'), isTrue);
+      expect(MusicPlayerController.isSameArtistPlaylist('This Is Adie', 'Adie'), isTrue);
+      expect(MusicPlayerController.isSameArtistPlaylist('Adie - Top Songs', 'Adie'), isTrue);
+      expect(MusicPlayerController.isSameArtistPlaylist('Adie Top Songs', 'Adie'), isTrue);
+      expect(MusicPlayerController.isSameArtistPlaylist('Adie Top Tracks', 'This Is Adie'), isTrue);
+      expect(MusicPlayerController.isSameArtistPlaylist('Bruno Mars', 'Bruno Mars - Top Songs'), isTrue);
+      expect(MusicPlayerController.isSameArtistPlaylist('Bruno Mars', 'Best of Bruno Mars'), isTrue);
+
+      expect(MusicPlayerController.isSameArtistPlaylist('Adie', 'Bruno Mars'), isFalse);
+      expect(MusicPlayerController.isSameArtistPlaylist('Adie', 'Adele'), isFalse);
+      expect(MusicPlayerController.isSameArtistPlaylist('Arthur Nery', 'Adie'), isFalse);
+    });
+
+    test('importing same artist never duplicates the artist playlist', () {
+      final controller = MusicPlayerController();
+      final initialPlaylistCount = controller.playlists.length;
+
+      // 1. First import: creates 'Adie'
+      final result1 = controller.importSpotifyTracks(
+        playlistName: 'Adie',
+        tracks: [
+          const SpotifyImportedTrack(
+            spotifyId: 'track-adie-1',
+            title: 'Paraluman',
+            artist: 'Adie',
+            album: 'Paraluman - Single',
+            duration: Duration(minutes: 5, seconds: 12),
+          ),
+        ],
+      );
+      expect(controller.playlists.length, initialPlaylistCount + 1);
+
+      // 2. Second import of the same artist (e.g. 'Adie - Top Songs'): reuses existing playlist
+      final result2 = controller.importSpotifyTracks(
+        playlistName: 'Adie - Top Songs',
+        tracks: [
+          const SpotifyImportedTrack(
+            spotifyId: 'track-adie-2',
+            title: 'Mahika',
+            artist: 'Adie, Janine Berdin',
+            album: 'Mahika - Single',
+            duration: Duration(minutes: 3, seconds: 21),
+          ),
+        ],
+      );
+
+      // Must NOT create a duplicate playlist
+      expect(result2.playlistId, result1.playlistId);
+      expect(controller.playlists.length, initialPlaylistCount + 1);
+
+      // Both songs are safely merged into the single artist playlist
+      final playlistSongs = controller.songsForPlaylist(result1.playlistId);
+      expect(playlistSongs, hasLength(2));
+      expect(playlistSongs.map((s) => s.title), containsAll(['Paraluman', 'Mahika']));
+
+      // 3. createPlaylist also rejects duplicate artist playlist
+      final createdDuplicate = controller.createPlaylist('This Is Adie');
+      expect(createdDuplicate, isFalse);
+      expect(controller.playlists.length, initialPlaylistCount + 1);
+
+      controller.dispose();
+    });
   });
 }
