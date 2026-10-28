@@ -227,15 +227,20 @@ class _RightActivityPanelState extends State<RightActivityPanel>
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            const Text(
-                              'AUDIO FREQUENCY',
-                              style: TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold,
-                                letterSpacing: 1.0,
-                                color: AppTheme.textMuted,
+                            const Flexible(
+                              child: Text(
+                                'AUDIO FREQUENCY',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 1.0,
+                                  color: AppTheme.textMuted,
+                                ),
                               ),
                             ),
+                            const SizedBox(width: 4),
                             Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
@@ -258,11 +263,11 @@ class _RightActivityPanelState extends State<RightActivityPanel>
                                     ),
                                   ),
                                 ),
-                                const SizedBox(width: 8),
+                                const SizedBox(width: 6),
                                 Text(
                                   '${(widget.controller.volume * 100).toInt()}% Vol',
                                   style: const TextStyle(
-                                    fontSize: 11,
+                                    fontSize: 10.5,
                                     color: AppTheme.secondary,
                                     fontWeight: FontWeight.w600,
                                   ),

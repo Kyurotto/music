@@ -765,5 +765,61 @@ void main() {
 
     controller.dispose();
   });
+
+  test('Deleting a playlist hides it from dashboard/library and across app restarts, while preserving full tracks in SQLite database', () async {
+    final controller = MusicPlayerController();
+    const userId = 'user-restart-test';
+    const playlistId = 'pl-restart-test';
+    const songId = 'spotify-song-full-track-1';
+
+    await LocalDatabase.instance.saveImportedPlaylist(
+      id: playlistId,
+      userId: userId,
+      title: 'Adie Mix',
+      songs: [
+        {
+          'id': songId,
+          'title': 'Paraluman',
+          'artist': 'Adie',
+          'audio_url': 'https://example.com/paraluman_full.mp3',
+          'is_preview': 0,
+          'duration_ms': 260000,
+        },
+      ],
+    );
+
+    // Initial load: playlist and song are visible in dashboard/library
+    await controller.loadSavedPlaylists(userId: userId);
+    expect(controller.playlistById(playlistId), isNotNull);
+    expect(controller.allSongs.any((s) => s.id == songId), isTrue);
+
+    // User taps delete button on dashboard or library
+    final deleted = await controller.deletePlaylist(playlistId, userId: userId);
+    expect(deleted, isTrue);
+
+    // 1. Immediately removed from in-memory state (dashboard & library)
+    expect(controller.playlistById(playlistId), isNull);
+    expect(controller.allSongs.any((s) => s.id == songId), isFalse);
+
+    // 2. Song records and full audio are PRESERVED in SQLite database ("sa database hindi ma bubura")
+    final db = await LocalDatabase.instance.database;
+    final songRows = await db.query('imported_songs', where: 'id = ?', whereArgs: [songId]);
+    expect(songRows, isNotEmpty, reason: 'Song must remain in SQLite imported_songs');
+    expect(songRows.first['audio_url'], 'https://example.com/paraluman_full.mp3');
+    expect(songRows.first['title'], 'Paraluman');
+    expect(songRows.first['artist'], 'Adie');
+
+    controller.dispose();
+
+    // 3. User restarts the app (fresh controller, reload saved playlists)
+    final restartedController = MusicPlayerController();
+    await restartedController.loadSavedPlaylists(userId: userId);
+
+    // The deleted playlist and its orphan songs must NEVER resurrect
+    expect(restartedController.playlistById(playlistId), isNull, reason: 'Deleted playlist must not resurrect on restart');
+    expect(restartedController.allSongs.any((s) => s.id == songId), isFalse, reason: 'Deleted songs must not resurrect on restart');
+
+    restartedController.dispose();
+  });
 }
 
