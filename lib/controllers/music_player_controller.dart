@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:audio_session/audio_session.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:just_audio/just_audio.dart';
@@ -53,7 +54,9 @@ class MusicPlayerController extends ChangeNotifier {
   static const _positionNotifyInterval = Duration(milliseconds: 300);
 
   // Real audio player
-  final AudioPlayer _audioPlayer = AudioPlayer();
+  final AudioPlayer _audioPlayer = AudioPlayer(
+    useProxyForRequestHeaders: false,
+  );
   StreamSubscription<Duration>? _positionSub;
   StreamSubscription<Duration?>? _durationSub;
   StreamSubscription<PlayerState>? _playerStateSub;
@@ -689,10 +692,21 @@ class MusicPlayerController extends ChangeNotifier {
           }
           newlyAdded.add(song);
         } else {
-          // Already known — make sure a previous failed enrichment retries.
+          // Already known — make sure a previous failed enrichment or preview track retries full resolution.
           final existing =
               _allSongs.firstWhere((e) => e.id == song.id);
-          if (existing.isSilentPlaceholder &&
+          if (existing.isPreview ||
+              !existing.hasAudio ||
+              existing.audioUrl.contains('apple.com') ||
+              existing.audioUrl.contains('itunes') ||
+              existing.audioUrl.contains('deezer') ||
+              existing.audioUrl.contains('dzcdn.net')) {
+            existing.audioUrl = '';
+            existing.isPreview = false;
+            existing.isYouTubeAudio = true;
+            _enrichedIds.remove(existing.id);
+            newlyAdded.add(existing);
+          } else if (existing.isSilentPlaceholder &&
               !_enrichedIds.contains(existing.id)) {
             newlyAdded.add(existing);
           }
@@ -705,11 +719,18 @@ class MusicPlayerController extends ChangeNotifier {
     }
 
     notifyListeners();
-    // Best-effort: resolve playable previews + lyrics without blocking import.
-    if (newlyAdded.isNotEmpty) _enrichImportedSongs(newlyAdded);
-    // Every import also stores what is already resolvable in the cache
-    // (full tracks located later are cached by _applyEnrichment).
-    _cacheAllPendingOfflineAudio();
+    // Clear any stale backoff so newly imported songs attempt full-length
+    // audio immediately instead of waiting on a previous failure's cooldown.
+    for (final s in newlyAdded) {
+      _fullUpgradeAttemptedAt.remove(s.id);
+      _fullTrackAttemptCount.remove(s.id);
+    }
+    // Locate all imported tracks (full audio + lyrics) immediately.
+    // As each song resolves, _applyEnrichment automatically downloads the audio
+    // file for permanent offline playback.
+    if (newlyAdded.isNotEmpty) {
+      fastLocateImportedSongs(songs: newlyAdded);
+    }
 
     // Persist imported playlist & tracks to local database for current user
     _persistPlaylistToDb(playlist, spotifyUrl);
@@ -875,26 +896,33 @@ class MusicPlayerController extends ChangeNotifier {
           var isYouTubeAudio = isYouTubeVal == 1 || isYouTubeVal == true;
           final youtubeVideoId = s['youtube_video_id'] as String? ?? '';
 
-          // Discard ephemeral googlevideo URLs so they automatically resolve
-          // fresh streams on the phone's live network. Keep valid iTunes/Deezer previews!
-          if (resolvedAudio.contains('googlevideo.com')) {
-            resolvedAudio = '';
-            isPreview = false;
-            isYouTubeAudio = false;
-          } else if (resolvedAudio.contains('apple.com') ||
+          // Discard ephemeral googlevideo URLs as well as any 30s preview URLs
+          // (apple.com/itunes/deezer/dzcdn.net) so they automatically resolve
+          // full-length streams on the phone's live network.
+          if (resolvedAudio.contains('googlevideo.com') ||
+              resolvedAudio.contains('apple.com') ||
               resolvedAudio.contains('itunes') ||
               resolvedAudio.contains('deezer') ||
               resolvedAudio.contains('dzcdn.net')) {
-            isPreview = true;
-            isYouTubeAudio = false;
+            resolvedAudio = '';
+            isPreview = false;
+            isYouTubeAudio = true;
           }
           
           final cachedFile = await _findCachedAudioFile(songId);
           if (cachedFile != null) {
-            resolvedAudio = cachedFile.path;
             if (cachedFile.lengthSync() >= 1600000) {
+              resolvedAudio = cachedFile.path;
               isPreview = false;
               isYouTubeAudio = false;
+            } else {
+              // Delete incomplete or 30s preview clips (<1.6MB)
+              try {
+                cachedFile.deleteSync();
+              } catch (_) {}
+              resolvedAudio = '';
+              isPreview = false;
+              isYouTubeAudio = true;
             }
           } else if (resolvedAudio.isNotEmpty &&
               !resolvedAudio.startsWith('http://') &&
@@ -902,7 +930,10 @@ class MusicPlayerController extends ChangeNotifier {
               !resolvedAudio.startsWith('assets/') &&
               !resolvedAudio.startsWith('asset:/')) {
             final f = File(resolvedAudio);
-            if (!f.existsSync() || f.lengthSync() <= 1024) {
+            if (!f.existsSync() || f.lengthSync() < 1600000) {
+              try {
+                if (f.existsSync()) f.deleteSync();
+              } catch (_) {}
               resolvedAudio = '';
               isPreview = false;
               isYouTubeAudio = true;
@@ -921,7 +952,6 @@ class MusicPlayerController extends ChangeNotifier {
             final songArtist = s['artist'] as String? ?? 'Unknown Artist';
             var img = (s['image_url'] as String? ?? '').trim();
             if (img.isEmpty) img = _curatedCoverForTitle(songTitle);
-            if (img.isEmpty) img = _curatedCoverForTitle(songArtist);
 
             final song = Song(
               id: songId,
@@ -981,17 +1011,14 @@ class MusicPlayerController extends ChangeNotifier {
               existing.isPreview = isPreview;
               existing.isYouTubeAudio = isYouTubeAudio;
               hasChanges = true;
-            } else if (existing.audioUrl.contains('googlevideo.com')) {
-              existing.audioUrl = '';
-              existing.isPreview = false;
-              existing.isYouTubeAudio = false;
-              hasChanges = true;
             } else if (existing.audioUrl.contains('apple.com') ||
                 existing.audioUrl.contains('itunes') ||
                 existing.audioUrl.contains('deezer') ||
                 existing.audioUrl.contains('dzcdn.net')) {
-              existing.isPreview = true;
-              existing.isYouTubeAudio = false;
+              existing.audioUrl = '';
+              existing.isPreview = false;
+              existing.isYouTubeAudio = true;
+              hasChanges = true;
             }
             final dbLyrics = _withoutPlaceholderLyrics(
                 (s['lyrics'] as List<dynamic>? ?? []).map((e) => e.toString()).toList());
@@ -1281,14 +1308,14 @@ class MusicPlayerController extends ChangeNotifier {
         for (final s in _allSongs.where((s) => s.id.startsWith('spotify-') || s.id.startsWith('itunes-'))) {
           if (s.audioUrl.toLowerCase().contains('.m3u8')) {
             s.audioUrl = '';
-            s.isPreview = true;
-            s.isYouTubeAudio = false;
+            s.isPreview = false;
+            s.isYouTubeAudio = true;
             unawaited(
               LocalDatabase.instance.updateImportedSong(
                 id: s.id,
                 audioUrl: '',
-                isPreview: true,
-                isYouTubeAudio: false,
+                isPreview: false,
+                isYouTubeAudio: true,
                 durationMs: s.duration.inMilliseconds,
                 imageUrl: s.imageUrl,
                 lyrics: s.lyrics,
@@ -1635,7 +1662,6 @@ class MusicPlayerController extends ChangeNotifier {
     unawaited(() async {
       try {
         var art = _curatedCoverForTitle(song.title);
-        if (art.isEmpty) art = _curatedCoverForTitle(song.artist);
         if (art.isEmpty) {
           art = await _fetchItunesCoverForSong(song.title, song.artist) ?? '';
         }
@@ -1662,7 +1688,6 @@ class MusicPlayerController extends ChangeNotifier {
         if (_disposed) break;
         if (song.imageUrl.isNotEmpty) continue;
         var art = _curatedCoverForTitle(song.title);
-        if (art.isEmpty) art = _curatedCoverForTitle(song.artist);
         if (art.isEmpty) {
           art = await _fetchItunesCoverForSong(song.title, song.artist) ?? '';
         }
@@ -1768,9 +1793,6 @@ class MusicPlayerController extends ChangeNotifier {
     if (artwork.isEmpty) {
       artwork = _curatedCoverForTitle(imported.title);
     }
-    if (artwork.isEmpty) {
-      artwork = _curatedCoverForTitle(imported.artist);
-    }
 
     final song = Song(
       id: 'spotify-${imported.spotifyId}',
@@ -1841,6 +1863,9 @@ class MusicPlayerController extends ChangeNotifier {
           while (!_disposed) {
             final song = nextIdx < ordered.length ? ordered[nextIdx++] : null;
             if (song == null) break;
+            // Clear stale backoff so fast-locate never skips a song
+            _fullUpgradeAttemptedAt.remove(song.id);
+            _fullTrackAttemptCount.remove(song.id);
             _enrichingIds.add(song.id);
             _fullUpgradeAttemptedAt[song.id] = DateTime.now();
             try {
@@ -2219,16 +2244,28 @@ class MusicPlayerController extends ChangeNotifier {
     var pinned = 0;
     try {
       for (final s in _allSongs.where(
-          (s) => s.id.startsWith('spotify-') && !s.hasAudio)) {
+          (s) => (s.id.startsWith('spotify-') || s.id.startsWith('itunes-')) &&
+                 (!s.hasAudio || s.isPreview || !s.audioUrl.contains('offline_audio')))) {
         if (_disposed) break;
         try {
           final cached = await _findCachedAudioFile(s.id);
           if (cached != null &&
               cached.existsSync() &&
               cached.lengthSync() > 1024) {
+            final wasPreview = s.isPreview;
             s.audioUrl = cached.path;
             s.isPreview = cached.lengthSync() < 1600000 && s.isPreview;
             s.isYouTubeAudio = false;
+            _syncSongPathToQueueAndDb(s);
+            if (wasPreview != s.isPreview) {
+              unawaited(LocalDatabase.instance.updateImportedSong(
+                id: s.id,
+                audioUrl: cached.path,
+                isPreview: s.isPreview,
+                isYouTubeAudio: false,
+                durationMs: s.duration.inMilliseconds,
+              ).catchError((_) {}));
+            }
             pinned++;
           }
         } catch (_) {}
@@ -2279,7 +2316,11 @@ class MusicPlayerController extends ChangeNotifier {
   }
 
   /// Playback-failure recovery for a track's audio source.
-  Future<void> _ensureRecoverableAudio(Song song, {String? failedUrl}) async {
+  Future<void> _ensureRecoverableAudio(
+    Song song, {
+    String? failedUrl,
+    String? failedVideoId,
+  }) async {
     final isImported = song.id.startsWith('spotify-') || song.id.startsWith('itunes-');
     if (!isImported) {
       // Local/bundled tracks have no full-track catalog to search.
@@ -2300,20 +2341,27 @@ class MusicPlayerController extends ChangeNotifier {
     }
     if (_disposed) return;
     final isFailedUrl = failedUrl != null && failedUrl.isNotEmpty && song.audioUrl == failedUrl;
+    final isGvExpired = song.audioUrl.contains('googlevideo.com') && _isGoogleVideoExpired(song.audioUrl);
     if (song.hasAudio &&
         !song.isPreview &&
-        !song.audioUrl.contains('googlevideo.com') &&
+        !isGvExpired &&
         !song.audioUrl.toLowerCase().contains('.m3u8') &&
         !isFailedUrl) {
       return;
     }
-    // Always fall back to 30s preview clip from iTunes/Deezer to ensure sound plays
-    song.audioUrl = '';
-    song.isPreview = true;
-    try {
-      await _ensureEnrichment(song, previewFallbackOnly: true)
-          .timeout(const Duration(seconds: 15));
-    } catch (_) {}
+    // DO NOT downgrade to 30s preview clip from iTunes/Deezer!
+    // Try one more clean full track resolution with direct YouTube stream lookup ONLY
+    // if videoId is known and is NOT the failed video ID that triggered recovery!
+    if (song.youtubeVideoId.isNotEmpty && song.youtubeVideoId != failedVideoId) {
+      try {
+        final ytStream = await _enrichment.fetchYouTubeStreamById(song.youtubeVideoId);
+        if (ytStream.hasAudio && ytStream.previewUrl != failedUrl) {
+          _applyEnrichment(song, ytStream);
+          notifyListeners();
+          return;
+        }
+      } catch (_) {}
+    }
   }
 
   Future<void> _enrichOneSong(
@@ -2324,7 +2372,7 @@ class MusicPlayerController extends ChangeNotifier {
     if (!previewFallbackOnly) {
       final isStuck = !song.hasAudio ||
           song.isPreview ||
-          song.audioUrl.contains('googlevideo.com') ||
+          (song.audioUrl.contains('googlevideo.com') && _isGoogleVideoExpired(song.audioUrl)) ||
           _offlineFallbackIds.contains(song.id);
       if (isStuck) {
         _fullTrackAttemptCount[song.id] =
@@ -2337,28 +2385,74 @@ class MusicPlayerController extends ChangeNotifier {
       // Fast check: if a valid offline full-track audio file already exists on device,
       // attach it immediately with 0ms network latency.
       final cached = await _findCachedAudioFile(song.id);
-      if (cached != null && cached.existsSync() && cached.lengthSync() > 1024) {
-        final changed = _applyEnrichment(
-          song,
-          TrackEnrichment(
-            previewUrl: cached.path,
-            isFullTrack: cached.lengthSync() >= 1600000 || !song.isPreview,
-          ),
-        );
-        song.isEnrichingLyrics = false;
-        if (changed) notifyListeners();
-        return;
+      if (cached != null && cached.existsSync()) {
+        if (cached.lengthSync() >= 1600000) {
+          final changed = _applyEnrichment(
+            song,
+            TrackEnrichment(
+              previewUrl: cached.path,
+              isFullTrack: true,
+            ),
+          );
+          song.isEnrichingLyrics = false;
+          if (changed) notifyListeners();
+          return;
+        } else {
+          // Purge 30s preview clip (<1.6MB)
+          try {
+            cached.deleteSync();
+          } catch (_) {}
+        }
+      }
+
+      // If we already have a known youtubeVideoId, resolve its live stream immediately:
+      if (song.youtubeVideoId.isNotEmpty) {
+        try {
+          final ytEnrichment = await _enrichment
+              .fetchYouTubeStreamById(song.youtubeVideoId)
+              .timeout(const Duration(seconds: 8));
+          if (ytEnrichment.hasAudio) {
+            final changed = _applyEnrichment(song, ytEnrichment);
+            song.isEnrichingLyrics = false;
+            if (changed) notifyListeners();
+            if (changed && song.audioUrl.startsWith('http')) {
+              unawaited(_cacheAudioOffline(song));
+            }
+            return;
+          }
+        } catch (_) {}
       }
 
       // Check if this song was already located as a full track in the local database:
       final savedDbSong = await LocalDatabase.instance.getImportedSong(song.id);
       if (savedDbSong != null) {
+        final dbYtId = (savedDbSong['youtube_video_id'] as String? ?? '').trim();
+        if (dbYtId.isNotEmpty && song.youtubeVideoId.isEmpty) {
+          song.youtubeVideoId = dbYtId;
+          try {
+            final ytEnrichment = await _enrichment
+                .fetchYouTubeStreamById(dbYtId)
+                .timeout(const Duration(seconds: 8));
+            if (ytEnrichment.hasAudio) {
+              final changed = _applyEnrichment(song, ytEnrichment);
+              song.isEnrichingLyrics = false;
+              if (changed) notifyListeners();
+              if (changed && song.audioUrl.startsWith('http')) {
+                unawaited(_cacheAudioOffline(song));
+              }
+              return;
+            }
+          } catch (_) {}
+        }
+
         final dbAudio = (savedDbSong['audio_url'] as String? ?? '').trim();
         final dbPreview = (savedDbSong['is_preview'] as int? ?? 0) == 1;
         if (!dbPreview &&
             dbAudio.isNotEmpty &&
             !dbAudio.contains('apple.com') &&
-            !dbAudio.contains('itunes')) {
+            !dbAudio.contains('itunes') &&
+            !dbAudio.contains('deezer') &&
+            !dbAudio.contains('dzcdn.net')) {
           final dbLyrics = (savedDbSong['lyrics'] as List<dynamic>? ?? [])
               .map((e) => e.toString())
               .toList();
@@ -2376,15 +2470,13 @@ class MusicPlayerController extends ChangeNotifier {
         }
       }
 
-      // If already a preview, do not settle for another preview clip: require full-length audio!
-      final shouldAllowFallback = previewFallbackOnly || (!song.hasAudio && !song.isPreview);
       final enrichment = await _enrichment.enrichTrack(
         title: song.title,
         artist: song.artist,
         album: song.album,
         duration: song.duration,
-        previewFallbackOnly: previewFallbackOnly,
-        allowPreviewFallback: shouldAllowFallback,
+        previewFallbackOnly: false,
+        allowPreviewFallback: false,
         prioritizeYouTube: true,
         fastImport: fastImport,
       );
@@ -2400,6 +2492,10 @@ class MusicPlayerController extends ChangeNotifier {
       final changed = _applyEnrichment(song, enrichment);
       song.isEnrichingLyrics = false;
       if (changed) notifyListeners();
+      // Cache resolved audio so imported tracks are available offline right away.
+      if (changed && song.audioUrl.startsWith('http')) {
+        unawaited(_cacheAudioOffline(song));
+      }
     } catch (_) {
       _logDiag(
         'enrichment FAILED after ${DateTime.now().difference(enrichStart).inMilliseconds}ms',
@@ -2422,18 +2518,16 @@ class MusicPlayerController extends ChangeNotifier {
 
     final isImported = song.id.startsWith('spotify-') || song.id.startsWith('itunes-');
     final isFallbackAudio = _offlineFallbackIds.contains(song.id);
-    final isGoogleVideo = enrichment.previewUrl?.contains('googlevideo.com') ?? false;
     final isM3u8 = enrichment.previewUrl?.toLowerCase().contains('.m3u8') ?? false;
     final shouldAttachAudio = enrichment.hasAudio &&
-        !isGoogleVideo &&
         !isM3u8 &&
-        (!isImported || enrichment.isFullTrack || !song.hasAudio || song.audioUrl.contains('googlevideo.com') || song.audioUrl.toLowerCase().contains('.m3u8')) &&
+        (!isImported || enrichment.isFullTrack) &&
         (!song.hasAudio ||
             song.audioUrl.contains('googlevideo.com') ||
             song.audioUrl.toLowerCase().contains('.m3u8') ||
             isFallbackAudio ||
-            ((song.isYouTubeAudio || song.audioUrl.contains('googlevideo.com')) && enrichment.isFullTrack) ||
-            (enrichment.isFullTrack && song.isPreview));
+            song.isPreview ||
+            ((song.isYouTubeAudio || song.audioUrl.contains('googlevideo.com')) && enrichment.isFullTrack));
     if (shouldAttachAudio) {
       final resumePosition =
           song.id == currentSong?.id ? _currentPosition : Duration.zero;
@@ -3037,11 +3131,11 @@ class MusicPlayerController extends ChangeNotifier {
       final offlineDir = await _getPrimaryOfflineDirectory();
       String urlToDownload = song.audioUrl;
 
-      // If the URL is empty, YouTube, or expired, resolve fresh full or preview stream
+      // If the URL is empty or expired, resolve fresh full or preview stream
       if (urlToDownload.isEmpty ||
-          urlToDownload.contains('googlevideo.com') ||
           urlToDownload.toLowerCase().contains('.m3u8') ||
-          song.isYouTubeAudio) {
+          _isGoogleVideoExpired(urlToDownload) ||
+          (song.isPreview && !urlToDownload.contains('googlevideo.com'))) {
         try {
           final enrichment = await _enrichment.enrichTrack(
             title: song.title,
@@ -3049,11 +3143,11 @@ class MusicPlayerController extends ChangeNotifier {
             album: song.album,
             duration: song.duration,
             previewFallbackOnly: false,
-            allowPreviewFallback: true,
+            allowPreviewFallback: false,
+            prioritizeYouTube: true,
           );
           if (enrichment.hasAudio &&
               enrichment.previewUrl != null &&
-              !enrichment.previewUrl!.contains('googlevideo.com') &&
               !enrichment.previewUrl!.toLowerCase().contains('.m3u8') &&
               enrichment.previewUrl!.startsWith('http')) {
             urlToDownload = enrichment.previewUrl!;
@@ -3062,78 +3156,104 @@ class MusicPlayerController extends ChangeNotifier {
         } catch (_) {}
       }
 
-      // Never attempt downloading raw googlevideo CDN streams (they fail with 403 Forbidden).
       if (urlToDownload.isEmpty ||
-          urlToDownload.contains('googlevideo.com') ||
           urlToDownload.toLowerCase().contains('.m3u8') ||
           (!urlToDownload.startsWith('http://') && !urlToDownload.startsWith('https://'))) {
         return;
       }
 
+      final isGoogleVideo = urlToDownload.contains('googlevideo.com');
+      final userAgent = isGoogleVideo
+          ? TrackEnrichmentService.ytAndroidUserAgent
+          : TrackEnrichmentService.browserUserAgent;
+
       final uri = Uri.parse(urlToDownload);
-      final ext = urlToDownload.toLowerCase().contains('.mp3') ? '.mp3' : '.m4a';
+      final ext = (urlToDownload.toLowerCase().contains('.mp3') || urlToDownload.contains('audio/mpeg')) ? '.mp3' : '.m4a';
       final targetFile = File(p.join(offlineDir.path, '${song.id}$ext'));
       final tempFile = File(p.join(offlineDir.path, '${song.id}.tmp'));
 
-      final response = await http.get(
-        uri,
-        headers: {
-          'User-Agent': TrackEnrichmentService.browserUserAgent,
-          'Accept': '*/*',
-          'Range': 'bytes=0-',
-        },
-      ).timeout(const Duration(seconds: 45));
+      final request = http.Request('GET', uri);
+      request.headers['User-Agent'] = userAgent;
+      request.headers['Accept'] = '*/*';
+      if (!isGoogleVideo) {
+        request.headers['Range'] = 'bytes=0-';
+      }
 
-      if ((response.statusCode == 200 || response.statusCode == 206) &&
-          response.bodyBytes.length > 1024) {
-        await tempFile.writeAsBytes(response.bodyBytes, flush: true);
-        if (await targetFile.exists()) {
-          try {
-            await targetFile.delete();
-          } catch (_) {}
-        }
-        await tempFile.rename(targetFile.path);
-        _invalidateOfflineLookup(song.id);
+      final client = http.Client();
+      try {
+        final streamedResponse = await client.send(request).timeout(const Duration(seconds: 50));
+        if (streamedResponse.statusCode == 200 || streamedResponse.statusCode == 206) {
+          final sink = tempFile.openWrite();
+          await streamedResponse.stream.pipe(sink);
+          await sink.flush();
+          await sink.close();
 
-        song.audioUrl = targetFile.path;
-        song.isPreview = response.bodyBytes.length < 1600000 && song.isPreview;
-        song.isYouTubeAudio = false;
-        _syncSongPathToQueueAndDb(song);
-        _locatingStatusVersion++;
-        notifyListeners();
-        debugPrint(
-            '[MusicPlayerController] Successfully cached ${song.title} (${response.bodyBytes.length} bytes) to local cache');
-        // Also cache artwork locally if available
-        if (song.imageUrl.startsWith('http')) {
-          try {
-            final artTarget = File(p.join(offlineDir.path, '${song.id}.jpg'));
-            if (!artTarget.existsSync()) {
-              final artResp = await http.get(Uri.parse(song.imageUrl)).timeout(const Duration(seconds: 15));
-              if (artResp.statusCode == 200 && artResp.bodyBytes.isNotEmpty) {
-                await artTarget.writeAsBytes(artResp.bodyBytes, flush: true);
-                _invalidateOfflineLookup(song.id, artwork: true);
-              }
+          final downloadedBytes = await tempFile.length();
+          if (downloadedBytes >= 1600000) {
+            if (await targetFile.exists()) {
+              try {
+                await targetFile.delete();
+              } catch (_) {}
             }
-          } catch (_) {}
-        }
-      } else {
-        if (await tempFile.exists()) {
-          try {
-            await tempFile.delete();
-          } catch (_) {}
-        }
-        if (response.statusCode == 429 &&
-            urlToDownload.contains('googlevideo.com')) {
-          _enrichment.noteGooglevideoThrottle();
-        } else if (response.statusCode == 403 &&
-            urlToDownload.contains('googlevideo.com')) {
-          if (song.audioUrl == urlToDownload) {
-            song.audioUrl = '';
-            song.isYouTubeAudio = true;
+            await tempFile.rename(targetFile.path);
+            _invalidateOfflineLookup(song.id);
+
+            song.audioUrl = targetFile.path;
+            song.isPreview = false;
+            song.isYouTubeAudio = false;
+            _syncSongPathToQueueAndDb(song);
+            _locatingStatusVersion++;
+            notifyListeners();
+            debugPrint(
+                '[MusicPlayerController] Successfully cached ${song.title} ($downloadedBytes bytes) to local file: ${targetFile.path}');
+
+            // Persist to local SQLite database so offline playback works permanently
+            unawaited(LocalDatabase.instance.updateImportedSong(
+              id: song.id,
+              audioUrl: targetFile.path,
+              isPreview: false,
+              isYouTubeAudio: false,
+              durationMs: song.duration.inMilliseconds,
+              imageUrl: song.imageUrl,
+              lyrics: song.lyrics,
+            ).catchError((e) {
+              debugPrint('[MusicPlayerController] updateImportedSong error: $e');
+            }));
+
+            // Also cache artwork locally if available
+            if (song.imageUrl.startsWith('http')) {
+              try {
+                final artTarget = File(p.join(offlineDir.path, '${song.id}.jpg'));
+                if (!artTarget.existsSync()) {
+                  final artResp = await http.get(Uri.parse(song.imageUrl)).timeout(const Duration(seconds: 15));
+                  if (artResp.statusCode == 200 && artResp.bodyBytes.isNotEmpty) {
+                    await artTarget.writeAsBytes(artResp.bodyBytes, flush: true);
+                    _invalidateOfflineLookup(song.id, artwork: true);
+                  }
+                }
+              } catch (_) {}
+            }
+          } else {
+            if (await tempFile.exists()) {
+              try {
+                await tempFile.delete();
+              } catch (_) {}
+            }
           }
+        } else {
+          if (await tempFile.exists()) {
+            try {
+              await tempFile.delete();
+            } catch (_) {}
+          }
+          if ((streamedResponse.statusCode == 429 || streamedResponse.statusCode == 403) && isGoogleVideo) {
+            _enrichment.noteGooglevideoThrottle();
+          }
+          debugPrint(
+              '[MusicPlayerController] Cache rejected (${streamedResponse.statusCode}) for ${song.title}');
         }
-        debugPrint(
-            '[MusicPlayerController] Cache rejected (${response.statusCode}, ${response.bodyBytes.length} bytes) for ${song.title}');
+      } finally {
+        client.close();
       }
     } catch (e) {
       debugPrint('[MusicPlayerController] Offline cache error for ${song.title}: $e');
@@ -3176,7 +3296,7 @@ class MusicPlayerController extends ChangeNotifier {
   void _cacheAllPendingOfflineAudio() {
     final pending = _allSongs
         .where((s) =>
-            !s.audioUrl.contains('offline_audio') &&
+            (!s.audioUrl.contains('offline_audio') || s.isPreview) &&
             !s.audioUrl.startsWith('assets/') &&
             !s.audioUrl.startsWith('asset:/') &&
             !_cachingIds.contains(s.id))
@@ -3379,6 +3499,29 @@ class MusicPlayerController extends ChangeNotifier {
     }
     // Earlier rows (Quick Picks first) are located first, 2 at a time to prevent UI lag.
     _enrichImportedSongs(unique, fastImport: true, maxConcurrency: 2);
+  }
+
+  /// Fast-locates full tracks + audio + lyrics for imported Spotify playlist
+  /// songs (the ones stuck on "LOCATING AUDIO"). Clears retry backoff so a
+  /// re-import / refresh locates them immediately instead of waiting minutes.
+  /// Uses higher concurrency (4) since imported tracks are the user's priority.
+  void fastLocateImportedSongs({List<Song>? songs}) {
+    final targets = songs ?? _allSongs
+        .where((s) => s.id.startsWith('spotify-') ||
+            s.id.startsWith('itunes-') ||
+            s.isSilentPlaceholder ||
+            s.isPreview)
+        .toList();
+    if (targets.isEmpty || _disposed) return;
+    final seen = <String>{};
+    final unique = <Song>[];
+    for (final s in targets) {
+      if (!seen.add(s.id)) continue;
+      _fullUpgradeAttemptedAt.remove(s.id);
+      _fullTrackAttemptCount.remove(s.id);
+      unique.add(s);
+    }
+    _enrichImportedSongs(unique, fastImport: true, maxConcurrency: 6);
   }
   
   void addSong(Song song) {
@@ -3784,11 +3927,12 @@ class MusicPlayerController extends ChangeNotifier {
     MediaItem mediaItem, {
     bool forceAsset = false,
   }) async {
-    // Drop unplayable googlevideo.com and .m3u8 streams immediately so ExoPlayer is never sent unplayable sources
-    if (song.audioUrl.contains('googlevideo.com') || song.audioUrl.toLowerCase().contains('.m3u8')) {
+    // Drop unplayable .m3u8 or expired googlevideo streams so ExoPlayer is never sent unplayable sources
+    if (song.audioUrl.toLowerCase().contains('.m3u8') ||
+        (song.audioUrl.contains('googlevideo.com') && _isGoogleVideoExpired(song.audioUrl))) {
       song.audioUrl = '';
-      song.isYouTubeAudio = false;
-      song.isPreview = true;
+      song.isYouTubeAudio = true;
+      song.isPreview = false;
     }
 
     // 0. Dedicated check for Lips of an Angel: use bundled high-fidelity asset (4:21 full track)
@@ -3880,7 +4024,7 @@ class MusicPlayerController extends ChangeNotifier {
             // Track with no full audio or on preview: prioritize resolving full-length track
             final fullPass = _ensureEnrichment(song, fastImport: true);
             try {
-              await fullPass.timeout(const Duration(seconds: 6));
+              await fullPass.timeout(const Duration(seconds: 12));
             } catch (_) {}
             // The URL is read below, so a hot-swap queued while we waited
             // would only reload the same source a second later if full audio already landed.
@@ -3892,18 +4036,20 @@ class MusicPlayerController extends ChangeNotifier {
           }
         }
         if (song.audioUrl.isNotEmpty &&
-            !song.isPreview &&
-            !song.audioUrl.contains('googlevideo.com') &&
             !song.audioUrl.toLowerCase().contains('.m3u8')) {
           unawaited(_cacheAudioOffline(song));
         }
         if (song.audioUrl.isNotEmpty &&
-            !song.audioUrl.contains('googlevideo.com') &&
             !song.audioUrl.toLowerCase().contains('.m3u8') &&
             (song.audioUrl.startsWith('http://') || song.audioUrl.startsWith('https://'))) {
+          final isGv = song.audioUrl.contains('googlevideo.com');
           return AudioSource.uri(
             Uri.parse(song.audioUrl),
-            headers: {'User-Agent': TrackEnrichmentService.browserUserAgent},
+            headers: {
+              'User-Agent': isGv
+                  ? TrackEnrichmentService.ytAndroidUserAgent
+                  : TrackEnrichmentService.browserUserAgent,
+            },
             tag: mediaItem,
           );
         }
@@ -3924,12 +4070,16 @@ class MusicPlayerController extends ChangeNotifier {
     }
 
     if (song.audioUrl.isNotEmpty &&
-        !song.audioUrl.contains('googlevideo.com') &&
         !song.audioUrl.toLowerCase().contains('.m3u8') &&
         (song.audioUrl.startsWith('http://') || song.audioUrl.startsWith('https://'))) {
+      final isGv = song.audioUrl.contains('googlevideo.com');
       return AudioSource.uri(
         Uri.parse(song.audioUrl),
-        headers: {'User-Agent': TrackEnrichmentService.browserUserAgent},
+        headers: {
+          'User-Agent': isGv
+              ? TrackEnrichmentService.ytAndroidUserAgent
+              : TrackEnrichmentService.browserUserAgent,
+        },
         tag: mediaItem,
       );
     }
@@ -4018,10 +4168,11 @@ class MusicPlayerController extends ChangeNotifier {
         !song.audioUrl.startsWith('https://') &&
         !song.audioUrl.startsWith('assets/') &&
         !song.audioUrl.startsWith('asset:/');
-    if (song.audioUrl.contains('googlevideo.com') || song.audioUrl.toLowerCase().contains('.m3u8')) {
+    if (song.audioUrl.toLowerCase().contains('.m3u8') ||
+        (song.audioUrl.contains('googlevideo.com') && _isGoogleVideoExpired(song.audioUrl))) {
       song.audioUrl = '';
-      song.isYouTubeAudio = false;
-      song.isPreview = true;
+      song.isYouTubeAudio = true;
+      song.isPreview = false;
     }
     if (song.audioUrl.isEmpty || (isLocalPath && !File(song.audioUrl).existsSync())) {
       final cached = await _findCachedAudioFile(song.id);
@@ -4086,22 +4237,31 @@ final mediaItem = await _createSafeMediaItem(song);
             // Share the in-flight pass when one exists so recovery never pays
             // for a second lookup on top of the one already running.
             final failedUrl = song.audioUrl;
+            final failedVideoId = song.youtubeVideoId;
             _enrichment.clearGooglevideoThrottle();
             song.audioUrl = '';
+            song.youtubeVideoId = ''; // Clear failed video ID so recovery doesn't loop
             // Bound the whole re-resolve: the inner chain can otherwise run
             // up to ~35s with the player silent and the slider frozen.
-            await _ensureRecoverableAudio(song, failedUrl: failedUrl)
-                .timeout(const Duration(seconds: 12), onTimeout: () {});
+            await _ensureRecoverableAudio(
+              song,
+              failedUrl: failedUrl,
+              failedVideoId: failedVideoId,
+            ).timeout(const Duration(seconds: 12), onTimeout: () {});
             if (sessionId != _playSessionId || _disposed) return;
             final retryUrl = song.audioUrl;
-            // Retry whatever the resolve produced (excluding googlevideo and m3u8).
+            // Retry whatever the resolve produced.
             if (retryUrl.isNotEmpty &&
-                !retryUrl.contains('googlevideo.com') &&
                 !retryUrl.toLowerCase().contains('.m3u8') &&
                 retryUrl != failedUrl) {
+              final isGv = retryUrl.contains('googlevideo.com');
               final retrySource = AudioSource.uri(
                 Uri.parse(retryUrl),
-                headers: {'User-Agent': TrackEnrichmentService.browserUserAgent},
+                headers: {
+                  'User-Agent': isGv
+                      ? TrackEnrichmentService.ytAndroidUserAgent
+                      : TrackEnrichmentService.browserUserAgent,
+                },
                 tag: mediaItem,
               );
               await _audioPlayer.setAudioSource(retrySource).timeout(const Duration(seconds: 8));
@@ -4268,12 +4428,17 @@ final mediaItem = await _createSafeMediaItem(song);
       _ytRefreshAttemptedIds.add(song.id);
       try {
         final failedUrl = song.audioUrl;
+        final failedVideoId = song.youtubeVideoId;
         song.audioUrl = '';
+        song.youtubeVideoId = ''; // Clear failed video ID to break infinite recovery loops
         try {
-          await _ensureRecoverableAudio(song, failedUrl: failedUrl);
+          await _ensureRecoverableAudio(
+            song,
+            failedUrl: failedUrl,
+            failedVideoId: failedVideoId,
+          );
         } catch (_) {}
         if (song.audioUrl.isNotEmpty &&
-            !song.audioUrl.contains('googlevideo.com') &&
             !song.audioUrl.toLowerCase().contains('.m3u8')) {
           if (song.id == currentSong?.id) {
             await _playCurrentSongAudio();
@@ -4614,6 +4779,14 @@ final mediaItem = await _createSafeMediaItem(song);
   @override
   void notifyListeners() {
     if (_disposed) return;
+    final binding = WidgetsBinding.instance;
+    if (binding.buildOwner?.debugBuilding == true ||
+        binding.schedulerPhase == SchedulerPhase.persistentCallbacks) {
+      binding.addPostFrameCallback((_) {
+        if (!_disposed) super.notifyListeners();
+      });
+      return;
+    }
     super.notifyListeners();
   }
 

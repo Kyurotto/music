@@ -142,7 +142,7 @@ class LocalDatabase {
             final files = offlineDir.listSync().whereType<File>();
             for (final f in files) {
               final name = path.basenameWithoutExtension(f.path);
-              if (previewSongIds.contains(name) || f.lengthSync() <= 1024) {
+              if (previewSongIds.contains(name) || f.lengthSync() < 1600000) {
                 try {
                   f.deleteSync();
                 } catch (_) {}
@@ -178,7 +178,7 @@ class LocalDatabase {
         final sid = row['id'] as String;
         final aurl = row['audio_url'] as String;
         final f = File(aurl);
-        if (!f.existsSync() || f.lengthSync() <= 1024) {
+        if (!f.existsSync() || f.lengthSync() < 1600000) {
           try {
             if (f.existsSync()) f.deleteSync();
           } catch (_) {}

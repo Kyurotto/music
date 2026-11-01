@@ -872,10 +872,14 @@ class _PlaylistSongTile extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      Flexible(
+                      // Real-time audio locating / full track badge first
+                      ExcludeSemantics(child: _buildTrackBadge(song)),
+                      const SizedBox(width: 6),
+                      Expanded(
                         child: Text(
-                          song.artist,
+                          '${song.artist} • ${_clock(song.duration)}',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
@@ -884,20 +888,6 @@ class _PlaylistSongTile extends StatelessWidget {
                           ),
                         ),
                       ),
-                      const Text(
-                        ' • ',
-                        style: TextStyle(color: Colors.grey, fontSize: 12),
-                      ),
-                      Text(
-                        _clock(song.duration),
-                        style: const TextStyle(
-                          color: Colors.grey,
-                          fontSize: 12,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      // Real-time audio locating / full track indicator
-                      _buildTrackBadge(song),
                     ],
                   ),
                 ],

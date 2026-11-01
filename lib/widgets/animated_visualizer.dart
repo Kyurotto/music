@@ -68,7 +68,8 @@ class _AnimatedVisualizerState extends State<AnimatedVisualizer>
   Widget build(BuildContext context) {
     final colors = widget.gradientColors ?? [AppTheme.primary, AppTheme.secondary];
 
-    return AnimatedBuilder(
+    return ExcludeSemantics(
+      child: AnimatedBuilder(
       animation: _controller,
       builder: (context, child) {
         return FittedBox(
@@ -127,6 +128,6 @@ class _AnimatedVisualizerState extends State<AnimatedVisualizer>
           ),
         );
       },
-    );
+    ));
   }
 }

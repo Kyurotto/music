@@ -428,8 +428,17 @@ class _RightActivityPanelState extends State<RightActivityPanel>
 
                   // Up Next Section Header
                   Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      const Expanded(
+                      Text(
+                        '${widget.controller.queue.length} Tracks',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: AppTheme.textSecondary,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
                         child: Text(
                           'UP NEXT IN QUEUE',
                           style: TextStyle(
@@ -439,14 +448,6 @@ class _RightActivityPanelState extends State<RightActivityPanel>
                             color: AppTheme.textMuted,
                           ),
                           overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        '${widget.controller.queue.length} Tracks',
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: AppTheme.textSecondary,
                         ),
                       ),
                     ],
