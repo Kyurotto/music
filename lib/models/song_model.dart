@@ -52,10 +52,9 @@ class Song {
   /// resolves a playable preview URL.
   bool get isSilentPlaceholder => id.startsWith('spotify-') && !hasAudio;
 
-  /// True when an imported track resolved to a full-length stream
-  /// (not a 30-second preview clip).
-  bool get isFullTrack =>
-      id.startsWith('spotify-') && hasAudio && !isPreview;
+  /// True when this song resolved to a full-length stream or audio file
+  /// (not a 30-second preview clip and not silent).
+  bool get isFullTrack => hasAudio && !isPreview;
 
   String get formattedDuration {
     final minutes = duration.inMinutes;
@@ -186,6 +185,103 @@ class MusicPlaylist {
 class SampleMusicData {
   /// No pre-loaded sample songs — the app starts with an empty library.
   static List<Song> get sampleSongs => [];
+
+  /// Bundled tracks with offline assets available for direct matching.
+  static List<Song> get bundledTracks => [
+        Song(
+          id: 'lose-yourself',
+          title: 'Lose Yourself',
+          artist: 'Eminem',
+          album: '8 Mile Soundtrack',
+          duration: const Duration(minutes: 5, seconds: 21),
+          genre: 'Hip-Hop',
+          imageUrl: '',
+          gradientColors: const [Color(0xFFE52D27), Color(0xFFB31217)],
+          plays: '2.5B',
+          audioUrl: 'assets/audio/lose-yourself.m4a',
+          isFeatured: true,
+          lyrics: const [
+            "Look, if you had one shot, or one opportunity",
+            "To seize everything you ever wanted in one moment",
+            "Would you capture it, or just let it slip?",
+            "Yo, his palms are sweaty, knees weak, arms are heavy",
+            "There's vomit on his sweater already, mom's spaghetti",
+            "He's nervous, but on the surface he looks calm and ready",
+            "To drop bombs, but he keeps on forgettin'",
+            "What he wrote down, the whole crowd goes so loud",
+            "He opens his mouth, but the words won't come out",
+            "He's chokin', how? Everybody's jokin' now",
+            "The clocks run out, time's up, over, blaow",
+            "Snap back to reality, ope there goes gravity",
+            "Ope, there goes Rabbit, he choked, he's so mad",
+            "But he won't give up that easy? No, he won't have it",
+            "He knows his whole back's to these ropes, it don't matter",
+            "He's dope, he knows that, but he's broke, he's so stagnant",
+          ],
+        ),
+        Song(
+          id: 'blank-space',
+          title: 'Blank Space',
+          artist: 'Taylor Swift',
+          album: '1989',
+          duration: const Duration(minutes: 3, seconds: 51),
+          genre: 'Pop',
+          imageUrl: '',
+          gradientColors: const [Color(0xFF654EA3), Color(0xFFEAAFC8)],
+          plays: '1.9B',
+          audioUrl: 'assets/audio/blank-space.m4a',
+          lyrics: const [
+            "Nice to meet you, where you been?",
+            "I could show you incredible things",
+            "Magic, madness, heaven, sin",
+            "Saw you there and I thought",
+            "'Oh, my God, look at that face'",
+            "You look like my next mistake",
+            "Love's a game, wanna play?",
+            "New money, suit and tie",
+            "I can read you like a magazine",
+            "Ain't it funny? Rumors fly",
+            "And I know you heard about me",
+            "So it's gonna be forever",
+            "Or it's gonna go down in flames",
+            "You can tell me when it's over, mm",
+            "If the high was worth the pain",
+            "Got a long list of ex-lovers",
+            "They'll tell you I'm insane",
+            "'Cause you know I love the players",
+            "And you love the game",
+            "'Cause we're young, and we're reckless",
+            "We'll take this way too far",
+            "It'll leave you breathless, mm",
+            "Or with a nasty scar",
+            "Got a long list of ex-lovers",
+            "They'll tell you I'm insane",
+            "But I've got a blank space, baby",
+            "And I'll write your name",
+          ],
+        ),
+        Song(
+          id: 'just-the-way-you-are',
+          title: 'Just the Way You Are',
+          artist: 'Bruno Mars',
+          album: 'Doo-Wops & Hooligans',
+          duration: const Duration(minutes: 3, seconds: 39),
+          genre: 'Pop',
+          imageUrl: '',
+          gradientColors: const [Color(0xFF11998E), Color(0xFF38EF7D)],
+          plays: '2.3B',
+          audioUrl: 'assets/audio/just-the-way-you-are.m4a',
+          lyrics: const [
+            "Oh, her eyes, her eyes make the stars look like they're not shinin'",
+            "Her hair, her hair falls perfectly without her tryin'",
+            "She's so beautiful and I tell her everyday",
+            "When I see your face",
+            "There's not a thing that I would change",
+            "'Cause you're amazing",
+            "Just the way you are",
+          ],
+        ),
+      ];
 
   /// No pre-loaded artist playlists.
   static List<MusicPlaylist> get initialPlaylists => [];

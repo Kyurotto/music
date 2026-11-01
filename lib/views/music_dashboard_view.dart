@@ -16,6 +16,7 @@ import '../widgets/song_artwork_widget.dart';
 import '../services/display_rate_service.dart';
 import 'settings_view.dart';
 import 'discovery_sections.dart';
+import 'playlist_screen.dart';
 import '../services/discovery_service.dart';
 
 class MusicDashboardView extends StatefulWidget {
@@ -128,10 +129,6 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
       _selectedPlaylistId = playlistId;
       _controller.setNavIndex(2);
     });
-  }
-
-  void _selectPlaylist(String playlistId) {
-    setState(() => _selectedPlaylistId = playlistId);
   }
 
   void _playSongWithLyrics(Song song) {
@@ -247,7 +244,8 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                   ),
                   title: Text(playlist.title),
                   subtitle: Text('${playlist.trackCount} songs'),
-                  trailing: playlist.songIds.contains(song.id)
+                  trailing: (playlist.songIds.contains(song.id) ||
+                          _controller.songsForPlaylist(playlist.id).any((s) => MusicPlayerController.isSameSong(s, song)))
                       ? const Icon(Icons.check_rounded, color: AppTheme.primary)
                       : const Icon(Icons.add_rounded),
                   onTap: () => Navigator.of(sheetContext).pop(playlist),
@@ -264,6 +262,10 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
       if (added && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Added to ${selectedPlaylist.title}.')),
+        );
+      } else if (!added && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('"${song.title}" is already in ${selectedPlaylist.title}.')),
         );
       }
     }
@@ -522,7 +524,11 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                                     horizontal: isMobile ? 16 : 28,
                                     vertical: 20,
                                   ),
-                                  child: _buildCurrentTabContent(isMobile),
+                                  child: ListenableBuilder(
+                                    listenable: _controller,
+                                    builder: (context, _) =>
+                                        _buildCurrentTabContent(isMobile),
+                                  ),
                                 ),
                               ),
                             ),
@@ -796,9 +802,16 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                 return AlbumCard(
                   playlist: playlist,
                   isSelected: playlist.id == _selectedPlaylistId,
-                  // Stay on the dashboard: the detail opens inline above.
-                  onTap: () => _selectPlaylist(playlist.id),
+                  onTap: () {
+                    Navigator.of(context).push(
+                      PlaylistScreen.route(
+                        playlist: playlist,
+                        controller: _controller,
+                      ),
+                    );
+                  },
                   onPlay: () => _playPlaylistWithLyrics(playlist.id),
+                  onDelete: () => _confirmDeletePlaylist(playlist),
                 );
               },
             ),
@@ -829,6 +842,7 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
             controller: _controller,
             onSongTap: _playSongWithLyrics,
             onAddToPlaylist: _showAddToPlaylistSheet,
+            onDelete: (song) => _confirmDeleteSong(song),
           ),
         ),
       ],
@@ -902,6 +916,18 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                           ],
                         ),
                       ),
+                      IconButton(
+                        icon: const Icon(
+                          Icons.delete_outline_rounded,
+                          size: 18,
+                          color: AppTheme.textMuted,
+                        ),
+                        tooltip: 'Delete song',
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                        onPressed: () => _confirmDeleteSong(song),
+                      ),
+                      const SizedBox(width: 4),
                       Container(
                         width: 32,
                         height: 32,
@@ -965,7 +991,14 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
               return AlbumCard(
                 playlist: playlist,
                 isSelected: playlist.id == _selectedPlaylistId,
-                onTap: () => _openPlaylist(playlist.id),
+                onTap: () {
+                  Navigator.of(context).push(
+                    PlaylistScreen.route(
+                      playlist: playlist,
+                      controller: _controller,
+                    ),
+                  );
+                },
                 onPlay: () => _playPlaylistWithLyrics(playlist.id),
               );
             },
@@ -1083,7 +1116,14 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
               return AlbumCard(
                 playlist: playlist,
                 isSelected: playlist.id == _selectedPlaylistId,
-                onTap: () => _selectPlaylist(playlist.id),
+                onTap: () {
+                  Navigator.of(context).push(
+                    PlaylistScreen.route(
+                      playlist: playlist,
+                      controller: _controller,
+                    ),
+                  );
+                },
                 onPlay: () => _playPlaylistWithLyrics(playlist.id),
                 onDelete: () => _confirmDeletePlaylist(playlist),
               );

@@ -61,79 +61,83 @@ class TrackListView extends StatelessWidget {
 
         return Column(
           children: [
-            // Table Header
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Row(
-                children: [
-                  const SizedBox(
-                    width: 32,
-                    child: Text(
-                      '#',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: AppTheme.textMuted,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  const Expanded(
-                    flex: 4,
-                    child: Text(
-                      'TITLE',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: AppTheme.textMuted,
-                        letterSpacing: 1.0,
-                      ),
-                    ),
-                  ),
-                  if (showAlbum)
-                    const Expanded(
-                      flex: 3,
-                      child: Text(
-                        'ALBUM',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                          color: AppTheme.textMuted,
-                          letterSpacing: 1.0,
-                        ),
-                      ),
-                    ),
-                  if (showPlays)
+            // Table Header (desktop / wide screens only)
+            if (!isCompact) ...[
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Row(
+                  children: [
                     const SizedBox(
-                      width: 90,
+                      width: 32,
                       child: Text(
-                        'PLAYS',
+                        '#',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: AppTheme.textMuted,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    const SizedBox(width: 44), // Artwork column spacer
+                    const SizedBox(width: 14),
+                    const Expanded(
+                      flex: 4,
+                      child: Text(
+                        'TITLE',
                         style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.bold,
                           color: AppTheme.textMuted,
                           letterSpacing: 1.0,
                         ),
-                        textAlign: TextAlign.right,
                       ),
                     ),
-                  const SizedBox(
-                    width: 70,
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
-                        Icon(Icons.access_time_rounded,
-                            size: 14, color: AppTheme.textMuted),
-                      ],
+                    if (showAlbum)
+                      const Expanded(
+                        flex: 3,
+                        child: Text(
+                          'ALBUM',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: AppTheme.textMuted,
+                            letterSpacing: 1.0,
+                          ),
+                        ),
+                      ),
+                    if (showPlays)
+                      const SizedBox(
+                        width: 90,
+                        child: Text(
+                          'PLAYS',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: AppTheme.textMuted,
+                            letterSpacing: 1.0,
+                          ),
+                          textAlign: TextAlign.right,
+                        ),
+                      ),
+                    const SizedBox(
+                      width: 70,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          Icon(Icons.access_time_rounded,
+                              size: 14, color: AppTheme.textMuted),
+                        ],
+                      ),
                     ),
-                  ),
-                  // Spacer matching the action buttons area
-                  const SizedBox(width: 36),
-                ],
+                    // Spacer matching the action buttons area
+                    const SizedBox(width: 72),
+                  ],
+                ),
               ),
-            ),
-            const Divider(height: 1),
+              const Divider(height: 1),
+            ],
 
             // Track Rows
             ListView.builder(
@@ -243,37 +247,39 @@ class _TrackRowState extends State<_TrackRow> {
             ),
             child: Row(
               children: [
-                // Track number or play indicator
-                SizedBox(
-                  width: 32,
-                  child: Center(
-                    child: widget.isPlaying
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: AnimatedVisualizer(
-                              isPlaying: true,
-                              barCount: 4,
-                              maxHeight: 16,
-                              barWidth: 2,
-                            ),
-                          )
-                        : (_isHovered
-                            ? const Icon(Icons.play_arrow_rounded,
-                                size: 18, color: AppTheme.textPrimary)
-                            : Text(
-                                '${widget.index}',
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w500,
-                                  color: widget.isCurrent
-                                      ? AppTheme.primary
-                                      : AppTheme.textMuted,
-                                ),
-                              )),
+                // Track number or play indicator (desktop / wide screens only)
+                if (!widget.isCompact) ...[
+                  SizedBox(
+                    width: 32,
+                    child: Center(
+                      child: widget.isPlaying
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: AnimatedVisualizer(
+                                isPlaying: true,
+                                barCount: 4,
+                                maxHeight: 16,
+                                barWidth: 2,
+                              ),
+                            )
+                          : (_isHovered
+                              ? const Icon(Icons.play_arrow_rounded,
+                                  size: 18, color: AppTheme.textPrimary)
+                              : Text(
+                                  '${widget.index}',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w500,
+                                    color: widget.isCurrent
+                                        ? AppTheme.primary
+                                        : AppTheme.textMuted,
+                                  ),
+                                )),
+                    ),
                   ),
-                ),
-                const SizedBox(width: 12),
+                  const SizedBox(width: 12),
+                ],
 
                 // Artwork Thumbnail
                 SongArtworkWidget(
@@ -283,7 +289,7 @@ class _TrackRowState extends State<_TrackRow> {
                 ),
                 const SizedBox(width: 14),
 
-                // Title & Artist
+                // Title & Artist with inline indicator
                 Expanded(
                   flex: 4,
                   child: Column(
@@ -303,72 +309,23 @@ class _TrackRowState extends State<_TrackRow> {
                         overflow: TextOverflow.ellipsis,
                       ),
                       const SizedBox(height: 3),
-                      Text(
-                        widget.song.artist,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: AppTheme.textSecondary,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      if (widget.song.isPreview ||
-                          widget.song.isSilentPlaceholder ||
-                          widget.song.isFullTrack) ...[
-                        const SizedBox(height: 4),
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Flexible(
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 6, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: widget.song.hasAudio
-                                      ? AppTheme.accentGreen
-                                          .withValues(alpha: 0.15)
-                                      : AppTheme.accentPink
-                                          .withValues(alpha: 0.15),
-                                  borderRadius: BorderRadius.circular(6),
-                                  border: Border.all(
-                                    color: widget.song.hasAudio
-                                        ? AppTheme.accentGreen
-                                            .withValues(alpha: 0.4)
-                                        : AppTheme.accentPink
-                                            .withValues(alpha: 0.4),
-                                  ),
-                                ),
-                                child: Text(
-                                  widget.song.isFullTrack
-                                      ? 'FULL TRACK'
-                                      : widget.song.hasAudio
-                                          ? 'PREVIEW'
-                                          : 'LOCATING AUDIO',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  softWrap: false,
-                                  style: TextStyle(
-                                    fontSize: 9,
-                                    fontWeight: FontWeight.w800,
-                                    letterSpacing: 0.6,
-                                    color: widget.song.hasAudio
-                                        ? AppTheme.accentGreen
-                                        : AppTheme.accentPink,
-                                  ),
-                                ),
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              widget.song.artist,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: AppTheme.textSecondary,
                               ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                             ),
-                            if (widget.song.lyrics.isEmpty) ...[
-                              const SizedBox(width: 6),
-                              const Icon(
-                                Icons.lyrics_outlined,
-                                size: 13,
-                                color: AppTheme.textMuted,
-                              ),
-                            ],
-                          ],
-                        ),
-                      ],
+                          ),
+                          const SizedBox(width: 6),
+                          _buildInlineBadge(widget.song),
+                        ],
+                      ),
                     ],
                   ),
                 ),
@@ -408,16 +365,17 @@ class _TrackRowState extends State<_TrackRow> {
 
                 // Duration
                 SizedBox(
-                  width: 70,
+                  width: widget.isCompact ? 50 : 70,
                   child: Text(
                     widget.song.formattedDuration,
                     style: const TextStyle(
-                      fontSize: 13,
+                      fontSize: 12.5,
                       color: AppTheme.textMuted,
                     ),
                     textAlign: TextAlign.right,
                   ),
                 ),
+                const SizedBox(width: 4),
 
                 // Action buttons — mainAxisSize.min prevents any overflow
                 Row(
@@ -427,7 +385,7 @@ class _TrackRowState extends State<_TrackRow> {
                       onTap: widget.onLikeToggle,
                       borderRadius: BorderRadius.circular(20),
                       child: Padding(
-                        padding: const EdgeInsets.all(6),
+                        padding: const EdgeInsets.all(5),
                         child: Icon(
                           widget.song.isLiked
                               ? Icons.favorite_rounded
@@ -444,7 +402,7 @@ class _TrackRowState extends State<_TrackRow> {
                         onTap: widget.onAddToPlaylist,
                         borderRadius: BorderRadius.circular(20),
                         child: const Padding(
-                          padding: EdgeInsets.all(6),
+                          padding: EdgeInsets.all(5),
                           child: Icon(
                             Icons.playlist_add_rounded,
                             size: 19,
@@ -457,7 +415,7 @@ class _TrackRowState extends State<_TrackRow> {
                         onTap: widget.onDelete,
                         borderRadius: BorderRadius.circular(20),
                         child: const Padding(
-                          padding: EdgeInsets.all(6),
+                          padding: EdgeInsets.all(5),
                           child: Icon(
                             Icons.delete_outline_rounded,
                             size: 18,
@@ -473,5 +431,92 @@ class _TrackRowState extends State<_TrackRow> {
         ),
       ),
     );
+  }
+
+  Widget _buildInlineBadge(Song song) {
+    if (!song.hasAudio) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+        decoration: BoxDecoration(
+          color: AppTheme.accentPink.withValues(alpha: 0.15),
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(
+            color: AppTheme.accentPink.withValues(alpha: 0.4),
+            width: 1,
+          ),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 7,
+              height: 7,
+              child: CircularProgressIndicator(
+                strokeWidth: 1.5,
+                color: AppTheme.accentPink,
+              ),
+            ),
+            SizedBox(width: 4),
+            Text(
+              'LOCATING AUDIO',
+              style: TextStyle(
+                fontSize: 8.5,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 0.4,
+                color: AppTheme.accentPink,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (song.isFullTrack) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+        decoration: BoxDecoration(
+          color: AppTheme.accentGreen.withValues(alpha: 0.15),
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(
+            color: AppTheme.accentGreen.withValues(alpha: 0.5),
+            width: 1,
+          ),
+        ),
+        child: const Text(
+          'FULL TRACK',
+          style: TextStyle(
+            fontSize: 8.5,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 0.4,
+            color: AppTheme.accentGreen,
+          ),
+        ),
+      );
+    }
+
+    if (song.isPreview) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+        decoration: BoxDecoration(
+          color: Colors.amber.withValues(alpha: 0.15),
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(
+            color: Colors.amber.withValues(alpha: 0.5),
+            width: 1,
+          ),
+        ),
+        child: const Text(
+          'PREVIEW',
+          style: TextStyle(
+            fontSize: 8.5,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 0.4,
+            color: Colors.amber,
+          ),
+        ),
+      );
+    }
+
+    return const SizedBox.shrink();
   }
 }

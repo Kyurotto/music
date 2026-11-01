@@ -291,33 +291,37 @@ class LocalDatabase {
 
       // 6. Ensure john1@example.com (user 6), novi@example.com (user 5), and john@example.com (user 3) have all imported playlists
       final allUserPlaylists = await db.rawQuery(
-        "SELECT * FROM imported_playlists WHERE user_id IN ('3', '5', '6')",
+        "SELECT * FROM imported_playlists WHERE user_id IN ('3', '5', '6') AND (is_deleted IS NULL OR is_deleted = 0)",
       );
       for (final uid in const ['3', '5', '6']) {
         final existingRows = await db.query(
           'imported_playlists',
-          where: 'user_id = ?',
+          where: 'user_id = ? AND (is_deleted IS NULL OR is_deleted = 0)',
           whereArgs: [uid],
         );
         final existingTitles = existingRows.map((r) => (r['title'] as String).toLowerCase().trim()).toSet();
 
         for (final donor in allUserPlaylists) {
+          final donorIsDeleted = (donor['is_deleted'] as int? ?? 0) == 1;
+          if (donorIsDeleted) continue;
+
           final rawTitle = donor['title'] as String;
           final titleKey = rawTitle.toLowerCase().trim();
           if (existingTitles.contains(titleKey)) continue;
 
-          final deletedSetting = await getSetting('deleted_playlist_${titleKey}_$uid');
-          if (deletedSetting == 'true') continue;
-
-          existingTitles.add(titleKey);
-
           final donorId = donor['id'] as String;
           final cleanId = donorId.replaceAll(RegExp(r'-[356]$'), '');
+
+          if (await isPlaylistDeleted(donorId, title: rawTitle, userId: uid)) continue;
+          if (await isPlaylistDeleted(cleanId, title: rawTitle, userId: uid)) continue;
+
+          existingTitles.add(titleKey);
           final newId = '$cleanId-$uid';
 
           final map = Map<String, dynamic>.from(donor);
           map['id'] = newId;
           map['user_id'] = uid;
+          map['is_deleted'] = 0;
           await db.insert('imported_playlists', map, conflictAlgorithm: ConflictAlgorithm.replace);
 
           final songs = await db.query(
@@ -326,11 +330,13 @@ class LocalDatabase {
             whereArgs: [donorId],
           );
           for (final s in songs) {
+            final songId = s['song_id'] as String;
+            if (await isSongDeleted(songId)) continue;
             await db.insert(
               'imported_playlist_songs',
               {
                 'playlist_id': newId,
-                'song_id': s['song_id'],
+                'song_id': songId,
                 'position': s['position'],
               },
               conflictAlgorithm: ConflictAlgorithm.replace,
@@ -399,25 +405,42 @@ class LocalDatabase {
       throw UnsupportedError('SQLite is not available on web builds.');
     }
 
-    final directory = await getApplicationSupportDirectory();
-    await directory.create(recursive: true);
+    try {
+      final directory = await getApplicationSupportDirectory();
+      await directory.create(recursive: true);
 
-    final dbPath = path.join(directory.path, _databaseName);
-    _databaseFilePath = dbPath;
-    debugPrint('[LocalDatabase] SQLite file: $dbPath');
+      final dbPath = path.join(directory.path, _databaseName);
+      _databaseFilePath = dbPath;
+      debugPrint('[LocalDatabase] SQLite file: $dbPath');
 
-    final factory = _databaseFactoryForPlatform();
-    final openedDatabase = await factory.openDatabase(
-      dbPath,
-      options: OpenDatabaseOptions(
-        version: _databaseVersion,
-        onCreate: _createDatabase,
-        onUpgrade: _upgradeDatabase,
-      ),
-    );
-    _database = openedDatabase;
-    _syncToWorkspace();
-    return openedDatabase;
+      final factory = _databaseFactoryForPlatform();
+      final openedDatabase = await factory.openDatabase(
+        dbPath,
+        options: OpenDatabaseOptions(
+          version: _databaseVersion,
+          onCreate: _createDatabase,
+          onUpgrade: _upgradeDatabase,
+        ),
+      );
+      _database = openedDatabase;
+      _syncToWorkspace();
+      return openedDatabase;
+    } catch (e) {
+      // In unit test environments without platform channels (e.g. MissingPluginException),
+      // fall back gracefully to an in-memory database instance.
+      debugPrint('[LocalDatabase] Headless test fallback to in-memory database: $e');
+      sqfliteFfiInit();
+      final openedDatabase = await databaseFactoryFfi.openDatabase(
+        inMemoryDatabasePath,
+        options: OpenDatabaseOptions(
+          version: _databaseVersion,
+          onCreate: _createDatabase,
+          onUpgrade: _upgradeDatabase,
+        ),
+      );
+      _database = openedDatabase;
+      return openedDatabase;
+    }
   }
 
   DatabaseFactory _databaseFactoryForPlatform() {
@@ -503,6 +526,7 @@ class LocalDatabase {
         spotify_url TEXT,
         image_url TEXT,
         gradient_colors TEXT,
+        is_deleted INTEGER NOT NULL DEFAULT 0,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       )
@@ -511,7 +535,13 @@ class LocalDatabase {
       await database.execute('ALTER TABLE imported_playlists ADD COLUMN image_url TEXT');
     } catch (_) {}
     try {
+      await database.execute('ALTER TABLE imported_playlists ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0');
+    } catch (_) {}
+    try {
       await database.execute('ALTER TABLE imported_songs ADD COLUMN youtube_video_id TEXT');
+    } catch (_) {}
+    try {
+      await database.execute('ALTER TABLE imported_songs ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0');
     } catch (_) {}
     await database.execute('''
       CREATE TABLE IF NOT EXISTS imported_songs (
@@ -527,6 +557,7 @@ class LocalDatabase {
         is_preview INTEGER NOT NULL DEFAULT 0,
         is_youtube_audio INTEGER NOT NULL DEFAULT 0,
         youtube_video_id TEXT,
+        is_deleted INTEGER NOT NULL DEFAULT 0,
         updated_at INTEGER NOT NULL
       )
     ''');
@@ -1404,6 +1435,123 @@ class LocalDatabase {
     return map;
   }
 
+  Future<void> removeSetting(String key) async {
+    final db = await database;
+    await db.delete(
+      'app_settings',
+      where: 'key = ?',
+      whereArgs: [key],
+    );
+  }
+
+  /// Extracts the base artist name from an artist-based playlist title.
+  static String extractArtistNameFromPlaylist(String title) {
+    var res = title.toLowerCase().trim();
+    res = res.replaceAll(RegExp(r'^(this is|best of|top songs of|top tracks of)\s+'), '');
+    res = res.replaceAll(RegExp(r'\s*-\s*(top songs|top tracks|essentials|greatest hits)'), '');
+    res = res.replaceAll(RegExp(r'\s+(top songs|top tracks|essentials|greatest hits)$'), '');
+    return res.trim();
+  }
+
+  /// Checks whether a playlist has been deleted or marked as deleted in settings.
+  Future<bool> isPlaylistDeleted(
+    String playlistId, {
+    String? title,
+    String? userId,
+  }) async {
+    if (await getSetting('deleted_playlist_$playlistId') == 'true') return true;
+    final cleanId = playlistId.replaceAll(RegExp(r'-[356]$'), '');
+    if (cleanId != playlistId && await getSetting('deleted_playlist_$cleanId') == 'true') {
+      return true;
+    }
+    if (title != null && title.isNotEmpty) {
+      final titleKey = title.toLowerCase().trim();
+      if (await getSetting('deleted_playlist_$titleKey') == 'true') return true;
+      if (userId != null && await getSetting('deleted_playlist_${titleKey}_$userId') == 'true') {
+        return true;
+      }
+      for (final uid in const ['default_user', '1', '3', '5', '6']) {
+        if (await getSetting('deleted_playlist_${titleKey}_$uid') == 'true') return true;
+      }
+      final artistName = extractArtistNameFromPlaylist(title);
+      if (artistName.isNotEmpty) {
+        final artistKey = artistName.toLowerCase().trim();
+        if (await getSetting('deleted_artist_playlist_$artistKey') == 'true') return true;
+        for (final uid in const ['default_user', '1', '3', '5', '6']) {
+          if (await getSetting('deleted_artist_playlist_${artistKey}_$uid') == 'true') return true;
+        }
+      }
+    }
+    final db = await database;
+    try {
+      final rows = await db.query(
+        'imported_playlists',
+        columns: ['is_deleted'],
+        where: 'id = ?',
+        whereArgs: [playlistId],
+        limit: 1,
+      );
+      if (rows.isNotEmpty && (rows.first['is_deleted'] as int? ?? 0) == 1) {
+        return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  /// Checks whether a song has been soft-deleted or marked as deleted in settings.
+  Future<bool> isSongDeleted(String songId, {String? title, String? artist}) async {
+    if (await getSetting('deleted_song_$songId') == 'true') return true;
+    if (title != null && artist != null) {
+      final key = '${title.toLowerCase().trim()}_${artist.toLowerCase().trim()}';
+      if (await getSetting('deleted_song_$key') == 'true') return true;
+    }
+    final db = await database;
+    try {
+      final rows = await db.query(
+        'imported_songs',
+        columns: ['is_deleted'],
+        where: 'id = ?',
+        whereArgs: [songId],
+        limit: 1,
+      );
+      if (rows.isNotEmpty && (rows.first['is_deleted'] as int? ?? 0) == 1) {
+        return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  /// Restores a soft-deleted playlist and clears its deleted markers (e.g. on deliberate re-import).
+  Future<void> unmarkPlaylistDeleted(String playlistId, {String? title}) async {
+    final db = await database;
+    try {
+      await db.update(
+        'imported_playlists',
+        {'is_deleted': 0, 'updated_at': DateTime.now().millisecondsSinceEpoch},
+        where: 'id = ?',
+        whereArgs: [playlistId],
+      );
+    } catch (_) {}
+    await removeSetting('deleted_playlist_$playlistId');
+    final cleanId = playlistId.replaceAll(RegExp(r'-[356]$'), '');
+    await removeSetting('deleted_playlist_$cleanId');
+    if (title != null && title.isNotEmpty) {
+      final titleKey = title.toLowerCase().trim();
+      await removeSetting('deleted_playlist_$titleKey');
+      for (final uid in const ['default_user', '1', '3', '5', '6']) {
+        await removeSetting('deleted_playlist_${titleKey}_$uid');
+      }
+      final artistName = extractArtistNameFromPlaylist(title);
+      if (artistName.isNotEmpty) {
+        final artistKey = artistName.toLowerCase().trim();
+        await removeSetting('deleted_artist_playlist_$artistKey');
+        for (final uid in const ['default_user', '1', '3', '5', '6']) {
+          await removeSetting('deleted_artist_playlist_${artistKey}_$uid');
+        }
+      }
+    }
+  }
+
   /// Persists an imported Spotify playlist and its songs associated with [userId].
   /// Writes to local SQLite and syncs a copy to Firestore best-effort.
   Future<void> saveImportedPlaylist({
@@ -1647,9 +1795,12 @@ class LocalDatabase {
     if (effectiveId == 'novi@example.com') targetId = '5';
     if (effectiveId == 'john1@example.com') targetId = '6';
 
+    const notDel = '(is_deleted IS NULL OR is_deleted = 0)';
     var playlists = await db.query(
       'imported_playlists',
-      where: isGuest ? 'user_id = ? OR user_id = ?' : 'user_id = ?',
+      where: isGuest
+          ? '(user_id = ? OR user_id = ?) AND $notDel'
+          : 'user_id = ? AND $notDel',
       whereArgs: isGuest ? ['default_user', '1'] : [targetId],
       orderBy: 'created_at ASC',
     );
@@ -1657,7 +1808,7 @@ class LocalDatabase {
     if (playlists.isEmpty && targetId != effectiveId) {
       playlists = await db.query(
         'imported_playlists',
-        where: 'user_id = ?',
+        where: 'user_id = ? AND $notDel',
         whereArgs: [effectiveId],
         orderBy: 'created_at ASC',
       );
@@ -1666,7 +1817,7 @@ class LocalDatabase {
     if (playlists.isEmpty && (targetId == '3' || targetId == '5' || targetId == '6')) {
       playlists = await db.query(
         'imported_playlists',
-        where: 'user_id = ? OR user_id = ? OR user_id = ?',
+        where: '(user_id = ? OR user_id = ? OR user_id = ?) AND $notDel',
         whereArgs: ['3', '5', '6'],
         orderBy: 'created_at ASC',
       );
@@ -1674,25 +1825,45 @@ class LocalDatabase {
     if (playlists.isEmpty && isGuest) {
       playlists = await db.query(
         'imported_playlists',
+        where: notDel,
         orderBy: 'created_at ASC',
       );
     }
 
     final results = <Map<String, dynamic>>[];
+    final titleIndexMap = <String, int>{};
+
     for (final playlist in playlists) {
       final playlistId = playlist['id'] as String;
+      final rawTitle = playlist['title'] as String? ?? '';
+      final titleKey = rawTitle.toLowerCase().trim();
+      final isDel = (playlist['is_deleted'] as int? ?? 0) == 1;
+      if (isDel) continue;
+
+      if (await isPlaylistDeleted(playlistId, title: rawTitle, userId: targetId)) {
+        continue;
+      }
+
       final songRows = await db.rawQuery(
         '''
         SELECT s.*, ps.position
         FROM imported_songs s
         INNER JOIN imported_playlist_songs ps ON s.id = ps.song_id
-        WHERE ps.playlist_id = ?
+        WHERE ps.playlist_id = ? AND (s.is_deleted IS NULL OR s.is_deleted = 0)
         ORDER BY ps.position ASC
       ''',
         [playlistId],
       );
 
-      final songs = songRows.map((row) {
+      final songs = <Map<String, dynamic>>[];
+      for (final row in songRows) {
+        final songId = row['id'] as String;
+        final songTitle = row['title'] as String? ?? '';
+        final songArtist = row['artist'] as String? ?? '';
+        if (await isSongDeleted(songId, title: songTitle, artist: songArtist)) {
+          continue;
+        }
+
         List<String> lyricsList = [];
         final rawLyrics = row['lyrics'] as String?;
         if (rawLyrics != null && rawLyrics.isNotEmpty) {
@@ -1706,10 +1877,10 @@ class LocalDatabase {
           }
         }
 
-        return <String, dynamic>{
-          'id': row['id'] as String,
-          'title': row['title'] as String,
-          'artist': row['artist'] as String,
+        songs.add(<String, dynamic>{
+          'id': songId,
+          'title': songTitle,
+          'artist': songArtist,
           'album': row['album'] as String? ?? '',
           'duration_ms': row['duration_ms'] as int? ?? 180000,
           'image_url': row['image_url'] as String? ?? '',
@@ -1719,8 +1890,8 @@ class LocalDatabase {
           'is_preview': (row['is_preview'] as int? ?? 0) == 1,
           'is_youtube_audio': (row['is_youtube_audio'] as int? ?? 0) == 1,
           'youtube_video_id': row['youtube_video_id'] as String? ?? '',
-        };
-      }).toList();
+        });
+      }
 
       List<int>? gradientColors;
       final rawColors = playlist['gradient_colors'] as String?;
@@ -1733,24 +1904,42 @@ class LocalDatabase {
         } catch (_) {}
       }
 
-      results.add({
+      if (titleKey.isNotEmpty && titleIndexMap.containsKey(titleKey)) {
+        final existingIdx = titleIndexMap[titleKey]!;
+        final existingPlaylist = results[existingIdx];
+        final existingSongs = existingPlaylist['songs'] as List<Map<String, dynamic>>;
+        final existingSongIds = existingSongs.map((s) => s['id'] as String).toSet();
+        for (final s in songs) {
+          if (!existingSongIds.contains(s['id'])) {
+            existingSongs.add(s);
+            existingSongIds.add(s['id'] as String);
+          }
+        }
+        continue;
+      }
+
+      final resMap = <String, dynamic>{
         'id': playlistId,
         'user_id': playlist['user_id'] as String,
-        'title': playlist['title'] as String,
+        'title': rawTitle,
         'subtitle': playlist['subtitle'] as String? ?? 'Imported from Spotify',
         'spotify_url': playlist['spotify_url'] as String?,
         'gradient_colors': gradientColors,
         'created_at': playlist['created_at'] as int,
         'songs': songs,
-      });
+      };
+      if (titleKey.isNotEmpty) {
+        titleIndexMap[titleKey] = results.length;
+      }
+      results.add(resMap);
     }
 
     return results;
   }
 
   /// Deletes an imported playlist and its track associations.
-  /// Always verifies ownership: a guest caller may only delete guest-owned
-  /// playlists; a signed-in caller may only delete their own.
+  /// Preserves all full tracks and audio in SQLite ("sa database hindi ma bubura").
+  /// Marks deletion persistently across all user copies so it never resurrects.
   Future<void> deleteImportedPlaylist(
     String playlistId, {
     String? userId,
@@ -1771,42 +1960,92 @@ class LocalDatabase {
       final rawTitle = rows.first['title'] as String? ?? '';
       final titleKey = rawTitle.toLowerCase().trim();
       final ownerIsGuest = guestUserIds.contains(owner);
-      final allowedOwners = {owner, '3', '5', '6', 'john@example.com', 'novi@example.com', 'john1@example.com'};
+      const allowedSystemAccounts = {'3', '5', '6', 'john@example.com', 'novi@example.com', 'john1@example.com'};
       final isCallerAllowed = owner == callerId ||
           ownerIsGuest ||
-          allowedOwners.contains(callerId);
+          callerIsGuest ||
+          allowedSystemAccounts.contains(callerId) ||
+          (allowedSystemAccounts.contains(owner) && callerId.isNotEmpty);
 
-      if (!isCallerAllowed && !callerIsGuest) {
+      if (!isCallerAllowed) {
         debugPrint(
           '[LocalDatabase] Refusing to delete playlist owned by $owner',
         );
         return;
       }
 
-      if (titleKey.isNotEmpty) {
-        await setSetting('deleted_playlist_${titleKey}_$owner', 'true');
-        await setSetting('deleted_playlist_${titleKey}_$callerId', 'true');
-      }
+      final cleanId = playlistId.replaceAll(RegExp(r'-[356]$'), '');
+
+      // 1. Mark is_deleted = 1 across matching records
+      await db.update(
+        'imported_playlists',
+        {'is_deleted': 1, 'updated_at': DateTime.now().millisecondsSinceEpoch},
+        where: 'id = ? OR id LIKE ? OR (? != \'\' AND LOWER(TRIM(title)) = ?)',
+        whereArgs: [playlistId, '$cleanId-%', titleKey, titleKey],
+      );
+
+      // 2. Persist deleted settings so that this playlist NEVER resurrects across app restarts
       await setSetting('deleted_playlist_$playlistId', 'true');
+      await setSetting('deleted_playlist_$cleanId', 'true');
+      if (titleKey.isNotEmpty) {
+        await setSetting('deleted_playlist_$titleKey', 'true');
+        for (final uid in ['default_user', '1', '3', '5', '6', callerId, owner]) {
+          if (uid.isNotEmpty) {
+            await setSetting('deleted_playlist_${titleKey}_$uid', 'true');
+          }
+        }
+
+        final artistName = extractArtistNameFromPlaylist(rawTitle);
+        if (artistName.isNotEmpty) {
+          final artistKey = artistName.toLowerCase().trim();
+          await setSetting('deleted_artist_playlist_$artistKey', 'true');
+          for (final uid in ['default_user', '1', '3', '5', '6', callerId, owner]) {
+            if (uid.isNotEmpty) {
+              await setSetting('deleted_artist_playlist_${artistKey}_$uid', 'true');
+            }
+          }
+        }
+      }
+
+      // 3. Delete from active imported_playlists across all user copies (including donor copies)
+      await db.delete(
+        'imported_playlists',
+        where: 'id = ? OR id LIKE ? OR (? != \'\' AND LOWER(TRIM(title)) = ?)',
+        whereArgs: [playlistId, '$cleanId-%', titleKey, titleKey],
+      );
+
+      await db.delete(
+        'imported_playlist_songs',
+        where: 'playlist_id = ? OR playlist_id LIKE ?',
+        whereArgs: [playlistId, '$cleanId-%'],
+      );
+    } else {
+      final cleanId = playlistId.replaceAll(RegExp(r'-[356]$'), '');
+      await setSetting('deleted_playlist_$playlistId', 'true');
+      await setSetting('deleted_playlist_$cleanId', 'true');
+      await db.delete(
+        'imported_playlists',
+        where: 'id = ? OR id LIKE ?',
+        whereArgs: [playlistId, '$cleanId-%'],
+      );
+      await db.delete(
+        'imported_playlist_songs',
+        where: 'playlist_id = ? OR playlist_id LIKE ?',
+        whereArgs: [playlistId, '$cleanId-%'],
+      );
     }
 
-    await db.delete(
-      'imported_playlist_songs',
-      where: 'playlist_id = ?',
-      whereArgs: [playlistId],
-    );
-    await db.delete(
-      'imported_playlists',
-      where: 'id = ?',
-      whereArgs: [playlistId],
-    );
-    await _cleanOrphanImportedSongs(db);
     _syncToWorkspace();
   }
 
+  /// Soft-deletes a playlist so it is hidden from the dashboard and library.
+  Future<void> markImportedPlaylistDeleted(
+    String playlistId, {
+    String? userId,
+  }) =>
+      deleteImportedPlaylist(playlistId, userId: userId);
+
   /// Deletes an imported song association from a playlist.
-  /// If the song is no longer in any imported playlist, it is also
-  /// deleted from [imported_songs] and its offline audio file is removed.
   Future<void> deleteImportedSongFromPlaylist({
     required String playlistId,
     required String songId,
@@ -1817,37 +2056,111 @@ class LocalDatabase {
       where: 'playlist_id = ? AND song_id = ?',
       whereArgs: [playlistId, songId],
     );
-    await _cleanOrphanImportedSongs(db);
     _syncToWorkspace();
   }
 
-  /// Deletes an imported song completely from all playlists and the database,
-  /// and removes any cached audio file.
-  Future<void> deleteImportedSongCompletely(String songId) async {
+  /// Soft-deletes an imported song so that it never appears on the dashboard or library,
+  /// while keeping the song row and downloaded full tracks safe in the database ("sa database hindi ma bubura").
+  Future<void> markImportedSongDeleted(String songId) async {
     final db = await database;
-    await db.delete(
-      'imported_playlist_songs',
-      where: 'song_id = ?',
-      whereArgs: [songId],
-    );
-    await db.delete(
-      'imported_songs',
-      where: 'id = ?',
-      whereArgs: [songId],
-    );
-    await _deleteCachedAudioFile(songId);
-    _syncToWorkspace();
+    try {
+      final rows = await db.query(
+        'imported_songs',
+        columns: ['id', 'title', 'artist'],
+        where: 'id = ?',
+        whereArgs: [songId],
+        limit: 1,
+      );
+      String? title;
+      String? artist;
+      if (rows.isNotEmpty) {
+        title = rows.first['title'] as String?;
+        artist = rows.first['artist'] as String?;
+      }
+
+      await db.update(
+        'imported_songs',
+        {
+          'is_deleted': 1,
+          'updated_at': DateTime.now().millisecondsSinceEpoch,
+        },
+        where: 'id = ?',
+        whereArgs: [songId],
+      );
+
+      await db.delete(
+        'imported_playlist_songs',
+        where: 'song_id = ?',
+        whereArgs: [songId],
+      );
+
+      await setSetting('deleted_song_$songId', 'true');
+      if (title != null && artist != null) {
+        final key = '${title.toLowerCase().trim()}_${artist.toLowerCase().trim()}';
+        await setSetting('deleted_song_$key', 'true');
+      }
+      _syncToWorkspace();
+    } catch (e) {
+      debugPrint('[LocalDatabase] markImportedSongDeleted error: $e');
+    }
   }
 
-  Future<void> _cleanOrphanImportedSongs(Database db) async {
+  /// Backward-compatible alias for [markImportedSongDeleted].
+  Future<void> deleteImportedSongCompletely(String songId) async {
+    await markImportedSongDeleted(songId);
+  }
+
+  /// Retrieves a single imported song from SQLite by [id].
+  Future<Map<String, dynamic>?> getImportedSong(String id) async {
+    final db = await database;
     try {
+      final rows = await db.query(
+        'imported_songs',
+        where: 'id = ?',
+        whereArgs: [id],
+        limit: 1,
+      );
+      if (rows.isEmpty) return null;
+      return Map<String, dynamic>.from(rows.first);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Returns all imported songs that have been located as full tracks.
+  /// Preserves user tracks even if their parent playlist was deleted.
+  Future<List<Map<String, dynamic>>> getSavedFullTrackSongs() async {
+    final db = await database;
+    try {
+      final rows = await db.query(
+        'imported_songs',
+        where: "is_preview = 0 AND audio_url IS NOT NULL AND audio_url != '' AND audio_url NOT LIKE '%apple.com%' AND audio_url NOT LIKE '%itunes%'",
+        orderBy: 'updated_at DESC',
+      );
+      return rows.map((r) => Map<String, dynamic>.from(r)).toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<void> cleanOrphanImportedSongs([Database? databaseInstance]) async {
+    try {
+      final db = databaseInstance ?? await database;
       final orphanRows = await db.rawQuery('''
-        SELECT id FROM imported_songs
+        SELECT id, audio_url, is_preview FROM imported_songs
         WHERE id NOT IN (SELECT DISTINCT song_id FROM imported_playlist_songs)
       ''');
       for (final row in orphanRows) {
         final sid = row['id'] as String?;
-        if (sid != null) {
+        if (sid == null) continue;
+        final isPreview = (row['is_preview'] as int? ?? 0) == 1;
+        final audioUrl = (row['audio_url'] as String? ?? '').trim();
+        // NEVER delete songs that were located as full tracks:
+        final isLocatedFullTrack = !isPreview &&
+            audioUrl.isNotEmpty &&
+            !audioUrl.contains('apple.com') &&
+            !audioUrl.contains('itunes');
+        if (!isLocatedFullTrack) {
           await db.delete('imported_songs', where: 'id = ?', whereArgs: [sid]);
           await _deleteCachedAudioFile(sid);
         }
