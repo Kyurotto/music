@@ -84,6 +84,14 @@ class SpotifyImportService {
 
     if (raw.startsWith('spotify:')) {
       final parts = raw.split(':');
+      // Support Spotify radio / station URIs: spotify:station:playlist:<id>, spotify:station:artist:<id>
+      if (parts.length == 4 && parts[1].toLowerCase() == 'station') {
+        final type = _typeFrom(parts[2]);
+        final id = parts[3].trim();
+        if (type != null && _idPattern.hasMatch(id)) {
+          return SpotifyLink(type: type, id: id);
+        }
+      }
       if (parts.length != 3) return null;
       final type = _typeFrom(parts[1]);
       if (type == null) return null;
@@ -106,6 +114,12 @@ class SpotifyImportService {
       meaningful.add(segment);
     }
     if (meaningful.isNotEmpty && meaningful.first == 'embed') {
+      meaningful.removeAt(0);
+    }
+    // Support Spotify station / radio routes: /station/playlist/<id>, /station/artist/<id>, /radio/playlist/<id>
+    if (meaningful.isNotEmpty &&
+        (meaningful.first.toLowerCase() == 'station' ||
+            meaningful.first.toLowerCase() == 'radio')) {
       meaningful.removeAt(0);
     }
     if (meaningful.length != 2) return null;
@@ -189,7 +203,13 @@ class SpotifyImportService {
     }
 
     if (link.type == SpotifyLinkType.artist) {
-      return importArtistTopSongs(spotifyId: link.id);
+      try {
+        final entity = await _fetchEmbedEntity(link);
+        return _resultFromEntity(link, entity);
+      } catch (_) {
+        // Fall back to oEmbed + top song lookup if embed fetch fails
+        return importArtistTopSongs(spotifyId: link.id);
+      }
     }
 
     final entity = await _fetchEmbedEntity(link);
@@ -279,24 +299,51 @@ class SpotifyImportService {
 
   /// Finds the iTunes artist ID whose name best matches [name].
   Future<int?> _searchITunesArtistId(String name) async {
+    // 1. First search songs by this term. Count which artistId appears most
+    // frequently among songs whose artistName matches [name]. This guarantees
+    // we pick the famous/popular artist (e.g. OPM Adie with Paraluman/Mahika)
+    // rather than an obscure artist who happens to share the same name.
+    final songSearchUri = Uri.https('itunes.apple.com', '/search', {
+      'term': _cleanArtistQuery(name),
+      'media': 'music',
+      'entity': 'song',
+      'limit': '25',
+    });
+    final songDecoded = await _getJson(songSearchUri);
+    final songResults = songDecoded?['results'];
+    if (songResults is List && songResults.isNotEmpty) {
+      final counts = <int, int>{};
+      for (final item in songResults) {
+        if (item is! Map) continue;
+        final id = item['artistId'];
+        if (id is! int) continue;
+        final aName = (item['artistName']?.toString() ?? '').trim();
+        if (matchesArtist(aName, name)) {
+          counts[id] = (counts[id] ?? 0) + 1;
+        }
+      }
+      if (counts.isNotEmpty) {
+        int? topId;
+        var topCount = -1;
+        for (final entry in counts.entries) {
+          if (entry.value > topCount) {
+            topCount = entry.value;
+            topId = entry.key;
+          }
+        }
+        if (topId != null) return topId;
+      }
+    }
+
+    // 2. Fall back to standard artist search
     final uri = Uri.https('itunes.apple.com', '/search', {
       'term': _cleanArtistQuery(name),
       'media': 'music',
       'entity': 'musicArtist',
-      'limit': '6',
+      'limit': '10',
     });
     Map<String, dynamic>? decoded = await _getJson(uri);
     var results = decoded?['results'];
-    if (results is! List || results.isEmpty) {
-      final fallbackUri = Uri.https('itunes.apple.com', '/search', {
-        'term': _cleanArtistQuery(name),
-        'media': 'music',
-        'entity': 'song',
-        'limit': '6',
-      });
-      decoded = await _getJson(fallbackUri);
-      results = decoded?['results'];
-    }
     if (results is! List || results.isEmpty) return null;
 
     final want = _normalizeName(name);
@@ -313,6 +360,8 @@ class SpotifyImportService {
       var score = 0;
       if (hitName == want) {
         score = 3;
+      } else if (matchesArtist(item['artistName']?.toString() ?? '', name)) {
+        score = 2;
       } else if (hitName.contains(want) || want.contains(hitName)) {
         score = 1;
       } else {
@@ -352,14 +401,20 @@ class SpotifyImportService {
       }
       final title = (item['trackName']?.toString() ?? '').trim();
       if (title.isEmpty) continue;
+      final rawArtist = (item['artistName']?.toString() ?? '').trim();
+      final trackArtist = rawArtist.isEmpty ? artistName : rawArtist;
+
+      // Strictly enforce artist match: only songs by or featuring the target artist!
+      if (!matchesArtist(trackArtist, artistName)) {
+        continue;
+      }
+
       final trackId = item['trackId'];
       final preview = item['previewUrl'];
       tracks.add(SpotifyImportedTrack(
         spotifyId: trackId is int ? 'itunes-$trackId' : _fallbackTrackId(title, artistName),
         title: title,
-        artist: (item['artistName']?.toString() ?? '').trim().isEmpty
-            ? artistName
-            : (item['artistName'] as String).trim(),
+        artist: trackArtist,
         album: (item['collectionName']?.toString() ?? '').trim(),
         duration: _durationFromTrackMillis(item['trackTimeMillis']),
         previewUrl: preview is String ? preview : '',
@@ -368,6 +423,32 @@ class SpotifyImportService {
       if (tracks.length >= clamped) break;
     }
     return tracks;
+  }
+
+  /// Checks whether [trackArtist] includes [targetArtist] as a primary or
+  /// collaborating artist.
+  static bool matchesArtist(String trackArtist, String targetArtist) {
+    final normTrack = _normalizeName(trackArtist);
+    final normTarget = _normalizeName(targetArtist);
+    if (normTrack.isEmpty || normTarget.isEmpty) return false;
+    if (normTrack == normTarget) return true;
+
+    final parts = trackArtist
+        .split(RegExp(r'[,&/]|(\b(and|feat|ft|with|featuring)\b)', caseSensitive: false))
+        .map((p) => _normalizeName(p))
+        .where((p) => p.isNotEmpty);
+
+    for (final part in parts) {
+      if (part == normTarget) return true;
+      if (part.startsWith('$normTarget ') ||
+          part.endsWith(' $normTarget') ||
+          part.contains(' $normTarget ')) {
+        return true;
+      }
+    }
+
+    final wordRegExp = RegExp(r'\b' + RegExp.escape(normTarget) + r'\b');
+    return wordRegExp.hasMatch(normTrack);
   }
 
   Future<Map<String, dynamic>?> _getJson(Uri uri) async {
@@ -605,7 +686,7 @@ class SpotifyImportService {
 
   Map<String, dynamic>? _deepFindTypedEntity(Map<String, dynamic> node, {int maxDepth = 8}) {
     final type = node['type'];
-    if (type is String && const {'track', 'playlist', 'album'}.contains(type) && _looksLikeEntity(node)) {
+    if (type is String && const {'track', 'playlist', 'album', 'artist'}.contains(type) && _looksLikeEntity(node)) {
       return node;
     }
     if (maxDepth <= 0) return null;
@@ -665,6 +746,7 @@ class SpotifyImportService {
         );
       case SpotifyLinkType.playlist:
       case SpotifyLinkType.album:
+      case SpotifyLinkType.artist:
         final trackList = entity['trackList'];
         final tracks = <SpotifyImportedTrack>[];
         if (trackList is List) {
@@ -672,18 +754,27 @@ class SpotifyImportService {
             if (item is! Map<String, dynamic>) continue;
             final track = _trackFromListEntry(
               item,
-              fallbackArtist: subtitle,
+              fallbackArtist: subtitle.isNotEmpty && subtitle != 'Top tracks' ? subtitle : name,
               fallbackAlbum: name,
-              fallbackArtworkUrl: imageUrl,
             );
-            if (track != null) tracks.add(track);
+            if (track != null) {
+              // For artist import: strictly verify that the track is by this artist!
+              if (link.type == SpotifyLinkType.artist && name.isNotEmpty) {
+                if (!matchesArtist(track.artist, name)) {
+                  continue;
+                }
+              }
+              tracks.add(track);
+            }
           }
         }
         if (tracks.isEmpty) {
           throw SpotifyImportException(
-            link.type == SpotifyLinkType.playlist
-                ? 'No tracks were found in this Spotify playlist.'
-                : 'No tracks were found in this Spotify album.',
+            link.type == SpotifyLinkType.artist
+                ? 'No tracks found for "$name" on Spotify.'
+                : (link.type == SpotifyLinkType.playlist
+                    ? 'No tracks were found in this Spotify playlist.'
+                    : 'No tracks were found in this Spotify album.'),
           );
         }
         if (imageUrl.isEmpty && tracks.isNotEmpty && tracks.first.artworkUrl.isNotEmpty) {
@@ -692,17 +783,15 @@ class SpotifyImportService {
         return SpotifyImportResult(
           type: link.type,
           title: name.isEmpty
-              ? (link.type == SpotifyLinkType.playlist ? 'Spotify Playlist' : 'Spotify Album')
+              ? (link.type == SpotifyLinkType.artist
+                  ? 'Artist'
+                  : (link.type == SpotifyLinkType.playlist ? 'Spotify Playlist' : 'Spotify Album'))
               : name,
-          subtitle: subtitle,
+          subtitle: link.type == SpotifyLinkType.artist
+              ? 'Top songs · ${tracks.length} tracks'
+              : subtitle,
           tracks: tracks,
           imageUrl: imageUrl,
-        );
-      case SpotifyLinkType.artist:
-        // Artist links are resolved via importArtistTopSongs before the
-        // embed fetch. Reaching here means a programming error.
-        throw const SpotifyImportException(
-          'Artist links need an artist name — type it (e.g. "Bruno Mars").',
         );
     }
   }
@@ -785,7 +874,6 @@ class SpotifyImportService {
     Map<String, dynamic> entry, {
     required String fallbackArtist,
     required String fallbackAlbum,
-    String fallbackArtworkUrl = '',
   }) {
     final title = _stringValue(entry, 'title', 'name');
     if (title.isEmpty) return null;
@@ -800,7 +888,10 @@ class SpotifyImportService {
     final durationMs = _intValue(entry, 'duration');
 
     var artwork = _extractArtworkFromMap(entry);
-    if (artwork.isEmpty) artwork = fallbackArtworkUrl;
+    // Never fall back to the playlist/album cover for an individual track —
+    // that makes every song in the playlist show the same (duplicate) image.
+    // Leave it empty so it is resolved per-track (curated cover / iTunes /
+    // enrichment artwork) or rendered as unique procedural art.
 
     return SpotifyImportedTrack(
       spotifyId: (id.isEmpty) ? _fallbackId(title, artist) : id,

@@ -227,22 +227,52 @@ class _RightActivityPanelState extends State<RightActivityPanel>
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            const Text(
-                              'AUDIO FREQUENCY',
-                              style: TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold,
-                                letterSpacing: 1.0,
-                                color: AppTheme.textMuted,
+                            const Flexible(
+                              child: Text(
+                                'AUDIO FREQUENCY',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 1.0,
+                                  color: AppTheme.textMuted,
+                                ),
                               ),
                             ),
-                            Text(
-                              '${(widget.controller.volume * 100).toInt()}% Vol',
-                              style: const TextStyle(
-                                fontSize: 11,
-                                color: AppTheme.secondary,
-                                fontWeight: FontWeight.w600,
-                              ),
+                            const SizedBox(width: 4),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: AppTheme.primary.withValues(alpha: 0.15),
+                                    borderRadius: BorderRadius.circular(6),
+                                    border: Border.all(
+                                      color: AppTheme.primary.withValues(alpha: 0.3),
+                                      width: 0.8,
+                                    ),
+                                  ),
+                                  child: Text(
+                                    widget.controller.equalizerPreset,
+                                    style: const TextStyle(
+                                      fontSize: 9.5,
+                                      color: AppTheme.primary,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  '${(widget.controller.volume * 100).toInt()}% Vol',
+                                  style: const TextStyle(
+                                    fontSize: 10.5,
+                                    color: AppTheme.secondary,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
                             ),
                           ],
                         ),
@@ -256,6 +286,7 @@ class _RightActivityPanelState extends State<RightActivityPanel>
                               maxHeight: 34,
                               barWidth: 4.5,
                               gradientColors: currentSong?.gradientColors,
+                              equalizerBands: widget.controller.currentEqualizer.bands,
                             ),
                           ),
                         ),
@@ -397,8 +428,17 @@ class _RightActivityPanelState extends State<RightActivityPanel>
 
                   // Up Next Section Header
                   Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      const Expanded(
+                      Text(
+                        '${widget.controller.queue.length} Tracks',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: AppTheme.textSecondary,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
                         child: Text(
                           'UP NEXT IN QUEUE',
                           style: TextStyle(
@@ -408,14 +448,6 @@ class _RightActivityPanelState extends State<RightActivityPanel>
                             color: AppTheme.textMuted,
                           ),
                           overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        '${widget.controller.queue.length} Tracks',
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: AppTheme.textSecondary,
                         ),
                       ),
                     ],

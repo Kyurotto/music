@@ -56,9 +56,9 @@ void main() {
     // Same id scheme as the iTunes artist import, so the player resolves the
     // full-length track and runs its retry paths for it.
     expect(song.id, 'spotify-itunes-1');
-    // The 30s clip is only a head start and is flagged for upgrade.
-    expect(song.audioUrl, 'https://preview.example/1.m4a');
-    expect(song.isPreview, isTrue);
+    // Songs do not default to 30s preview; they start empty to resolve full tracks
+    expect(song.audioUrl, isEmpty);
+    expect(song.isPreview, isFalse);
     expect(song.imageUrl, contains('600x600bb'));
   });
 

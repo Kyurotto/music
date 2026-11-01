@@ -62,6 +62,13 @@ class TrackEnrichmentService {
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
       '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
   static const _browserUserAgent = browserUserAgent;
+  static const ytAndroidUserAgent =
+      'com.google.android.youtube/19.10.38 (Linux; U; Android 14; en_US) gzip';
+
+  Future<TrackEnrichment> fetchYouTubeStreamById(String videoId) async {
+    final res = await fetchYouTubeStreamByVideoId(videoId);
+    return res ?? const TrackEnrichment();
+  }
 
   /// Enrich a single track: full-length audio (JioSaavn → YouTube → 30s
   /// previews) plus lyrics. Never throws — returns an empty enrichment
@@ -135,7 +142,7 @@ class TrackEnrichmentService {
     required String artist,
     Duration? duration,
     bool previewFallbackOnly = false,
-    bool allowPreviewFallback = true,
+    bool allowPreviewFallback = false,
     bool prioritizeYouTube = false,
     bool fastImport = false,
   }) async {
@@ -175,6 +182,8 @@ class TrackEnrichmentService {
       if (fastImport) {
         try {
           final results = await Future.wait([
+            _fetchYouTubeFullAudio(title: title, artist: artist, duration: duration)
+                .timeout(const Duration(seconds: 5), onTimeout: () => null),
             _fetchSoundCloudFullAudio(title: title, artist: artist, duration: duration)
                 .timeout(const Duration(seconds: 4), onTimeout: () => null),
             _fetchSaavnFullAudio(title: title, artist: artist)
@@ -182,14 +191,28 @@ class TrackEnrichmentService {
             _fetchArchiveOrgFullAudio(title: title, artist: artist, duration: duration)
                 .timeout(const Duration(seconds: 4), onTimeout: () => null),
           ]);
-          for (final hit in results) {
-            if (hit != null &&
-                hit.previewUrl.isNotEmpty &&
-                !hit.previewUrl.toLowerCase().contains('.m3u8') &&
-                !hit.previewUrl.contains('googlevideo.com')) {
-              _stageLog('fast-import', sw, 'HIT ${Uri.tryParse(hit.previewUrl)?.host}');
-              return hit;
-            }
+          final validHits = results
+              .whereType<_PreviewHit>()
+              .where((h) =>
+                  h.previewUrl.isNotEmpty &&
+                  !h.previewUrl.toLowerCase().contains('.m3u8'))
+              .toList();
+          if (validHits.isNotEmpty) {
+            // Sort to prefer unthrottled direct CDN or progressive MP4 streams
+            validHits.sort((a, b) {
+              final aUnthrottled = !a.isYouTube ||
+                  a.previewUrl.contains('mime=video%2Fmp4') ||
+                  a.previewUrl.contains('itag=18');
+              final bUnthrottled = !b.isYouTube ||
+                  b.previewUrl.contains('mime=video%2Fmp4') ||
+                  b.previewUrl.contains('itag=18');
+              if (aUnthrottled && !bUnthrottled) return -1;
+              if (!aUnthrottled && bUnthrottled) return 1;
+              return 0;
+            });
+            final hit = validHits.first;
+            _stageLog('fast-import', sw, 'HIT ${Uri.tryParse(hit.previewUrl)?.host}');
+            return hit;
           }
         } catch (e) {
           _stageLog('fast-import', sw, 'error $e');
@@ -225,13 +248,22 @@ class TrackEnrichmentService {
         );
         _stageLog('web', sw,
             web != null ? 'HIT ${Uri.tryParse(web.previewUrl)?.host}' : 'miss');
-        if (web != null &&
-            (!allowPreviewFallback ||
-                !web.previewUrl.contains('googlevideo.com'))) {
+        if (web != null && web.previewUrl.isNotEmpty) {
           return web;
         }
       } catch (e) {
         _stageLog('web', sw, 'error $e');
+      }
+      try {
+        final yt = await _fetchYouTubeFullAudio(
+          title: title,
+          artist: artist,
+          duration: duration,
+        );
+        _stageLog('yt', sw, yt != null ? 'HIT' : 'miss');
+        if (yt != null) return yt;
+      } catch (e) {
+        _stageLog('yt', sw, 'error $e');
       }
     }
 
@@ -861,7 +893,7 @@ class TrackEnrichmentService {
     // Try the best candidates in order: the top hit is often an
     // unplayable re-upload while the official upload right behind it
     // streams fine. Cap attempts so a slow network stays bounded.
-    for (final entry in scored.take(3)) {
+    for (final entry in scored.take(5)) {
       final stream = await _ytAudioStream(entry.c.videoId);
       if (stream == null || stream.url.isEmpty) continue;
 
@@ -1058,6 +1090,40 @@ class TrackEnrichmentService {
       debugPrint('[Enrich] yt-player $videoId no streamingData');
       return null;
     }
+    // 1. Check progressive formats first (e.g. itag 18: 360p MP4 container with unthrottled AAC audio).
+    // Progressive MP4 streams contain AAC audio and are NOT rate-limited by YouTube's SABR
+    // algorithm, preventing 403 Forbidden errors and playback stalls. ExoPlayer decodes audio
+    // natively from progressive MP4 containers.
+    final progFormats = streamingData['formats'];
+    if (progFormats is List) {
+      for (final f in progFormats) {
+        if (f is! Map<String, dynamic>) continue;
+        final url = f['url']?.toString() ?? '';
+        if (url.isEmpty) continue;
+        final mime = f['mimeType']?.toString() ?? '';
+        final itag = f['itag'];
+        final hasAudio = mime.contains('mp4a') ||
+            f.containsKey('audioSampleRate') ||
+            f.containsKey('audioQuality');
+        if (itag == 18 || (mime.startsWith('video/mp4') && hasAudio)) {
+          var lengthSeconds = 0;
+          final details = decoded['videoDetails'];
+          if (details is Map<String, dynamic>) {
+            final raw = details['lengthSeconds'];
+            lengthSeconds = raw is int
+                ? raw
+                : int.tryParse(raw?.toString() ?? '') ?? 0;
+          }
+          return _YouTubeStream(
+            url: url,
+            lengthSeconds: lengthSeconds,
+            isProgressive: true,
+          );
+        }
+      }
+    }
+
+    // 2. Fallback to adaptive audio formats if progressive formats are missing:
     final formats = streamingData['adaptiveFormats'];
     if (formats is! List) {
       debugPrint('[Enrich] yt-player $videoId no formats');
@@ -1098,7 +1164,11 @@ class TrackEnrichmentService {
           ? raw
           : int.tryParse(raw?.toString() ?? '') ?? 0;
     }
-    return _YouTubeStream(url: url, lengthSeconds: lengthSeconds);
+    return _YouTubeStream(
+      url: url,
+      lengthSeconds: lengthSeconds,
+      isProgressive: false,
+    );
   }
 
   static String? _ytRunsText(Object? value) {
@@ -1657,6 +1727,7 @@ class TrackEnrichmentService {
       if (cleanArtist.isNotEmpty) 'title:("$cleanTitle") AND creator:("$cleanArtist")',
       'title:("$cleanTitle")',
       if (cleanArtist.isNotEmpty) '"$cleanTitle" AND "$cleanArtist"',
+      if (cleanArtist.isNotEmpty) '$cleanArtist $cleanTitle',
       '"$cleanTitle"',
     ];
 
@@ -2053,7 +2124,7 @@ class TrackEnrichmentService {
 
     try {
       final request = http.Request('GET', parsed);
-      request.headers['User-Agent'] = _browserUserAgent;
+      request.headers['User-Agent'] = isGoogleVideo ? ytAndroidUserAgent : _browserUserAgent;
       request.headers['Range'] = 'bytes=0-1';
       final streamed = await _client
           .send(request)
@@ -2470,8 +2541,13 @@ class _YouTubeCandidate {
 class _YouTubeStream {
   final String url;
   final int lengthSeconds;
+  final bool isProgressive;
 
-  const _YouTubeStream({required this.url, required this.lengthSeconds});
+  const _YouTubeStream({
+    required this.url,
+    required this.lengthSeconds,
+    this.isProgressive = false,
+  });
 }
 
 class _PreviewHit {
