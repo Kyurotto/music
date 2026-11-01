@@ -13,6 +13,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import '../auth/auth_service.dart';
 import '../data/local_database.dart';
+import '../models/equalizer_preset.dart';
 import '../models/song_model.dart';
 import '../services/spotify_import_service.dart';
 import '../services/track_enrichment_service.dart';
@@ -120,10 +121,37 @@ class MusicPlayerController extends ChangeNotifier {
     }
   }
 
+  String _equalizerPreset = 'Bass Boost';
+  String get equalizerPreset => _equalizerPreset;
+  EqualizerPreset get currentEqualizer => EqualizerPreset.getByName(_equalizerPreset);
+
+  void setEqualizerPreset(String presetName, {bool save = true}) {
+    _equalizerPreset = EqualizerPreset.getByName(presetName).name;
+    _assertNativeVolume();
+    notifyListeners();
+    if (save) {
+      unawaited(LocalDatabase.instance.saveSetting('equalizer_preset', _equalizerPreset));
+    }
+  }
+
+  Future<void> _loadEqualizerPreset() async {
+    try {
+      final saved = await LocalDatabase.instance.getSetting('equalizer_preset');
+      if (saved != null && saved.isNotEmpty) {
+        _equalizerPreset = EqualizerPreset.getByName(saved).name;
+        _assertNativeVolume();
+        notifyListeners();
+      }
+    } catch (_) {}
+  }
+
   /// Effective volume to push to the native player. Mirrors the guard used by
-  /// every play path so a muted/near-zero UI slider can never leave the
-  /// ExoPlayer volume stuck at 0.
-  double get _effectiveVolume => _isMuted ? 0.0 : (_volume > 0.05 ? _volume : 0.8);
+  /// every play path and scales by the current equalizer preset gain factor.
+  double get _effectiveVolume {
+    final baseVol = _isMuted ? 0.0 : (_volume > 0.05 ? _volume : 0.8);
+    final gain = currentEqualizer.gainFactor;
+    return (baseVol * gain).clamp(0.0, 1.0);
+  }
 
   /// Re-assert volume on the native player.
   ///
@@ -186,6 +214,7 @@ class MusicPlayerController extends ChangeNotifier {
     unawaited(_preExtractBundledAssets().catchError((e) {
       debugPrint('[MusicPlayerController] _preExtractBundledAssets skipped: $e');
     }));
+    unawaited(_loadEqualizerPreset());
   }
 
   /// Configure and activate the shared audio session.
@@ -719,21 +748,10 @@ class MusicPlayerController extends ChangeNotifier {
           
           final cachedFile = await _findCachedAudioFile(songId);
           if (cachedFile != null) {
-            final isPreviewFile = cachedFile.lengthSync() < 1600000 &&
-                (s['duration_ms'] as int? ?? 180000) > 60000;
-            if (isPreviewFile) {
-              try {
-                await cachedFile.delete();
-              } catch (_) {}
+            resolvedAudio = cachedFile.path;
+            if (cachedFile.lengthSync() >= 1600000) {
               isPreview = false;
-              isYouTubeAudio = true;
-              resolvedAudio = '';
-            } else {
-              resolvedAudio = cachedFile.path;
-              if (cachedFile.lengthSync() >= 1600000) {
-                isPreview = false;
-                isYouTubeAudio = false;
-              }
+              isYouTubeAudio = false;
             }
           } else if (resolvedAudio.isNotEmpty &&
               !resolvedAudio.startsWith('http://') &&
@@ -741,14 +759,7 @@ class MusicPlayerController extends ChangeNotifier {
               !resolvedAudio.startsWith('assets/') &&
               !resolvedAudio.startsWith('asset:/')) {
             final f = File(resolvedAudio);
-            if (!f.existsSync() ||
-                (f.lengthSync() < 1600000 &&
-                    (s['duration_ms'] as int? ?? 180000) > 60000)) {
-              if (f.existsSync()) {
-                try {
-                  f.deleteSync();
-                } catch (_) {}
-              }
+            if (!f.existsSync() || f.lengthSync() <= 1024) {
               resolvedAudio = '';
               isPreview = false;
               isYouTubeAudio = true;
@@ -805,13 +816,14 @@ class MusicPlayerController extends ChangeNotifier {
             if (youtubeVideoId.isNotEmpty && existing.youtubeVideoId.isEmpty) {
               existing.youtubeVideoId = youtubeVideoId;
             }
-            if (existing.title.toLowerCase().contains('lips of an angel')) {
+            if (!existing.id.startsWith('spotify-') &&
+                !existing.id.startsWith('itunes-') &&
+                existing.title.toLowerCase().contains('lips of an angel')) {
               existing.isPreview = false;
               existing.isYouTubeAudio = false;
               existing.duration = const Duration(minutes: 4, seconds: 21);
               if (existing.audioUrl.isEmpty ||
                   existing.audioUrl.contains('googlevideo.com') ||
-                  existing.audioUrl.contains('offline_audio') ||
                   existing.audioUrl.contains('apple.com') ||
                   existing.audioUrl.contains('itunes') ||
                   existing.audioUrl.contains('deezer')) {
@@ -1501,6 +1513,11 @@ class MusicPlayerController extends ChangeNotifier {
     if ((titleKey.isEmpty && cleanTitleKey.isEmpty) || artistKey.isEmpty) return null;
 
     for (final song in _allSongs) {
+      // Do not match bundled assets — imported music must not default to the assets folder.
+      if (song.audioUrl.startsWith('assets/') || song.audioUrl.startsWith('asset:/')) {
+        continue;
+      }
+
       final songTitleKey = _normalizeKey(song.title);
       final songCleanTitleKey = _normalizeKey(_cleanSongTitle(song.title));
       final titleMatches = songTitleKey == titleKey ||
@@ -1537,14 +1554,6 @@ class MusicPlayerController extends ChangeNotifier {
     final duration = imported.duration > Duration.zero
         ? imported.duration
         : const Duration(minutes: 3);
-    
-    // Check if an offline bundled asset exists for this specific song
-    final directAsset = _cleanAssetUri(_getOfflineAssetFallbackForFields(
-      imported.title,
-      imported.artist,
-      'spotify-${imported.spotifyId}',
-    ));
-    final initialAudio = directAsset.isNotEmpty ? directAsset : '';
 
     var artwork = imported.artworkUrl.trim();
     if (artwork.isEmpty) {
@@ -1565,12 +1574,9 @@ class MusicPlayerController extends ChangeNotifier {
       gradientColors: _gradientFor('${imported.title}${imported.artist}').colors,
       plays: '',
       lyrics: const [],
-      audioUrl: initialAudio,
+      audioUrl: '', // Do NOT default to assets/audio! Stored dynamically in local audio cache.
       isPreview: false,
     );
-    if (directAsset.isNotEmpty) {
-      _offlineFallbackIds.add(song.id);
-    }
     _ensureOfflineLyrics(song);
     if (song.imageUrl.isEmpty) {
       _resolveMissingSongArtwork(song);
@@ -2013,9 +2019,9 @@ class MusicPlayerController extends ChangeNotifier {
           final cached = await _findCachedAudioFile(s.id);
           if (cached != null &&
               cached.existsSync() &&
-              cached.lengthSync() >= 1600000) {
+              cached.lengthSync() > 1024) {
             s.audioUrl = cached.path;
-            s.isPreview = false;
+            s.isPreview = cached.lengthSync() < 1600000 && s.isPreview;
             s.isYouTubeAudio = false;
             pinned++;
           }
@@ -2125,12 +2131,12 @@ class MusicPlayerController extends ChangeNotifier {
       // Fast check: if a valid offline full-track audio file already exists on device,
       // attach it immediately with 0ms network latency.
       final cached = await _findCachedAudioFile(song.id);
-      if (cached != null && cached.existsSync() && cached.lengthSync() >= 1600000) {
+      if (cached != null && cached.existsSync() && cached.lengthSync() > 1024) {
         final changed = _applyEnrichment(
           song,
           TrackEnrichment(
             previewUrl: cached.path,
-            isFullTrack: true,
+            isFullTrack: cached.lengthSync() >= 1600000 || !song.isPreview,
           ),
         );
         song.isEnrichingLyrics = false;
@@ -2381,14 +2387,6 @@ class MusicPlayerController extends ChangeNotifier {
           if (await f.exists()) {
             final len = await f.length();
             if (len > 1024) {
-              // Delete truncated preview files (< 1.6MB) so they don't block
-              // full-track playback.
-              if (len < 1600000) {
-                try {
-                  await f.delete();
-                } catch (_) {}
-                continue;
-              }
               _audioLookupMemo[songId] = f;
               return f;
             }
@@ -2477,6 +2475,10 @@ class MusicPlayerController extends ChangeNotifier {
   };
 
   String _getOfflineAssetFallbackForFields(String title, String artist, String songId) {
+    // Imported songs must not default to bundled folder assets — they use local audio cache
+    if (songId.startsWith('spotify-') || songId.startsWith('itunes-')) {
+      return '';
+    }
     // A Tagalog/English/acoustic version is a different recording: never
     // substitute the bundled original for it.
     if (TrackEnrichmentService.versionTags(title).isNotEmpty) return '';
@@ -2769,33 +2771,20 @@ class MusicPlayerController extends ChangeNotifier {
   List<String> ensureOfflineLyricsForTesting(Song song) => _ensureOfflineLyrics(song);
 
   Future<void> _cacheAudioOffline(Song song) async {
-    final remoteUrl = song.audioUrl;
-
-    // Check if a valid local offline file already exists (also when the
-    // stream URL is empty/expired, so a re-import reuses the saved file).
+    // 1. Check if a valid local offline file already exists
     final cached = await _findCachedAudioFile(song.id);
     if (cached != null) {
-      if (song.audioUrl != cached.path || (song.isPreview && cached.lengthSync() >= 1600000)) {
+      if (song.audioUrl != cached.path) {
         song.audioUrl = cached.path;
-        if (cached.lengthSync() >= 1600000) {
-          song.isPreview = false;
-          song.isYouTubeAudio = false;
-        }
+        song.isPreview = cached.lengthSync() < 1600000 && song.isPreview;
+        song.isYouTubeAudio = false;
         _syncSongPathToQueueAndDb(song);
         notifyListeners();
       }
       return;
     }
 
-    if (remoteUrl.isEmpty) return;
-    if (!remoteUrl.startsWith('http://') && !remoteUrl.startsWith('https://')) {
-      return;
-    }
-    // 30s previews are never cached; the full track is cached as soon as
-    // it is located (see _applyEnrichment).
-    if (song.isPreview) return;
-
-    // Don't download whole songs over mobile data unless the user allowed it.
+    // Don't download over mobile data unless the user allowed it.
     if (!await _mayDownloadNow()) {
       _logDiag('offline cache skipped: on mobile data', song: song);
       return;
@@ -2806,10 +2795,13 @@ class MusicPlayerController extends ChangeNotifier {
 
     try {
       final offlineDir = await _getPrimaryOfflineDirectory();
-      String urlToDownload = remoteUrl;
+      String urlToDownload = song.audioUrl;
 
-      // If the URL is YouTube or expired, check if JioSaavn full-length audio is available to download
-      if (urlToDownload.contains('googlevideo.com') || song.isYouTubeAudio) {
+      // If the URL is empty, YouTube, or expired, resolve fresh full or preview stream
+      if (urlToDownload.isEmpty ||
+          urlToDownload.contains('googlevideo.com') ||
+          urlToDownload.toLowerCase().contains('.m3u8') ||
+          song.isYouTubeAudio) {
         try {
           final enrichment = await _enrichment.enrichTrack(
             title: song.title,
@@ -2817,27 +2809,24 @@ class MusicPlayerController extends ChangeNotifier {
             album: song.album,
             duration: song.duration,
             previewFallbackOnly: false,
-            // Only full-length results are ever used below — skip the
-            // pointless iTunes/Deezer 30s lookup.
-            allowPreviewFallback: false,
+            allowPreviewFallback: true,
           );
           if (enrichment.hasAudio &&
-              enrichment.isFullTrack &&
               enrichment.previewUrl != null &&
               !enrichment.previewUrl!.contains('googlevideo.com') &&
+              !enrichment.previewUrl!.toLowerCase().contains('.m3u8') &&
               enrichment.previewUrl!.startsWith('http')) {
             urlToDownload = enrichment.previewUrl!;
             _applyEnrichment(song, enrichment);
           }
         } catch (_) {}
-        // If Saavn had no stable copy, download the YouTube stream itself
-        // while its URL is still fresh — the saved file is permanent, so
-        // every import keeps growing the offline cache. (30s previews are
-        // still rejected below by the 1.6MB minimum.)
       }
 
       // Never attempt downloading raw googlevideo CDN streams (they fail with 403 Forbidden).
-      if (urlToDownload.contains('googlevideo.com')) {
+      if (urlToDownload.isEmpty ||
+          urlToDownload.contains('googlevideo.com') ||
+          urlToDownload.toLowerCase().contains('.m3u8') ||
+          (!urlToDownload.startsWith('http://') && !urlToDownload.startsWith('https://'))) {
         return;
       }
 
@@ -2851,13 +2840,12 @@ class MusicPlayerController extends ChangeNotifier {
         headers: {
           'User-Agent': TrackEnrichmentService.browserUserAgent,
           'Accept': '*/*',
-          // googlevideo 403s plain GETs; a Range request serves fine.
           'Range': 'bytes=0-',
         },
       ).timeout(const Duration(seconds: 45));
 
       if ((response.statusCode == 200 || response.statusCode == 206) &&
-          response.bodyBytes.length >= 1600000) {
+          response.bodyBytes.length > 1024) {
         await tempFile.writeAsBytes(response.bodyBytes, flush: true);
         if (await targetFile.exists()) {
           try {
@@ -2868,14 +2856,14 @@ class MusicPlayerController extends ChangeNotifier {
         _invalidateOfflineLookup(song.id);
 
         song.audioUrl = targetFile.path;
-        song.isPreview = false;
+        song.isPreview = response.bodyBytes.length < 1600000 && song.isPreview;
         song.isYouTubeAudio = false;
         _syncSongPathToQueueAndDb(song);
         if (song.id == currentSong?.id) {
           notifyListeners();
         }
         debugPrint(
-            '[MusicPlayerController] Successfully cached ${song.title} (${response.bodyBytes.length} bytes)');
+            '[MusicPlayerController] Successfully cached ${song.title} (${response.bodyBytes.length} bytes) to local cache');
         // Also cache artwork locally if available
         if (song.imageUrl.startsWith('http')) {
           try {
@@ -2900,14 +2888,13 @@ class MusicPlayerController extends ChangeNotifier {
           _enrichment.noteGooglevideoThrottle();
         } else if (response.statusCode == 403 &&
             urlToDownload.contains('googlevideo.com')) {
-          // Expired stream token or IP mismatch: reset memory URL so next play resolves fresh
           if (song.audioUrl == urlToDownload) {
             song.audioUrl = '';
             song.isYouTubeAudio = true;
           }
         }
         debugPrint(
-            '[MusicPlayerController] Cache rejected: file too small or non-200 (${response.statusCode}, ${response.bodyBytes.length} bytes) for ${song.title}');
+            '[MusicPlayerController] Cache rejected (${response.statusCode}, ${response.bodyBytes.length} bytes) for ${song.title}');
       }
     } catch (e) {
       debugPrint('[MusicPlayerController] Offline cache error for ${song.title}: $e');
@@ -2931,7 +2918,7 @@ class MusicPlayerController extends ChangeNotifier {
         s.duration = song.duration;
       }
     }
-    if (song.id.startsWith('spotify-')) {
+    if (song.id.startsWith('spotify-') || song.id.startsWith('itunes-')) {
       try {
         final dbAudioUrl = (song.audioUrl.contains('googlevideo.com') || song.audioUrl.toLowerCase().contains('.m3u8')) ? '' : song.audioUrl;
         unawaited(LocalDatabase.instance.updateImportedSong(
@@ -2950,9 +2937,9 @@ class MusicPlayerController extends ChangeNotifier {
   void _cacheAllPendingOfflineAudio() {
     final pending = _allSongs
         .where((s) =>
-            s.id.startsWith('spotify-') &&
-            (s.audioUrl.isEmpty ||
-                (s.audioUrl.startsWith('http') && !s.isPreview)) &&
+            !s.audioUrl.contains('offline_audio') &&
+            !s.audioUrl.startsWith('assets/') &&
+            !s.audioUrl.startsWith('asset:/') &&
             !_cachingIds.contains(s.id))
         .toList();
     if (pending.isEmpty) return;
@@ -2961,9 +2948,14 @@ class MusicPlayerController extends ChangeNotifier {
       for (final song in pending) {
         if (_disposed) return;
         await _cacheAudioOffline(song);
-        await Future.delayed(const Duration(milliseconds: 300));
+        await Future.delayed(const Duration(milliseconds: 200));
       }
     });
+  }
+
+  /// Caches all currently displayed dashboard songs into the local offline audio cache directory.
+  void cacheDisplayedDashboardAudio() {
+    _cacheAllPendingOfflineAudio();
   }
 
   /// Public retry used by the lyrics sheet when a track has no lyrics yet
@@ -3534,7 +3526,10 @@ class MusicPlayerController extends ChangeNotifier {
     }
 
     // 0. Dedicated check for Lips of an Angel: use bundled high-fidelity asset (4:21 full track)
-    if (!forceAsset && song.title.toLowerCase().contains('lips of an angel')) {
+    if (!forceAsset &&
+        !song.id.startsWith('spotify-') &&
+        !song.id.startsWith('itunes-') &&
+        song.title.toLowerCase().contains('lips of an angel')) {
       final matching = _cleanAssetUri(_getOfflineAssetFallback(song));
       if (matching.isNotEmpty) {
         final extracted = await _extractAssetToFile(matching);
@@ -3553,9 +3548,9 @@ class MusicPlayerController extends ChangeNotifier {
     // 1. Cached offline audio file on disk
     if (!forceAsset) {
       final cached = await _findCachedAudioFile(song.id);
-      if (cached != null && cached.existsSync() && cached.lengthSync() >= 1600000) {
+      if (cached != null && cached.existsSync() && cached.lengthSync() > 1024) {
         song.audioUrl = cached.path;
-        song.isPreview = false;
+        song.isPreview = cached.lengthSync() < 1600000 && song.isPreview;
         song.isYouTubeAudio = false;
         _offlineFallbackIds.remove(song.id);
         _syncSongPathToQueueAndDb(song);
@@ -3571,19 +3566,13 @@ class MusicPlayerController extends ChangeNotifier {
         !song.audioUrl.startsWith('assets/') &&
         !song.audioUrl.startsWith('asset:/')) {
       final f = File(song.audioUrl);
-      if (f.existsSync() && f.lengthSync() >= 1600000) {
+      if (f.existsSync() && f.lengthSync() > 1024) {
         return AudioSource.file(f.path, tag: mediaItem);
       } else {
-        // Path does not exist or is a 30s preview file (< 1.6MB). Clean it up!
-        if (f.existsSync() && f.lengthSync() < 1600000 && song.duration.inSeconds > 60) {
-          try {
-            f.deleteSync();
-          } catch (_) {}
-        }
         final cachedOnDevice = await _findCachedAudioFile(song.id);
-        if (cachedOnDevice != null && cachedOnDevice.existsSync() && cachedOnDevice.lengthSync() >= 1600000) {
+        if (cachedOnDevice != null && cachedOnDevice.existsSync() && cachedOnDevice.lengthSync() > 1024) {
           song.audioUrl = cachedOnDevice.path;
-          song.isPreview = false;
+          song.isPreview = cachedOnDevice.lengthSync() < 1600000 && song.isPreview;
           song.isYouTubeAudio = false;
           _syncSongPathToQueueAndDb(song);
           return AudioSource.file(cachedOnDevice.path, tag: mediaItem);
@@ -3666,15 +3655,17 @@ class MusicPlayerController extends ChangeNotifier {
       }
     }
 
-    // 5. Offline fallback asset (only if an asset actually matches this song)
-    final fallbackAsset = _cleanAssetUri(_getOfflineAssetFallback(song));
-    if (fallbackAsset.isNotEmpty) {
-      _offlineFallbackIds.add(song.id);
-      final extracted = await _extractAssetToFile(fallbackAsset);
-      if (File(extracted).existsSync() && File(extracted).lengthSync() > 1024) {
-        return AudioSource.file(extracted, tag: mediaItem);
+    // 5. Offline fallback asset (only if an asset actually matches this song and is not imported)
+    if (!song.id.startsWith('spotify-') && !song.id.startsWith('itunes-')) {
+      final fallbackAsset = _cleanAssetUri(_getOfflineAssetFallback(song));
+      if (fallbackAsset.isNotEmpty) {
+        _offlineFallbackIds.add(song.id);
+        final extracted = await _extractAssetToFile(fallbackAsset);
+        if (File(extracted).existsSync() && File(extracted).lengthSync() > 1024) {
+          return AudioSource.file(extracted, tag: mediaItem);
+        }
+        return AudioSource.uri(Uri.parse('asset:///$fallbackAsset'), tag: mediaItem);
       }
-      return AudioSource.uri(Uri.parse('asset:///$fallbackAsset'), tag: mediaItem);
     }
 
     if (song.audioUrl.isNotEmpty &&

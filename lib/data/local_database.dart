@@ -94,6 +94,12 @@ class LocalDatabase {
       )
     ''');
     await _createImportedPlaylistTables(db);
+    try {
+      await db.execute('ALTER TABLE users ADD COLUMN backup_email TEXT');
+    } catch (_) {}
+    try {
+      await db.execute('ALTER TABLE users ADD COLUMN phone_number TEXT');
+    } catch (_) {}
     // No more default admin seed. New accounts (e.g. John Laurence) become
     // the active user instead of "System Administrator".
     await removeDefaultAdminIfSeeded();
@@ -136,7 +142,7 @@ class LocalDatabase {
             final files = offlineDir.listSync().whereType<File>();
             for (final f in files) {
               final name = path.basenameWithoutExtension(f.path);
-              if (previewSongIds.contains(name) || f.lengthSync() < 1600000) {
+              if (previewSongIds.contains(name) || f.lengthSync() <= 1024) {
                 try {
                   f.deleteSync();
                 } catch (_) {}
@@ -171,9 +177,8 @@ class LocalDatabase {
       for (final row in offlineRows) {
         final sid = row['id'] as String;
         final aurl = row['audio_url'] as String;
-        final dur = (row['duration_ms'] as int?) ?? 180000;
         final f = File(aurl);
-        if (!f.existsSync() || (f.lengthSync() < 1600000 && dur > 60000)) {
+        if (!f.existsSync() || f.lengthSync() <= 1024) {
           try {
             if (f.existsSync()) f.deleteSync();
           } catch (_) {}
@@ -547,6 +552,8 @@ class LocalDatabase {
         role TEXT NOT NULL DEFAULT 'user',
         auth_provider TEXT NOT NULL,
         password_hash TEXT,
+        backup_email TEXT,
+        phone_number TEXT,
         created_at INTEGER NOT NULL,
         last_login_at INTEGER NOT NULL
       )
@@ -753,6 +760,8 @@ class LocalDatabase {
     String role = 'user',
     String authProvider = 'password',
     String? passwordHash,
+    String? backupEmail,
+    String? phoneNumber,
   }) async {
     final db = await database;
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -778,6 +787,8 @@ class LocalDatabase {
     // A null [passwordHash] never wipes a stored hash (social sign-ins).
     int createdAt = now;
     String? resolvedHash = passwordHash;
+    String? resolvedBackupEmail = backupEmail?.trim();
+    String? resolvedPhone = phoneNumber?.trim();
     try {
       final byId = await db.query(
         'users',
@@ -793,6 +804,8 @@ class LocalDatabase {
           createdAt = existing['created_at'] as int;
         }
         resolvedHash ??= existing['password_hash'] as String?;
+        resolvedBackupEmail ??= existing['backup_email'] as String?;
+        resolvedPhone ??= existing['phone_number'] as String?;
       } else if (resolvedHash == null) {
         final byEmail = await _rowByEmail(db, cleanEmail);
         if (byEmail != null) {
@@ -800,6 +813,8 @@ class LocalDatabase {
             createdAt = byEmail['created_at'] as int;
           }
           resolvedHash ??= byEmail['password_hash'] as String?;
+          resolvedBackupEmail ??= byEmail['backup_email'] as String?;
+          resolvedPhone ??= byEmail['phone_number'] as String?;
         }
       }
     } catch (_) {}
@@ -811,6 +826,8 @@ class LocalDatabase {
       'role': role,
       'auth_provider': authProvider,
       'password_hash': resolvedHash,
+      'backup_email': resolvedBackupEmail,
+      'phone_number': resolvedPhone,
       'created_at': createdAt,
       'last_login_at': now,
     }, conflictAlgorithm: ConflictAlgorithm.replace);
@@ -822,6 +839,61 @@ class LocalDatabase {
       debugPrint(
         '[LocalDatabase] saveUser $cleanEmail ($authProvider) -> total users: ${count.first['c']}',
       );
+    } catch (_) {}
+    await _syncToWorkspace();
+  }
+
+  /// Updates an existing account's profile credentials and recovery information.
+  /// If [newPassword] is provided, it is securely hashed with salted SHA-256 before saving.
+  Future<void> updateUserProfile({
+    required String id,
+    required String email,
+    String? backupEmail,
+    String? phoneNumber,
+    String? newPassword,
+    String? displayName,
+  }) async {
+    final db = await database;
+    final cleanEmail = email.trim().toLowerCase();
+    if (cleanEmail.isEmpty || !cleanEmail.contains('@')) {
+      throw ArgumentError('A valid primary email is required.');
+    }
+    final cleanBackup = backupEmail?.trim();
+    final cleanPhone = phoneNumber?.trim();
+    final cleanDisplayName = displayName?.trim();
+
+    final updates = <String, Object?>{
+      'email': cleanEmail,
+      'backup_email': cleanBackup != null && cleanBackup.isNotEmpty ? cleanBackup : null,
+      'phone_number': cleanPhone != null && cleanPhone.isNotEmpty ? cleanPhone : null,
+      'last_login_at': DateTime.now().millisecondsSinceEpoch,
+    };
+
+    if (cleanDisplayName != null && cleanDisplayName.isNotEmpty) {
+      updates['display_name'] = cleanDisplayName;
+    }
+
+    if (newPassword != null && newPassword.trim().isNotEmpty) {
+      updates['password_hash'] = hashPassword(newPassword.trim());
+    }
+
+    await db.update(
+      'users',
+      updates,
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+
+    // Keep remembered account synchronized
+    try {
+      await db.execute(
+        'INSERT OR REPLACE INTO remembered_accounts (email, display_name, saved_at) VALUES (?, ?, ?)',
+        [cleanEmail, cleanDisplayName ?? cleanEmail.split('@').first, DateTime.now().millisecondsSinceEpoch],
+      );
+    } catch (_) {}
+
+    try {
+      await db.execute('PRAGMA wal_checkpoint(TRUNCATE)');
     } catch (_) {}
     await _syncToWorkspace();
   }

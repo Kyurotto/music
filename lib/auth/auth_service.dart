@@ -12,6 +12,8 @@ class LocalUser {
   final String displayName;
   final String role;
   final String? photoUrl;
+  final String? backupEmail;
+  final String? phoneNumber;
 
   const LocalUser({
     required this.id,
@@ -19,6 +21,8 @@ class LocalUser {
     required this.displayName,
     required this.role,
     this.photoUrl,
+    this.backupEmail,
+    this.phoneNumber,
   });
 
   LocalUser copyWith({
@@ -27,6 +31,8 @@ class LocalUser {
     String? displayName,
     String? role,
     String? photoUrl,
+    String? backupEmail,
+    String? phoneNumber,
   }) {
     return LocalUser(
       id: id ?? this.id,
@@ -34,12 +40,14 @@ class LocalUser {
       displayName: displayName ?? this.displayName,
       role: role ?? this.role,
       photoUrl: photoUrl ?? this.photoUrl,
+      backupEmail: backupEmail ?? this.backupEmail,
+      phoneNumber: phoneNumber ?? this.phoneNumber,
     );
   }
 
   @override
   String toString() =>
-      'LocalUser(id: $id, email: $email, name: $displayName, role: $role)';
+      'LocalUser(id: $id, email: $email, name: $displayName, role: $role, backup: $backupEmail, phone: $phoneNumber)';
 }
 
 class AuthService {
@@ -123,6 +131,19 @@ class AuthService {
     final user = _currentUser;
     if (user is LocalUser) return user.email;
     if (user is User) return (user.email ?? '').trim();
+    return '';
+  }
+
+  String get userBackupEmail {
+    final user = _currentUser;
+    if (user is LocalUser) return (user.backupEmail ?? '').trim();
+    return '';
+  }
+
+  String get userPhoneNumber {
+    final user = _currentUser;
+    if (user is LocalUser) return (user.phoneNumber ?? '').trim();
+    if (user is User) return (user.phoneNumber ?? '').trim();
     return '';
   }
 
@@ -328,6 +349,8 @@ class AuthService {
               displayName: (localData['display_name'] as String? ?? '').trim(),
               role: resolvedRole,
               photoUrl: localData['photo_url'] as String?,
+              backupEmail: (localData['backup_email'] as String? ?? '').trim(),
+              phoneNumber: (localData['phone_number'] as String? ?? '').trim(),
             );
             _isInitialized = true;
             _authController.add(_currentUser);
@@ -423,6 +446,8 @@ class AuthService {
       displayName: userData['display_name'] as String,
       role: resolvedRole,
       photoUrl: userData['photo_url'] as String?,
+      backupEmail: userData['backup_email'] as String?,
+      phoneNumber: userData['phone_number'] as String?,
     );
     await LocalDatabase.instance.saveActiveSession(localUser.id);
     await LocalDatabase.instance.setPersistSession(persistSession);
@@ -836,6 +861,93 @@ class AuthService {
       if (firestore != null) {
         await firestore.collection('users').doc(uid).set({
           'role': newRole,
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+    } catch (_) {}
+  }
+
+  /// Updates profile information: primary Gmail/email, backup Gmail,
+  /// phone number, and optionally updates password (securely hashed with Salted SHA-256).
+  Future<void> updateProfileAccount({
+    required String newEmail,
+    String? backupEmail,
+    String? phoneNumber,
+    String? newPassword,
+    String? displayName,
+  }) async {
+    final uid = currentUserId;
+    if (uid.isEmpty) {
+      throw StateError('No active user logged in.');
+    }
+    final cleanEmail = newEmail.trim().toLowerCase();
+    final cleanBackup = backupEmail?.trim();
+    final cleanPhone = phoneNumber?.trim();
+    final cleanName = displayName?.trim();
+
+    // 1. Update SQLite with hashed password and contact details
+    await LocalDatabase.instance.updateUserProfile(
+      id: uid,
+      email: cleanEmail,
+      backupEmail: cleanBackup,
+      phoneNumber: cleanPhone,
+      newPassword: newPassword,
+      displayName: cleanName,
+    );
+
+    // 2. In-memory update
+    if (_currentUser is LocalUser) {
+      final updated = (_currentUser as LocalUser).copyWith(
+        email: cleanEmail,
+        backupEmail: cleanBackup,
+        phoneNumber: cleanPhone,
+        displayName: cleanName,
+      );
+      _currentUser = updated;
+      _authController.add(updated);
+    } else {
+      final localData = await LocalDatabase.instance.getUserById(uid);
+      if (localData != null) {
+        final resolvedRole =
+            await LocalDatabase.instance.refreshUserRoleFromEmployees(uid);
+        final updated = LocalUser(
+          id: uid,
+          email: cleanEmail,
+          displayName: cleanName ?? (localData['display_name'] as String? ?? 'User'),
+          role: resolvedRole,
+          photoUrl: localData['photo_url'] as String?,
+          backupEmail: cleanBackup,
+          phoneNumber: cleanPhone,
+        );
+        _currentUser = updated;
+        _authController.add(updated);
+      }
+    }
+
+    // 3. Best-effort Firebase updates if available
+    final authUser = _auth?.currentUser;
+    if (authUser != null) {
+      try {
+        if (cleanEmail != authUser.email && cleanEmail.isNotEmpty) {
+          await authUser.verifyBeforeUpdateEmail(cleanEmail);
+        }
+      } catch (_) {}
+      try {
+        if (newPassword != null && newPassword.trim().isNotEmpty) {
+          await authUser.updatePassword(newPassword.trim());
+        }
+      } catch (_) {}
+    }
+
+    // 4. Best-effort Firestore sync
+    try {
+      final firestore = _firestore;
+      if (firestore != null) {
+        await firestore.collection('users').doc(uid).set({
+          'email': cleanEmail,
+          'backupEmail': ?cleanBackup,
+          'phoneNumber': ?cleanPhone,
+          'displayName': ?cleanName,
           'updatedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
       }

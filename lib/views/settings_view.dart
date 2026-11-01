@@ -2,20 +2,32 @@ import 'package:flutter/material.dart';
 import '../auth/auth_service.dart';
 import '../controllers/music_player_controller.dart';
 import '../data/local_database.dart';
+import '../models/equalizer_preset.dart';
 import '../theme/app_theme.dart';
 import 'auth_gate.dart';
 
 class SettingsView extends StatefulWidget {
-  const SettingsView({super.key, this.controller});
+  const SettingsView({
+    super.key,
+    this.controller,
+    this.openProfileEdit = false,
+  });
 
   final MusicPlayerController? controller;
+  final bool openProfileEdit;
 
   static Future<void> show(
     BuildContext context, {
     MusicPlayerController? controller,
+    bool openProfileEdit = false,
   }) {
     return Navigator.of(context).push<void>(
-      MaterialPageRoute(builder: (_) => SettingsView(controller: controller)),
+      MaterialPageRoute(
+        builder: (_) => SettingsView(
+          controller: controller,
+          openProfileEdit: openProfileEdit,
+        ),
+      ),
     );
   }
 
@@ -51,20 +63,19 @@ class _SettingsViewState extends State<SettingsView> {
     'Very High (320 kbps)',
   ];
 
-  final List<String> _equalizerPresets = const [
-    'Flat',
-    'Bass Boost',
-    'Acoustic',
-    'Electronic',
-    'Hip-Hop',
-    'Rock',
-    'Vocal Booster',
-  ];
 
   @override
   void initState() {
     super.initState();
+    if (widget.controller != null) {
+      _equalizerPreset = widget.controller!.equalizerPreset;
+    }
     _loadSettings();
+    if (widget.openProfileEdit) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _showEditProfileDialog();
+      });
+    }
   }
 
   Future<void> _loadSettings() async {
@@ -203,68 +214,351 @@ class _SettingsViewState extends State<SettingsView> {
   }
 
   Future<void> _showEqualizerPicker() async {
+    final initialPreset = EqualizerPreset.getByName(_equalizerPreset);
     final selected = await showModalBottomSheet<String>(
       context: context,
-      backgroundColor: AppTheme.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (sheetContext) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                child: Text(
-                  'Equalizer Presets',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: AppTheme.textPrimary,
-                  ),
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        String activePresetName = initialPreset.name;
+        List<double> activeBands = List<double>.from(initialPreset.bands);
+
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            final activePreset = EqualizerPreset.getByName(activePresetName);
+
+            return Container(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.of(context).size.height * 0.88,
+              ),
+              decoration: const BoxDecoration(
+                color: AppTheme.surface,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                border: Border(
+                  top: BorderSide(color: AppTheme.border, width: 1),
                 ),
               ),
-              const Divider(color: AppTheme.border),
-              ..._equalizerPresets.map(
-                (preset) => ListTile(
-                  leading: Icon(
-                    Icons.graphic_eq_rounded,
-                    color: preset == _equalizerPreset
-                        ? AppTheme.primary
-                        : AppTheme.textMuted,
-                  ),
-                  title: Text(
-                    preset,
-                    style: TextStyle(
-                      color: preset == _equalizerPreset
-                          ? AppTheme.primary
-                          : AppTheme.textPrimary,
-                      fontWeight: preset == _equalizerPreset
-                          ? FontWeight.w600
-                          : FontWeight.normal,
+              child: SafeArea(
+                top: false,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Drag Handle
+                    const SizedBox(height: 12),
+                    Center(
+                      child: Container(
+                        width: 44,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: AppTheme.textMuted.withValues(alpha: 0.3),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
                     ),
-                  ),
-                  trailing: preset == _equalizerPreset
-                      ? const Icon(Icons.check_rounded, color: AppTheme.primary)
-                      : null,
-                  onTap: () => Navigator.of(sheetContext).pop(preset),
+                    const SizedBox(height: 12),
+
+                    // Header
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: AppTheme.primary.withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: const Icon(
+                                  Icons.graphic_eq_rounded,
+                                  color: AppTheme.primary,
+                                  size: 20,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text(
+                                    'Audio Equalizer',
+                                    style: TextStyle(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.bold,
+                                      color: AppTheme.textPrimary,
+                                    ),
+                                  ),
+                                  Text(
+                                    activePreset.name,
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      color: AppTheme.primary,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.close_rounded, color: AppTheme.textMuted),
+                            onPressed: () => Navigator.of(sheetContext).pop(activePresetName),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+
+                    // 5-Band Frequency Sliders / Visual Curve Card
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                        decoration: BoxDecoration(
+                          color: AppTheme.cardSurface,
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(color: AppTheme.border),
+                        ),
+                        child: Column(
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                const Text(
+                                  'FREQUENCY RESPONSE (dB)',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                    letterSpacing: 1.0,
+                                    color: AppTheme.textMuted,
+                                  ),
+                                ),
+                                Flexible(
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                    decoration: BoxDecoration(
+                                      color: AppTheme.primary.withValues(alpha: 0.12),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: Text(
+                                      activePreset.description,
+                                      style: const TextStyle(
+                                        fontSize: 10,
+                                        color: AppTheme.textSecondary,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+
+                            // 5 Interactive / Animated Frequency Sliders
+                            SizedBox(
+                              height: 125,
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                                children: List.generate(5, (index) {
+                                  final db = activeBands[index];
+                                  final label = EqualizerPreset.frequencyLabels[index];
+
+                                  return Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        '${db >= 0 ? '+' : ''}${db.toStringAsFixed(1)}',
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.bold,
+                                          color: db != 0 ? AppTheme.primary : AppTheme.textMuted,
+                                        ),
+                                      ),
+                                      Expanded(
+                                        child: RotatedBox(
+                                          quarterTurns: -1,
+                                          child: SliderTheme(
+                                            data: SliderTheme.of(context).copyWith(
+                                              trackHeight: 3,
+                                              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
+                                              overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
+                                              activeTrackColor: AppTheme.primary,
+                                              inactiveTrackColor: AppTheme.border,
+                                              thumbColor: AppTheme.primary,
+                                            ),
+                                            child: Slider(
+                                              value: db,
+                                              min: -10.0,
+                                              max: 10.0,
+                                              onChanged: (newVal) {
+                                                setSheetState(() {
+                                                  activeBands[index] = newVal;
+                                                });
+                                              },
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        label,
+                                        style: const TextStyle(
+                                          fontSize: 9.5,
+                                          color: AppTheme.textSecondary,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                    ],
+                                  );
+                                }),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    const Divider(height: 1, color: AppTheme.border),
+
+                    // Scrollable Presets List (Fixes the 28px bottom overflow!)
+                    Flexible(
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                        itemCount: EqualizerPreset.all.length,
+                        separatorBuilder: (_, index) => const SizedBox(height: 6),
+                        itemBuilder: (context, index) {
+                          final preset = EqualizerPreset.all[index];
+                          final isSelected = preset.name == activePresetName;
+
+                          return Material(
+                            color: Colors.transparent,
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(14),
+                              onTap: () {
+                                setSheetState(() {
+                                  activePresetName = preset.name;
+                                  activeBands = List<double>.from(preset.bands);
+                                });
+                                widget.controller?.setEqualizerPreset(preset.name);
+                              },
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                                decoration: BoxDecoration(
+                                  color: isSelected
+                                      ? AppTheme.primary.withValues(alpha: 0.12)
+                                      : AppTheme.cardSurface.withValues(alpha: 0.5),
+                                  borderRadius: BorderRadius.circular(14),
+                                  border: Border.all(
+                                    color: isSelected ? AppTheme.primary : AppTheme.border,
+                                    width: isSelected ? 1.5 : 1,
+                                  ),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.all(8),
+                                      decoration: BoxDecoration(
+                                        color: isSelected
+                                            ? AppTheme.primary
+                                            : AppTheme.surface,
+                                        borderRadius: BorderRadius.circular(10),
+                                      ),
+                                      child: Icon(
+                                        preset.icon,
+                                        color: isSelected ? Colors.black87 : AppTheme.textMuted,
+                                        size: 18,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            preset.name,
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
+                                              color: isSelected ? AppTheme.primary : AppTheme.textPrimary,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 2),
+                                          Text(
+                                            preset.description,
+                                            style: const TextStyle(
+                                              fontSize: 11,
+                                              color: AppTheme.textSecondary,
+                                            ),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    if (isSelected)
+                                      const Icon(
+                                        Icons.check_circle_rounded,
+                                        color: AppTheme.primary,
+                                        size: 20,
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+
+                    // Apply Button
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                      child: SizedBox(
+                        width: double.infinity,
+                        height: 44,
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppTheme.primary,
+                            foregroundColor: Colors.black87,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            elevation: 0,
+                          ),
+                          onPressed: () => Navigator.of(sheetContext).pop(activePresetName),
+                          child: const Text(
+                            'Apply Equalizer Preset',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            ],
-          ),
-        ),
-      ),
+            );
+          },
+        );
+      },
     );
 
     if (selected != null && mounted) {
       setState(() => _equalizerPreset = selected);
+      widget.controller?.setEqualizerPreset(selected);
       _saveSetting('equalizer_preset', selected);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Equalizer set to "$selected"')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Equalizer set to "$selected"'),
+          backgroundColor: AppTheme.surface,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
     }
   }
 
@@ -844,82 +1138,560 @@ class _SettingsViewState extends State<SettingsView> {
     final displayName = AuthService.instance.userDisplayName;
     final email = AuthService.instance.userEmail;
     final initials = AuthService.instance.userInitials;
+    final role = AuthService.instance.userRole;
 
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: AppTheme.surface,
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppTheme.border),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.2),
-            blurRadius: 16,
-            offset: const Offset(0, 4),
+        onTap: _showEditProfileDialog,
+        child: Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: AppTheme.surface,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: AppTheme.border),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.2),
+                blurRadius: 16,
+                offset: const Offset(0, 4),
+              ),
+            ],
           ),
-        ],
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 58,
-            height: 58,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: LinearGradient(
-                colors: [
-                  AppTheme.primary,
-                  AppTheme.primary.withValues(alpha: 0.6),
+          child: Row(
+            children: [
+              Stack(
+                children: [
+                  Container(
+                    width: 58,
+                    height: 58,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: LinearGradient(
+                        colors: [
+                          AppTheme.primary,
+                          AppTheme.primary.withValues(alpha: 0.6),
+                        ],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: AppTheme.primary.withValues(alpha: 0.3),
+                          blurRadius: 10,
+                          spreadRadius: 2,
+                        ),
+                      ],
+                    ),
+                    child: Center(
+                      child: Text(
+                        initials,
+                        style: const TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.black87,
+                        ),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    right: 0,
+                    bottom: 0,
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: const BoxDecoration(
+                        color: AppTheme.cardSurface,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.edit_rounded,
+                        size: 12,
+                        color: AppTheme.primary,
+                      ),
+                    ),
+                  ),
                 ],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
               ),
-              boxShadow: [
-                BoxShadow(
-                  color: AppTheme.primary.withValues(alpha: 0.3),
-                  blurRadius: 10,
-                  spreadRadius: 2,
-                ),
-              ],
-            ),
-            child: Center(
-              child: Text(
-                initials,
-                style: const TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black87,
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            displayName,
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.textPrimary,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 7,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: role == 'admin'
+                                ? Colors.amber.withValues(alpha: 0.2)
+                                : AppTheme.primary.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            role.toUpperCase(),
+                            style: TextStyle(
+                              fontSize: 9.5,
+                              fontWeight: FontWeight.bold,
+                              color: role == 'admin'
+                                  ? Colors.amber
+                                  : AppTheme.primary,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.email_outlined,
+                          size: 13,
+                          color: AppTheme.textSecondary,
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            email.isNotEmpty ? email : 'No Gmail assigned',
+                            style: const TextStyle(
+                              fontSize: 13,
+                              color: AppTheme.textSecondary,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
               ),
-            ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: AppTheme.cardSurface,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppTheme.border),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.edit_rounded, size: 14, color: AppTheme.primary),
+                    SizedBox(width: 6),
+                    Text(
+                      'Edit',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: AppTheme.textPrimary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showEditProfileDialog() async {
+    final formKey = GlobalKey<FormState>();
+    final emailController =
+        TextEditingController(text: AuthService.instance.userEmail);
+    final backupEmailController =
+        TextEditingController(text: AuthService.instance.userBackupEmail);
+    final phoneController =
+        TextEditingController(text: AuthService.instance.userPhoneNumber);
+    final nameController =
+        TextEditingController(text: AuthService.instance.userDisplayName);
+    final passwordController = TextEditingController();
+    final confirmPasswordController = TextEditingController();
+
+    bool obscurePassword = true;
+    bool obscureConfirm = true;
+    bool isSaving = false;
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: !isSaving,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContentContext, setDialogState) {
+          return AlertDialog(
+            backgroundColor: AppTheme.surface,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(24),
+              side: const BorderSide(color: AppTheme.border),
+            ),
+            titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+            actionsPadding: const EdgeInsets.fromLTRB(24, 12, 24, 20),
+            title: Row(
               children: [
-                Text(
-                  displayName,
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: AppTheme.textPrimary,
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: AppTheme.primary.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(12),
                   ),
-                  overflow: TextOverflow.ellipsis,
+                  child: const Icon(
+                    Icons.manage_accounts_rounded,
+                    color: AppTheme.primary,
+                    size: 24,
+                  ),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  email,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    color: AppTheme.textSecondary,
+                const SizedBox(width: 14),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Edit Profile Account',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: AppTheme.textPrimary,
+                        ),
+                      ),
+                      Text(
+                        'Update credentials & recovery details',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: AppTheme.textSecondary,
+                        ),
+                      ),
+                    ],
                   ),
-                  overflow: TextOverflow.ellipsis,
                 ),
               ],
             ),
-          ),
-        ],
+            content: SizedBox(
+              width: 440,
+              child: SingleChildScrollView(
+                child: Form(
+                  key: formKey,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(height: 8),
+                      // Display Name
+                      TextFormField(
+                        controller: nameController,
+                        style: const TextStyle(
+                          color: AppTheme.textPrimary,
+                          fontSize: 14,
+                        ),
+                        decoration: _inputDecoration(
+                          label: 'Full Name',
+                          hint: 'e.g. John Laurence',
+                          icon: Icons.person_outline_rounded,
+                        ),
+                        validator: (val) {
+                          if (val == null || val.trim().isEmpty) {
+                            return 'Please enter your name';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 14),
+
+                      // Gmail / Primary Email
+                      TextFormField(
+                        controller: emailController,
+                        keyboardType: TextInputType.emailAddress,
+                        style: const TextStyle(
+                          color: AppTheme.textPrimary,
+                          fontSize: 14,
+                        ),
+                        decoration: _inputDecoration(
+                          label: 'Gmail / Primary Email',
+                          hint: 'user@gmail.com',
+                          icon: Icons.email_outlined,
+                        ),
+                        validator: (val) {
+                          if (val == null || val.trim().isEmpty) {
+                            return 'Primary Gmail is required';
+                          }
+                          if (!val.contains('@') || !val.contains('.')) {
+                            return 'Enter a valid email address';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 14),
+
+                      // Backup Gmail
+                      TextFormField(
+                        controller: backupEmailController,
+                        keyboardType: TextInputType.emailAddress,
+                        style: const TextStyle(
+                          color: AppTheme.textPrimary,
+                          fontSize: 14,
+                        ),
+                        decoration: _inputDecoration(
+                          label: 'Back up Gmail (Recovery)',
+                          hint: 'backup@gmail.com',
+                          icon: Icons.mark_email_read_outlined,
+                        ),
+                        validator: (val) {
+                          if (val != null && val.trim().isNotEmpty) {
+                            if (!val.contains('@') || !val.contains('.')) {
+                              return 'Enter a valid backup email address';
+                            }
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 14),
+
+                      // Phone Number
+                      TextFormField(
+                        controller: phoneController,
+                        keyboardType: TextInputType.phone,
+                        style: const TextStyle(
+                          color: AppTheme.textPrimary,
+                          fontSize: 14,
+                        ),
+                        decoration: _inputDecoration(
+                          label: 'Phone Number',
+                          hint: '+1 555-0199 or 09123456789',
+                          icon: Icons.phone_iphone_rounded,
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+
+                      // Password (Hash) Section
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: AppTheme.cardSurface,
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: AppTheme.border),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Row(
+                              children: [
+                                Icon(
+                                  Icons.shield_outlined,
+                                  size: 16,
+                                  color: AppTheme.secondary,
+                                ),
+                                SizedBox(width: 8),
+                                Text(
+                                  'PASSWORD',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                    letterSpacing: 0.8,
+                                    color: AppTheme.secondary,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            TextFormField(
+                              controller: passwordController,
+                              obscureText: obscurePassword,
+                              style: const TextStyle(
+                                color: AppTheme.textPrimary,
+                                fontSize: 14,
+                              ),
+                              decoration: _inputDecoration(
+                                label: 'New Password',
+                                hint: 'Leave blank to keep existing',
+                                icon: Icons.lock_outline_rounded,
+                                suffixIcon: IconButton(
+                                  icon: Icon(
+                                    obscurePassword
+                                        ? Icons.visibility_outlined
+                                        : Icons.visibility_off_outlined,
+                                    size: 18,
+                                    color: AppTheme.textMuted,
+                                  ),
+                                  onPressed: () => setDialogState(
+                                    () => obscurePassword = !obscurePassword,
+                                  ),
+                                ),
+                              ),
+                              validator: (val) {
+                                if (val != null &&
+                                    val.isNotEmpty &&
+                                    val.length < 6) {
+                                  return 'Password must be at least 6 characters';
+                                }
+                                return null;
+                              },
+                            ),
+                            const SizedBox(height: 10),
+                            TextFormField(
+                              controller: confirmPasswordController,
+                              obscureText: obscureConfirm,
+                              style: const TextStyle(
+                                color: AppTheme.textPrimary,
+                                fontSize: 14,
+                              ),
+                              decoration: _inputDecoration(
+                                label: 'Confirm New Password',
+                                hint: 'Re-enter password',
+                                icon: Icons.lock_reset_rounded,
+                                suffixIcon: IconButton(
+                                  icon: Icon(
+                                    obscureConfirm
+                                        ? Icons.visibility_outlined
+                                        : Icons.visibility_off_outlined,
+                                    size: 18,
+                                    color: AppTheme.textMuted,
+                                  ),
+                                  onPressed: () => setDialogState(
+                                    () => obscureConfirm = !obscureConfirm,
+                                  ),
+                                ),
+                              ),
+                              validator: (val) {
+                                if (passwordController.text.isNotEmpty &&
+                                    val != passwordController.text) {
+                                  return 'Passwords do not match';
+                                }
+                                return null;
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed:
+                    isSaving ? null : () => Navigator.of(dialogContext).pop(),
+                child: const Text(
+                  'Cancel',
+                  style: TextStyle(color: AppTheme.textSecondary),
+                ),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primary,
+                  foregroundColor: Colors.black87,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+                onPressed: isSaving
+                    ? null
+                    : () async {
+                        if (!formKey.currentState!.validate()) return;
+                        setDialogState(() => isSaving = true);
+                        try {
+                          await AuthService.instance.updateProfileAccount(
+                            newEmail: emailController.text.trim(),
+                            backupEmail: backupEmailController.text.trim(),
+                            phoneNumber: phoneController.text.trim(),
+                            displayName: nameController.text.trim(),
+                            newPassword: passwordController.text.isNotEmpty
+                                ? passwordController.text
+                                : null,
+                          );
+                          if (dialogContext.mounted) {
+                            Navigator.of(dialogContext).pop();
+                          }
+                          if (mounted) {
+                            setState(() {});
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Profile account updated successfully!',
+                                ),
+                                backgroundColor: AppTheme.primary,
+                                behavior: SnackBarBehavior.floating,
+                              ),
+                            );
+                          }
+                        } catch (e) {
+                          setDialogState(() => isSaving = false);
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Failed to update account: $e'),
+                                backgroundColor: Colors.redAccent,
+                              ),
+                            );
+                          }
+                        }
+                      },
+                child: isSaving
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.black87,
+                        ),
+                      )
+                    : const Text(
+                        'Save Changes',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  InputDecoration _inputDecoration({
+    required String label,
+    required String hint,
+    required IconData icon,
+    Widget? suffixIcon,
+  }) {
+    return InputDecoration(
+      labelText: label,
+      hintText: hint,
+      prefixIcon: Icon(icon, size: 18, color: AppTheme.primary),
+      suffixIcon: suffixIcon,
+      labelStyle: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+      hintStyle: const TextStyle(color: AppTheme.textMuted, fontSize: 12),
+      filled: true,
+      fillColor: AppTheme.cardSurface,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: AppTheme.border),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: AppTheme.border),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: AppTheme.primary, width: 1.5),
       ),
     );
   }

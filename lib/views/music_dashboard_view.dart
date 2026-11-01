@@ -66,6 +66,11 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
         _controller.loadSavedPlaylists();
       }
     });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _controller.cacheDisplayedDashboardAudio();
+      }
+    });
   }
 
   void _onStateChange() {
@@ -80,6 +85,10 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
     final repeatMode = _controller.repeatMode;
     final shuffle = _controller.isShuffle;
     final isMuted = _controller.isMuted;
+
+    if (songCount != _lastSongCount) {
+      _controller.cacheDisplayedDashboardAudio();
+    }
 
     if (currentSongId != _lastSongId ||
         isPlaying != _lastIsPlaying ||
