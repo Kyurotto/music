@@ -1730,6 +1730,11 @@ class MusicPlayerController extends ChangeNotifier {
     if ((titleKey.isEmpty && cleanTitleKey.isEmpty) || artistKey.isEmpty) return null;
 
     for (final song in _allSongs) {
+      // Do not match bundled assets — imported music must not default to the assets folder.
+      if (song.audioUrl.startsWith('assets/') || song.audioUrl.startsWith('asset:/')) {
+        continue;
+      }
+
       final songTitleKey = _normalizeKey(song.title);
       final songCleanTitleKey = _normalizeKey(_cleanSongTitle(song.title));
       final titleMatches = songTitleKey == titleKey ||
@@ -3239,6 +3244,11 @@ class MusicPlayerController extends ChangeNotifier {
                 await tempFile.delete();
               } catch (_) {}
             }
+            if ((streamedResponse.statusCode == 429 || streamedResponse.statusCode == 403) && isGoogleVideo) {
+              _enrichment.noteGooglevideoThrottle();
+            }
+            debugPrint(
+                '[MusicPlayerController] Cache rejected (${streamedResponse.statusCode}) for ${song.title}');
           }
         } else {
           if (await tempFile.exists()) {

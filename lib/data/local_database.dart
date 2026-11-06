@@ -142,7 +142,7 @@ class LocalDatabase {
             final files = offlineDir.listSync().whereType<File>();
             for (final f in files) {
               final name = path.basenameWithoutExtension(f.path);
-              if (previewSongIds.contains(name) || f.lengthSync() < 1600000) {
+              if (previewSongIds.contains(name) || f.lengthSync() <= 1024) {
                 try {
                   f.deleteSync();
                 } catch (_) {}
