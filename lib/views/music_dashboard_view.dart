@@ -854,7 +854,9 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final crossAxisCount = constraints.maxWidth > 900 ? 3 : 2;
+        final crossAxisCount = constraints.maxWidth > 900
+            ? 3
+            : (constraints.maxWidth > 520 ? 2 : 1);
 
         return GridView.builder(
           shrinkWrap: true,
@@ -1033,7 +1035,7 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
   }) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final narrow = constraints.maxWidth < 560;
+        final narrow = constraints.maxWidth < 680;
         final header = _buildSectionHeader(title, subtitle);
         final actionWrap = Wrap(
           spacing: 10,

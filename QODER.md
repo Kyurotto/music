@@ -36,3 +36,5 @@ Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
 2. Use `detect_changes_tool` for code review.
 3. Use `get_affected_flows_tool` to understand impact.
 4. Use `query_graph_tool` pattern="tests_for" to check coverage.
+
+For unfamiliar features, don't write from scratch--first search Github for open-source projects, compare approaches, then get started

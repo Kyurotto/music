@@ -287,20 +287,11 @@ class _SongRow extends StatelessWidget {
                       ),
                       const SizedBox(height: 2),
                       Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
-                          Expanded(
-                            child: Text(
-                              song.artist,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontSize: 12,
-                                color: AppTheme.textMuted,
-                              ),
-                            ),
-                          ),
+                          // LOCATING badge first (fixed width) so it never
+                          // pushes the artist text into overflow.
                           if (!song.hasAudio) ...[
-                            const SizedBox(width: 6),
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
                               decoration: BoxDecoration(
@@ -319,7 +310,19 @@ class _SongRow extends StatelessWidget {
                                 ),
                               ),
                             ),
+                            const SizedBox(width: 6),
                           ],
+                          Expanded(
+                            child: Text(
+                              song.artist,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: AppTheme.textMuted,
+                              ),
+                            ),
+                          ),
                         ],
                       ),
                     ],

@@ -311,7 +311,11 @@ class _TrackRowState extends State<_TrackRow> {
                       const SizedBox(height: 3),
                       Row(
                         children: [
-                          Flexible(
+                          if (_hasBadge(widget.song)) ...[
+                            ExcludeSemantics(child: _buildInlineBadge(widget.song)),
+                            const SizedBox(width: 6),
+                          ],
+                          Expanded(
                             child: Text(
                               widget.song.artist,
                               style: const TextStyle(
@@ -322,8 +326,8 @@ class _TrackRowState extends State<_TrackRow> {
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
-                          const SizedBox(width: 6),
-                          _buildInlineBadge(widget.song),
+
+
                         ],
                       ),
                     ],
@@ -363,7 +367,8 @@ class _TrackRowState extends State<_TrackRow> {
                     ),
                   ),
 
-                // Duration
+                // Duration — bounded so it never forces the track row to
+                // overflow on narrow dashboard/library widths.
                 SizedBox(
                   width: widget.isCompact ? 50 : 70,
                   child: Text(
@@ -373,6 +378,8 @@ class _TrackRowState extends State<_TrackRow> {
                       color: AppTheme.textMuted,
                     ),
                     textAlign: TextAlign.right,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
                 const SizedBox(width: 4),
@@ -432,6 +439,8 @@ class _TrackRowState extends State<_TrackRow> {
       ),
     );
   }
+
+  bool _hasBadge(Song song) => !song.hasAudio || song.isFullTrack || song.isPreview;
 
   Widget _buildInlineBadge(Song song) {
     if (!song.hasAudio) {

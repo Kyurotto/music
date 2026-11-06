@@ -84,6 +84,14 @@ class SpotifyImportService {
 
     if (raw.startsWith('spotify:')) {
       final parts = raw.split(':');
+      // Support Spotify radio / station URIs: spotify:station:playlist:<id>, spotify:station:artist:<id>
+      if (parts.length == 4 && parts[1].toLowerCase() == 'station') {
+        final type = _typeFrom(parts[2]);
+        final id = parts[3].trim();
+        if (type != null && _idPattern.hasMatch(id)) {
+          return SpotifyLink(type: type, id: id);
+        }
+      }
       if (parts.length != 3) return null;
       final type = _typeFrom(parts[1]);
       if (type == null) return null;
@@ -106,6 +114,12 @@ class SpotifyImportService {
       meaningful.add(segment);
     }
     if (meaningful.isNotEmpty && meaningful.first == 'embed') {
+      meaningful.removeAt(0);
+    }
+    // Support Spotify station / radio routes: /station/playlist/<id>, /station/artist/<id>, /radio/playlist/<id>
+    if (meaningful.isNotEmpty &&
+        (meaningful.first.toLowerCase() == 'station' ||
+            meaningful.first.toLowerCase() == 'radio')) {
       meaningful.removeAt(0);
     }
     if (meaningful.length != 2) return null;
@@ -742,7 +756,6 @@ class SpotifyImportService {
               item,
               fallbackArtist: subtitle.isNotEmpty && subtitle != 'Top tracks' ? subtitle : name,
               fallbackAlbum: name,
-              fallbackArtworkUrl: imageUrl,
             );
             if (track != null) {
               // For artist import: strictly verify that the track is by this artist!
@@ -861,7 +874,6 @@ class SpotifyImportService {
     Map<String, dynamic> entry, {
     required String fallbackArtist,
     required String fallbackAlbum,
-    String fallbackArtworkUrl = '',
   }) {
     final title = _stringValue(entry, 'title', 'name');
     if (title.isEmpty) return null;
@@ -876,7 +888,10 @@ class SpotifyImportService {
     final durationMs = _intValue(entry, 'duration');
 
     var artwork = _extractArtworkFromMap(entry);
-    if (artwork.isEmpty) artwork = fallbackArtworkUrl;
+    // Never fall back to the playlist/album cover for an individual track —
+    // that makes every song in the playlist show the same (duplicate) image.
+    // Leave it empty so it is resolved per-track (curated cover / iTunes /
+    // enrichment artwork) or rendered as unique procedural art.
 
     return SpotifyImportedTrack(
       spotifyId: (id.isEmpty) ? _fallbackId(title, artist) : id,
