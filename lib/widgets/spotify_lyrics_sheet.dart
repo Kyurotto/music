@@ -194,14 +194,30 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
             _lyricsLookupFailed = false;
           }
         }
-        // Track playback so the active white line follows the audio.
-        final highlightChanged = _syncHighlightToPlayback(currentSong);
-        if (highlightChanged && _highlightedLineIndex != null) {
-          final line = _highlightedLineIndex!;
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted && !_userPinnedLine) _scrollToLine(line);
-          });
+        // Compute the highlight line index *without* mutating state inside the
+        // builder — _syncHighlightToPlayback sets _highlightedLineIndex, and
+        // doing that mid-build can trigger the parentDataDirty assertion.
+        // Instead, read what the line *should* be and, if it differs from the
+        // current highlight, schedule a post-frame setState + scroll.
+        if (!_userPinnedLine && currentSong.lyrics.isNotEmpty) {
+          final total = widget.controller.displayDurationFor(currentSong);
+          final expected = Song.lyricsLineIndexForProgress(
+            currentSong.lyrics,
+            widget.controller.currentPosition,
+            total,
+          );
+          if (_highlightedLineIndex != expected) {
+            final target = expected;
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) return;
+              setState(() {
+                _highlightedLineIndex = target;
+              });
+              if (!_userPinnedLine) _scrollToLine(target);
+            });
+          }
         }
+
         final isPlaying = widget.controller.isPlaying;
         final primaryColor = currentSong.gradientColors.isNotEmpty
             ? currentSong.gradientColors.first

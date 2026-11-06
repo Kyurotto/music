@@ -21,7 +21,7 @@ void main() {
 
     // Verify Sign In mode elements
     expect(find.text('Welcome back'), findsOneWidget);
-    expect(find.text('Sign in to continue to Pulse Music.'), findsOneWidget);
+    expect(find.text('Sign in to continue to Pulse Studio.'), findsOneWidget);
     expect(find.widgetWithText(ElevatedButton, 'Sign in'), findsOneWidget);
     expect(find.text('Confirm password'), findsNothing);
 

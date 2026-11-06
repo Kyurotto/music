@@ -8,7 +8,7 @@ import '../services/discovery_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/song_artwork_widget.dart';
 import '../widgets/spotify_lyrics_sheet.dart';
-import 'discovery_playlist_page.dart';
+import 'playlist_screen.dart';
 
 /// Automatic dashboard rows (Quick Picks, Covers & Remixes, Long Listens,
 /// Community Favorites, Trending For You). Needs no imported playlist.
@@ -29,11 +29,13 @@ class DiscoverySectionsState extends State<DiscoverySections> {
   bool _isLoading = true;
   Future<void>? _inFlight;
   int _signature = 0;
+  int _lastLocatingVersion = 0;
   late final DiscoveryAutoRefresher _autoRefresher;
 
   @override
   void initState() {
     super.initState();
+    _lastLocatingVersion = widget.controller.locatingStatusVersion;
     widget.controller.addListener(_onControllerChange);
     // Auto-refresh every 5 minutes while the dashboard is open, and when the
     // app returns to the foreground after 3+ minutes.
@@ -51,10 +53,12 @@ class DiscoverySectionsState extends State<DiscoverySections> {
   void _onControllerChange() {
     if (!mounted) return;
     // The controller notifies on every playback tick. Rebuild only when a
-    // visible song gained audio or finished upgrading from its preview.
+    // visible song gained audio, updated locating, or finished upgrading.
     final signature = _computeSignature(_sections);
-    if (signature != _signature) {
+    final locatingVersion = widget.controller.locatingStatusVersion;
+    if (signature != _signature || locatingVersion != _lastLocatingVersion) {
       _signature = signature;
+      _lastLocatingVersion = locatingVersion;
       setState(() {});
     }
   }
@@ -63,7 +67,11 @@ class DiscoverySectionsState extends State<DiscoverySections> {
     var h = 17;
     for (final section in sections) {
       for (final song in section.songs) {
-        h = (h * 31 + (song.hasAudio ? 1 : 0) + (song.isPreview ? 2 : 0)) &
+        h = (h * 31 +
+                (song.hasAudio ? 1 : 0) +
+                (song.isPreview ? 2 : 0) +
+                (song.isFullTrack ? 4 : 0) +
+                (song.isEnrichingLyrics ? 8 : 0)) &
             0x3fffffff;
       }
     }
@@ -158,11 +166,11 @@ class DiscoverySectionsState extends State<DiscoverySections> {
 
   void _fastLocateTracks(List<DiscoverySection> sections) {
     if (sections.isEmpty) return;
-    // Interleave songs across all sections (top of Quick Picks, Covers,
-    // Community, Trending) so the top tracks of each section resolve simultaneously
+    // Interleave top songs across all sections (top 3 of Quick Picks, Covers,
+    // Community, Trending) so primary visible tracks resolve without lagging the device
     final interleaved = <Song>[];
-    final maxLen = sections.fold<int>(0, (max, s) => s.songs.length > max ? s.songs.length : max);
-    for (var i = 0; i < maxLen; i++) {
+    const maxPerSection = 3;
+    for (var i = 0; i < maxPerSection; i++) {
       for (final sec in sections) {
         if (i < sec.songs.length) {
           interleaved.add(sec.songs[i]);
@@ -183,8 +191,13 @@ class DiscoverySectionsState extends State<DiscoverySections> {
 
   void _openSection(DiscoverySection section) {
     Navigator.of(context).push(
-      DiscoveryPlaylistPage.route(
-        section: section,
+      PlaylistScreen.route(
+        title: section.title,
+        subtitle: section.subtitle,
+        creatorName: section.id == 'community_favorites'
+            ? 'Community'
+            : 'YouTube Music',
+        songs: section.songs,
         controller: widget.controller,
       ),
     );
@@ -315,6 +328,31 @@ class _DiscoveryRail extends StatelessWidget {
                   size: _tileWidth,
                   borderRadius: 12,
                 ),
+                if (song.isFullTrack)
+                  Positioned(
+                    top: 6,
+                    left: 6,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.75),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(
+                          color: AppTheme.accentGreen.withValues(alpha: 0.5),
+                          width: 1,
+                        ),
+                      ),
+                      child: const Text(
+                        'FULL TRACK',
+                        style: TextStyle(
+                          fontSize: 8,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.4,
+                          color: AppTheme.accentGreen,
+                        ),
+                      ),
+                    ),
+                  ),
                 if (!song.hasAudio)
                   Positioned(
                     bottom: 6,

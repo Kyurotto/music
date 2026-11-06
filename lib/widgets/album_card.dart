@@ -80,26 +80,21 @@ class _AlbumCardState extends State<AlbumCard> {
                       height: double.infinity,
                     ),
                     if (widget.onDelete != null)
-                      AnimatedPositioned(
-                        duration: const Duration(milliseconds: 200),
+                      Positioned(
                         top: 8,
                         right: 8,
-                        child: AnimatedOpacity(
-                          duration: const Duration(milliseconds: 200),
-                          opacity: active ? 1.0 : 0.0,
-                          child: Material(
-                            color: Colors.black.withValues(alpha: 0.65),
-                            shape: const CircleBorder(),
-                            child: InkWell(
-                              customBorder: const CircleBorder(),
-                              onTap: widget.onDelete,
-                              child: const Padding(
-                                padding: EdgeInsets.all(6),
-                                child: Icon(
-                                  Icons.delete_outline_rounded,
-                                  color: Colors.white,
-                                  size: 18,
-                                ),
+                        child: Material(
+                          color: Colors.black.withValues(alpha: active ? 0.85 : 0.6),
+                          shape: const CircleBorder(),
+                          child: InkWell(
+                            customBorder: const CircleBorder(),
+                            onTap: widget.onDelete,
+                            child: const Padding(
+                              padding: EdgeInsets.all(6),
+                              child: Icon(
+                                Icons.delete_outline_rounded,
+                                color: Colors.white,
+                                size: 18,
                               ),
                             ),
                           ),

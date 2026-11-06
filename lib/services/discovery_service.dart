@@ -171,9 +171,7 @@ class DiscoveryService {
         'album': s.album,
         'ms': s.duration.inMilliseconds,
         'art': s.imageUrl,
-        // Only the catalog preview URL is saved; resolved full tracks are
-        // re-linked from the offline cache by the player.
-        'preview': (s.isPreview && s.audioUrl.startsWith('http')) ? s.audioUrl : '',
+        'preview': '',
       };
 
   static Song? _songFromJson(Map<String, dynamic> j) {
@@ -182,7 +180,6 @@ class DiscoveryService {
     if (id is! String || title is! String || title.isEmpty) return null;
     final artist = (j['artist'] as String?) ?? '';
     final ms = j['ms'];
-    final preview = (j['preview'] as String?) ?? '';
     return Song(
       id: id,
       title: title,
@@ -196,8 +193,8 @@ class DiscoveryService {
       gradientColors: _gradientFor('$title$artist'),
       plays: '',
       lyrics: <String>[],
-      audioUrl: preview,
-      isPreview: preview.isNotEmpty,
+      audioUrl: '',
+      isPreview: false,
     );
   }
 
@@ -374,8 +371,13 @@ class DiscoveryService {
   }
 
   static Iterable<_Track> _dedupe(Iterable<_Track> tracks) {
-    final seen = <int>{};
-    return tracks.where((t) => seen.add(t.trackId));
+    final seenIds = <int>{};
+    final seenKeys = <String>{};
+    return tracks.where((t) {
+      if (!seenIds.add(t.trackId)) return false;
+      final key = '${t.title.trim().toLowerCase()}|${t.artist.trim().toLowerCase()}';
+      return seenKeys.add(key);
+    });
   }
 
   static String _hiRes(String? url) {
@@ -394,8 +396,10 @@ class DiscoveryService {
       _palettes[seed.hashCode.abs() % _palettes.length];
 }
 
-class _Track {
-  const _Track({
+typedef _Track = DiscoveryTrack;
+
+class DiscoveryTrack {
+  const DiscoveryTrack({
     required this.trackId,
     required this.title,
     required this.artist,
@@ -430,10 +434,10 @@ class _Track {
         gradientColors: DiscoveryService._gradientFor('$title$artist'),
         plays: '',
         lyrics: <String>[],
-        // The 30s clip is only a head start: it is flagged as a preview so
-        // the controller upgrades it to the full-length track.
-        audioUrl: previewUrl,
-        isPreview: previewUrl.isNotEmpty,
+        // Do not default to the 30s preview clip. Songs will resolve
+        // full track audio (YouTube, SoundCloud, Saavn, Archive.org).
+        audioUrl: '',
+        isPreview: false,
       );
 }
 
