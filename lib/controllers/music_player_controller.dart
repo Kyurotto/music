@@ -16,6 +16,7 @@ import '../auth/auth_service.dart';
 import '../data/local_database.dart';
 import '../models/equalizer_preset.dart';
 import '../models/song_model.dart';
+import '../services/radio_discovery_service.dart';
 import '../services/spotify_import_service.dart';
 import '../services/track_enrichment_service.dart';
 
@@ -740,6 +741,46 @@ class MusicPlayerController extends ChangeNotifier {
       addedCount: added,
       reusedLocalCount: reusedLocal,
     );
+  }
+
+  /// Fast imports an entire RadioStation into the user's Library playlists.
+  MusicPlaylist fastImportRadioStation(RadioStation station) {
+    var playlist = _playlistByTitle(station.title);
+    if (playlist == null) {
+      final newId = _newPlaylistId();
+      playlist = MusicPlaylist(
+        id: newId,
+        title: station.title,
+        subtitle: station.subtitle,
+        gradient: station.gradientColors,
+        imageUrl: station.heroImageUrl.isNotEmpty
+            ? station.heroImageUrl
+            : (station.avatarUrls.isNotEmpty ? station.avatarUrls.first : ''),
+        songIds: [],
+      );
+      _playlists.add(playlist);
+    } else {
+      if (playlist.imageUrl.isEmpty && station.avatarUrls.isNotEmpty) {
+        playlist.imageUrl = station.avatarUrls.first;
+      }
+    }
+
+    unawaited(LocalDatabase.instance.unmarkPlaylistDeleted(playlist.id, title: playlist.title));
+
+    for (final song in station.songs) {
+      if (!_allSongs.any((s) => s.id == song.id)) {
+        _allSongs.add(song);
+      }
+      if (!playlist.songIds.contains(song.id)) {
+        playlist.songIds.add(song.id);
+      }
+    }
+
+    _persistPlaylistToDb(playlist, null);
+    // Fast-locate all radio tracks strictly via YouTube into full tracks immediately
+    fastLocateRadioSongs(station.songs);
+    notifyListeners();
+    return playlist;
   }
 
   void _persistPlaylistToDb(MusicPlaylist playlist, String? spotifyUrl) {
@@ -1829,17 +1870,18 @@ class MusicPlayerController extends ChangeNotifier {
       if (_enrichingIds.contains(s.id)) return false;
       final isFallback = _offlineFallbackIds.contains(s.id);
       final hasFakeLyrics = _offlineFakeLyricsIds.contains(s.id);
+      final isRadioTrack = s.id.startsWith('radio-') || s.id.startsWith('dm-');
       
       // Silent tracks and fallbacks retry under exponential backoff
       final needsAudio = (!s.hasAudio ||
               s.isSilentPlaceholder ||
               isFallback ||
               s.isPreview) &&
-          _shouldAttemptFullUpgrade(s.id);
+          (fastImport || isRadioTrack || _shouldAttemptFullUpgrade(s.id));
           
       final hasSyncedLyrics = s.lyrics.any((l) => l.trim().startsWith('['));
       final needsLyrics = (s.lyrics.isEmpty || hasFakeLyrics || !hasSyncedLyrics) &&
-          !_enrichedIds.contains(s.id);
+          (fastImport || isRadioTrack || !_enrichedIds.contains(s.id));
       return needsAudio || needsLyrics;
     }).toList();
     
@@ -2344,7 +2386,10 @@ class MusicPlayerController extends ChangeNotifier {
     String? failedUrl,
     String? failedVideoId,
   }) async {
-    final isImported = song.id.startsWith('spotify-') || song.id.startsWith('itunes-');
+    final isImported = song.id.startsWith('spotify-') ||
+        song.id.startsWith('itunes-') ||
+        song.id.startsWith('radio-') ||
+        song.id.startsWith('dm-');
     if (!isImported) {
       // Local/bundled tracks have no full-track catalog to search.
       try {
@@ -2493,6 +2538,8 @@ class MusicPlayerController extends ChangeNotifier {
         }
       }
 
+      final isRadioSong = song.id.startsWith('radio-') || song.id.startsWith('dm-');
+
       final enrichment = await _enrichment.enrichTrack(
         title: song.title,
         artist: song.artist,
@@ -2502,6 +2549,7 @@ class MusicPlayerController extends ChangeNotifier {
         allowPreviewFallback: false,
         prioritizeYouTube: true,
         fastImport: fastImport,
+        youtubeOnly: isRadioSong,
       );
       _logDiag(
         'enrichment done in ${DateTime.now().difference(enrichStart).inMilliseconds}ms '
@@ -2539,7 +2587,10 @@ class MusicPlayerController extends ChangeNotifier {
   bool _applyEnrichment(Song song, TrackEnrichment enrichment) {
     var changed = false;
 
-    final isImported = song.id.startsWith('spotify-') || song.id.startsWith('itunes-');
+    final isImported = song.id.startsWith('spotify-') ||
+        song.id.startsWith('itunes-') ||
+        song.id.startsWith('radio-') ||
+        song.id.startsWith('dm-');
     final isFallbackAudio = _offlineFallbackIds.contains(song.id);
     final isM3u8 = enrichment.previewUrl?.toLowerCase().contains('.m3u8') ?? false;
     final shouldAttachAudio = enrichment.hasAudio &&
@@ -3784,6 +3835,34 @@ class MusicPlayerController extends ChangeNotifier {
     }
     // Earlier rows (Quick Picks first) are located first, 2 at a time to prevent UI lag.
     _enrichImportedSongs(unique, fastImport: true, maxConcurrency: 2);
+  }
+
+  /// Fast-locates full tracks + audio + lyrics strictly via YouTube for
+  /// Explore radio playlists and imported radio stations.
+  /// Bypasses backoff cooldowns and uses 4 workers for immediate resolution.
+  void fastLocateRadioSongs(List<Song> songs) {
+    if (songs.isEmpty || _disposed) return;
+    final seen = <String>{};
+    final unique = <Song>[];
+    for (final s in songs) {
+      if (!seen.add(s.id)) continue;
+      _fullUpgradeAttemptedAt.remove(s.id);
+      _fullTrackAttemptCount.remove(s.id);
+      unique.add(s);
+    }
+    _enrichImportedSongs(unique, fastImport: true, maxConcurrency: 4);
+  }
+
+  /// Pre-locates tracks for the given Explore radio stations in the background
+  /// using YouTube only, so that when a user browses or opens a radio station,
+  /// the songs are already resolved to full tracks instead of showing "LOCATING".
+  void preLocateExploreRadios(List<RadioStation> stations) {
+    if (stations.isEmpty || _disposed) return;
+    final allSongs = <Song>[];
+    for (final st in stations.take(4)) {
+      allSongs.addAll(st.songs);
+    }
+    fastLocateRadioSongs(allSongs);
   }
 
   /// Fast-locates full tracks + audio + lyrics for imported Spotify playlist

@@ -137,7 +137,7 @@ void main() {
         gradientColors: const [],
         plays: '',
         lyrics: const [],
-        audioUrl: 'assets/audio/lose-yourself.m4a',
+        audioUrl: 'file:///storage/emulated/0/Music/lose-yourself.mp3',
       );
       controller.addSong(sample);
       final local = controller.allSongs.firstWhere((s) => s.title == 'Lose Yourself');

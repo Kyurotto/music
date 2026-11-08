@@ -1,14 +1,13 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../controllers/music_player_controller.dart';
-import '../models/song_model.dart';
 import '../auth/auth_service.dart';
 import '../views/settings_view.dart';
-import 'song_artwork_widget.dart';
 
 class SidebarNav extends StatelessWidget {
   final MusicPlayerController controller;
   final ValueChanged<String>? onPlaylistSelected;
+  final ValueChanged<String>? onArtistSelected;
   final VoidCallback? onCreatePlaylist;
   final VoidCallback? onImportSpotify;
   final String? selectedPlaylistId;
@@ -17,6 +16,7 @@ class SidebarNav extends StatelessWidget {
     super.key,
     required this.controller,
     this.onPlaylistSelected,
+    this.onArtistSelected,
     this.onCreatePlaylist,
     this.onImportSpotify,
     this.selectedPlaylistId,
@@ -128,7 +128,7 @@ class SidebarNav extends StatelessWidget {
                   icon: Icons.library_music_rounded,
                   label: 'Library',
                   isSelected: controller.currentNavIndex == 2,
-                  badge: '${controller.allSongs.length}',
+                  badge: '${controller.playlists.length}',
                   onTap: () => controller.setNavIndex(2),
                 ),
                 _NavItem(
@@ -142,71 +142,7 @@ class SidebarNav extends StatelessWidget {
             ),
           ),
 
-          const SizedBox(height: 16),
-          const Divider(height: 1, indent: 20, endIndent: 20),
-          const SizedBox(height: 16),
-
-          // Quick Playlists
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
-            child: Row(
-              children: [
-                const Expanded(
-                  child: Text(
-                    'PLAYLISTS',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 1.2,
-                      color: AppTheme.textMuted,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.download_rounded, size: 18, color: AppTheme.textSecondary),
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                      splashRadius: 14,
-                      tooltip: 'Import Spotify link',
-                      onPressed: onImportSpotify,
-                    ),
-                    const SizedBox(width: 4),
-                    IconButton(
-                      icon: const Icon(Icons.add_rounded, size: 18, color: AppTheme.textSecondary),
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                      splashRadius: 14,
-                      tooltip: 'Create playlist',
-                      onPressed: onCreatePlaylist,
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              children: controller.playlists.map((playlist) {
-                return _PlaylistItem(
-                  playlist: playlist,
-                  isSelected: playlist.id == selectedPlaylistId,
-                  onTap: () {
-                    if (onPlaylistSelected != null) {
-                      onPlaylistSelected!(playlist.id);
-                    } else {
-                      controller.setNavIndex(2);
-                    }
-                  },
-                );
-              }).toList(),
-            ),
-          ),
+          const Spacer(),
 
           // User Profile Footer - Click to edit profile account
           InkWell(
@@ -396,66 +332,6 @@ class _NavItem extends StatelessWidget {
                       ),
                     ),
                   ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _PlaylistItem extends StatelessWidget {
-  final MusicPlaylist playlist;
-  final VoidCallback onTap;
-  final bool isSelected;
-
-  const _PlaylistItem({
-    required this.playlist,
-    required this.onTap,
-    this.isSelected = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 2),
-      decoration: BoxDecoration(
-        color: isSelected ? AppTheme.primary.withValues(alpha: 0.15) : Colors.transparent,
-        borderRadius: BorderRadius.circular(8),
-        border: isSelected
-            ? Border.all(color: AppTheme.primary.withValues(alpha: 0.4), width: 1)
-            : null,
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(8),
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            child: Row(
-              children: [
-                SongArtworkWidget(
-                  imageUrl: playlist.imageUrl,
-                  title: playlist.title,
-                  artist: playlist.subtitle,
-                  gradientColors: playlist.gradient,
-                  size: 24,
-                  borderRadius: 6,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    playlist.title,
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: isSelected ? Colors.white : AppTheme.textSecondary,
-                      fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
               ],
             ),
           ),

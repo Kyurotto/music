@@ -70,6 +70,23 @@ class TrackEnrichmentService {
     return res ?? const TrackEnrichment();
   }
 
+  /// Dedicated resolver for radio playlist tracks: locates strictly via YouTube
+  /// to ensure authentic full-length playback without 30s clips or third-party music scrapers.
+  Future<TrackEnrichment> locateRadioTrackViaYouTube({
+    required String title,
+    required String artist,
+    Duration? duration,
+  }) async {
+    return enrichTrack(
+      title: title,
+      artist: artist,
+      duration: duration,
+      youtubeOnly: true,
+      allowPreviewFallback: false,
+      prioritizeYouTube: true,
+    );
+  }
+
   /// Enrich a single track: full-length audio (JioSaavn → YouTube → 30s
   /// previews) plus lyrics. Never throws — returns an empty enrichment
   /// when offline or when no match is found.
@@ -77,6 +94,8 @@ class TrackEnrichmentService {
   /// Set [allowPreviewFallback] to false to require full-length audio only.
   /// Set [prioritizeYouTube] to true (default on Spotify imports) to query
   /// YouTube first for sub-2-second full-track resolution on WiFi and mobile data.
+  /// Set [youtubeOnly] to true to resolve strictly via YouTube, bypassing all
+  /// other third-party music services and 30s previews.
   Future<TrackEnrichment> enrichTrack({
     required String title,
     required String artist,
@@ -86,6 +105,7 @@ class TrackEnrichmentService {
     bool allowPreviewFallback = true,
     bool prioritizeYouTube = false,
     bool fastImport = false,
+    bool youtubeOnly = false,
   }) async {
     final t = title.trim();
     final a = artist.trim();
@@ -102,6 +122,7 @@ class TrackEnrichmentService {
           allowPreviewFallback: allowPreviewFallback,
           prioritizeYouTube: prioritizeYouTube,
           fastImport: fastImport,
+          youtubeOnly: youtubeOnly,
         ),
         // A preview-only pass exists to get something audible quickly while
         // the full pass is still running (and that pass fetches the lyrics).
@@ -145,7 +166,26 @@ class TrackEnrichmentService {
     bool allowPreviewFallback = false,
     bool prioritizeYouTube = false,
     bool fastImport = false,
+    bool youtubeOnly = false,
   }) async {
+    // When youtubeOnly is active (for Explore radio playlists), query YouTube strictly
+    // and skip all other music services, third-party CDNs, and 30-second previews.
+    if (youtubeOnly) {
+      final sw = Stopwatch()..start();
+      try {
+        final yt = await _fetchYouTubeFullAudio(
+          title: title,
+          artist: artist,
+          duration: duration,
+        );
+        _stageLog('yt-only', sw, yt != null ? 'HIT' : 'miss');
+        return yt;
+      } catch (e) {
+        _stageLog('yt-only', sw, 'error $e');
+        return null;
+      }
+    }
+
     final lowerTitle = title.toLowerCase();
 
     // Curated high-fidelity audio mapping for tracks where streaming CDNs block or throttle
@@ -764,7 +804,7 @@ class TrackEnrichmentService {
       final stream = await _ytAudioStream(vid);
       if (stream == null || stream.url.isEmpty) return null;
 
-      if (stream.url.contains('googlevideo.com')) {
+      if (!stream.isProgressive && stream.url.contains('googlevideo.com')) {
         final bytes = await _probeAudioUrl(stream.url);
         if (bytes == null) return null;
       }
@@ -793,9 +833,14 @@ class TrackEnrichmentService {
     final cleanArtist = _cleanQuery(artist);
     if (cleanTitle.isEmpty) return null;
     final versionQ = _versionQuery(title);
+    final primaryArtist = cleanArtist.split(RegExp(r'[,&/]')).first.trim();
     final queries = <String>[
       if (versionQ.isNotEmpty) '$cleanTitle $versionQ $cleanArtist'.trim(),
+      if (primaryArtist.isNotEmpty && primaryArtist != cleanArtist)
+        '$cleanTitle $primaryArtist'.trim(),
       '$cleanTitle $cleanArtist'.trim(),
+      if (primaryArtist.isNotEmpty && primaryArtist != cleanArtist)
+        '$cleanTitle $primaryArtist official audio'.trim(),
       '$cleanTitle $cleanArtist official audio'.trim(),
       cleanTitle,
     ];
@@ -831,6 +876,13 @@ class TrackEnrichmentService {
     final wantArtist = _normalize(artist);
     final wantSeconds = duration?.inSeconds ?? 0;
 
+    // Smart multi-artist matching tokens
+    final artistTokens = artist
+        .split(RegExp(r'[,&/]|\bfeat\.?|\bft\.?', caseSensitive: false))
+        .map((a) => _normalize(a.replaceAll(RegExp(r'(records|music|topic|official)', caseSensitive: false), '')))
+        .where((a) => a.length >= 2)
+        .toList();
+
     final scored = <({ _YouTubeCandidate c, int score })>[];
     for (final c in candidates) {
       if (c.videoId.isEmpty || c.title.isEmpty) continue;
@@ -853,7 +905,19 @@ class TrackEnrichmentService {
                 hitChannel.contains(wantArtist) ||
                 wantArtist.contains(hitChannel));
         final titleHasArtist = hitTitle.contains(wantArtist);
-        if (!channelOverlaps && !titleHasArtist) continue;
+
+        final cleanChannel = hitChannel.replaceAll('topic', '');
+        final channelMatchesAny = artistTokens.any(
+            (tok) => cleanChannel.contains(tok) || tok.contains(cleanChannel));
+        final titleMatchesAny = artistTokens.any(
+            (tok) => hitTitle.contains(tok));
+
+        final artistMatches = channelOverlaps ||
+            titleHasArtist ||
+            channelMatchesAny ||
+            titleMatchesAny;
+
+        if (!artistMatches) continue;
       }
 
       var score = titleExact ? 4 : 2;
@@ -890,14 +954,14 @@ class TrackEnrichmentService {
     if (scored.isEmpty) return null;
     scored.sort((a, b) => b.score.compareTo(a.score));
 
-    // Try the best candidates in order: the top hit is often an
-    // unplayable re-upload while the official upload right behind it
-    // streams fine. Cap attempts so a slow network stays bounded.
+    // Try the best candidates in order: progressive MP4 streams (itag 18)
+    // are unthrottled and directly streamable by ExoPlayer/just_audio with
+    // no range probe overhead or throttle cooldown risk.
     for (final entry in scored.take(5)) {
       final stream = await _ytAudioStream(entry.c.videoId);
       if (stream == null || stream.url.isEmpty) continue;
 
-      if (stream.url.contains('googlevideo.com')) {
+      if (!stream.isProgressive && stream.url.contains('googlevideo.com')) {
         final bytes = await _probeAudioUrl(stream.url);
         if (bytes == null) continue;
       }
