@@ -2248,6 +2248,23 @@ class MusicPlayerController extends ChangeNotifier {
   Future<int> _relinkCachedAudio() async {
     var pinned = 0;
     try {
+      try {
+        final dirs = await _offlineCandidateDirs();
+        for (final dir in dirs) {
+          if (!await dir.exists()) continue;
+          final list = dir.listSync();
+          for (final f in list) {
+            if (f is File) {
+              final name = p.basename(f.path);
+              final ext = p.extension(name).toLowerCase();
+              if (const ['.mp3', '.m4a', '.mp4', '.aac', '.wav', '.ogg'].contains(ext) && f.lengthSync() > 1024) {
+                _downloadedSongIds.add(p.basenameWithoutExtension(name));
+              }
+            }
+          }
+        }
+      } catch (_) {}
+
       for (final s in _allSongs.where(
           (s) => (s.id.startsWith('spotify-') || s.id.startsWith('itunes-')) &&
                  (!s.hasAudio || s.isPreview || !s.audioUrl.contains('offline_audio')))) {
@@ -2257,6 +2274,7 @@ class MusicPlayerController extends ChangeNotifier {
           if (cached != null &&
               cached.existsSync() &&
               cached.lengthSync() > 1024) {
+            _downloadedSongIds.add(s.id);
             final wasPreview = s.isPreview;
             s.audioUrl = cached.path;
             s.isPreview = cached.lengthSync() < 1600000 && s.isPreview;
@@ -2644,6 +2662,43 @@ class MusicPlayerController extends ChangeNotifier {
   }
 
   final Set<String> _cachingIds = {};
+  final Set<String> _downloadedSongIds = {};
+
+  /// Synchronously checks if a song is downloaded and available offline.
+  bool isSongDownloaded(String songId) {
+    if (_downloadedSongIds.contains(songId)) return true;
+    final memo = _audioLookupMemo[songId];
+    if (memo != null && memo.existsSync() && memo.lengthSync() > 1024) {
+      _downloadedSongIds.add(songId);
+      return true;
+    }
+    for (final s in _allSongs) {
+      if (s.id == songId) {
+        if ((s.audioUrl.contains('offline_audio') ||
+             s.audioUrl.contains('pulse_music_offline')) &&
+            !s.audioUrl.startsWith('assets/')) {
+          _downloadedSongIds.add(songId);
+          return true;
+        }
+        break;
+      }
+    }
+    return false;
+  }
+
+  /// Synchronously checks if a song is currently downloading.
+  bool isSongDownloading(String songId) => _cachingIds.contains(songId);
+
+  /// Synchronously checks if all songs in a playlist are downloaded.
+  bool isPlaylistFullyDownloaded(List<Song> songs) {
+    if (songs.isEmpty) return false;
+    return songs.every((s) => isSongDownloaded(s.id));
+  }
+
+  /// Synchronously checks if any song in a playlist is currently downloading.
+  bool isPlaylistDownloading(List<Song> songs) {
+    return songs.any((s) => _cachingIds.contains(s.id));
+  }
 
   Future<Directory> _getPrimaryOfflineDirectory() async {
     Directory? primary;
@@ -3113,6 +3168,7 @@ class MusicPlayerController extends ChangeNotifier {
     // 1. Check if a valid local offline file already exists
     final cached = await _findCachedAudioFile(song.id);
     if (cached != null) {
+      _downloadedSongIds.add(song.id);
       if (song.audioUrl != cached.path) {
         song.audioUrl = cached.path;
         song.isPreview = cached.lengthSync() < 1600000 && song.isPreview;
@@ -3202,6 +3258,7 @@ class MusicPlayerController extends ChangeNotifier {
             }
             await tempFile.rename(targetFile.path);
             _invalidateOfflineLookup(song.id);
+            _downloadedSongIds.add(song.id);
 
             song.audioUrl = targetFile.path;
             song.isPreview = false;
@@ -3325,6 +3382,224 @@ class MusicPlayerController extends ChangeNotifier {
   /// Caches all currently displayed dashboard songs into the local offline audio cache directory.
   void cacheDisplayedDashboardAudio() {
     _cacheAllPendingOfflineAudio();
+  }
+
+  /// Downloads a song to the local offline directory for permanent offline playback.
+  /// Resolves the stream if needed, saves audio and artwork, and updates local database.
+  Future<bool> downloadSong(Song song, {bool allowPreviewFallback = true}) async {
+    // 1. Check if a valid local offline file already exists
+    final cached = await _findCachedAudioFile(song.id);
+    if (cached != null && cached.existsSync() && cached.lengthSync() > 1024) {
+      _downloadedSongIds.add(song.id);
+      if (song.audioUrl != cached.path) {
+        song.audioUrl = cached.path;
+        song.isPreview = cached.lengthSync() < 1600000 && song.isPreview;
+        song.isYouTubeAudio = false;
+        _syncSongPathToQueueAndDb(song);
+        notifyListeners();
+      }
+      return true;
+    }
+
+    // Don't download over mobile data unless the user allowed it.
+    if (!await _mayDownloadNow()) {
+      _logDiag('downloadSong skipped: on mobile data', song: song);
+      return false;
+    }
+
+    if (_cachingIds.contains(song.id)) return false;
+    _cachingIds.add(song.id);
+    notifyListeners();
+
+    try {
+      final offlineDir = await _getPrimaryOfflineDirectory();
+      String urlToDownload = song.audioUrl;
+
+      // If the URL is empty or expired, resolve fresh full or preview stream
+      if (urlToDownload.isEmpty ||
+          urlToDownload.toLowerCase().contains('.m3u8') ||
+          _isGoogleVideoExpired(urlToDownload) ||
+          (song.isPreview && !urlToDownload.contains('googlevideo.com'))) {
+        try {
+          final enrichment = await _enrichment.enrichTrack(
+            title: song.title,
+            artist: song.artist,
+            album: song.album,
+            duration: song.duration,
+            previewFallbackOnly: false,
+            allowPreviewFallback: allowPreviewFallback,
+            prioritizeYouTube: true,
+          );
+          if (enrichment.hasAudio &&
+              enrichment.previewUrl != null &&
+              !enrichment.previewUrl!.toLowerCase().contains('.m3u8') &&
+              enrichment.previewUrl!.startsWith('http')) {
+            urlToDownload = enrichment.previewUrl!;
+            _applyEnrichment(song, enrichment);
+          }
+        } catch (_) {}
+      }
+
+      if (urlToDownload.isEmpty ||
+          urlToDownload.toLowerCase().contains('.m3u8') ||
+          (!urlToDownload.startsWith('http://') && !urlToDownload.startsWith('https://'))) {
+        return false;
+      }
+
+      final isGoogleVideo = urlToDownload.contains('googlevideo.com');
+      final userAgent = isGoogleVideo
+          ? TrackEnrichmentService.ytAndroidUserAgent
+          : TrackEnrichmentService.browserUserAgent;
+
+      final uri = Uri.parse(urlToDownload);
+      final ext = (urlToDownload.toLowerCase().contains('.mp3') || urlToDownload.contains('audio/mpeg')) ? '.mp3' : '.m4a';
+      final targetFile = File(p.join(offlineDir.path, '${song.id}$ext'));
+      final tempFile = File(p.join(offlineDir.path, '${song.id}.tmp'));
+
+      final request = http.Request('GET', uri);
+      request.headers['User-Agent'] = userAgent;
+      request.headers['Accept'] = '*/*';
+      if (!isGoogleVideo) {
+        request.headers['Range'] = 'bytes=0-';
+      }
+
+      final client = http.Client();
+      try {
+        final streamedResponse = await client.send(request).timeout(const Duration(seconds: 50));
+        if (streamedResponse.statusCode == 200 || streamedResponse.statusCode == 206) {
+          final sink = tempFile.openWrite();
+          await streamedResponse.stream.pipe(sink);
+          await sink.flush();
+          await sink.close();
+
+          final downloadedBytes = await tempFile.length();
+          if (downloadedBytes >= 50000) {
+            if (await targetFile.exists()) {
+              try {
+                await targetFile.delete();
+              } catch (_) {}
+            }
+            await tempFile.rename(targetFile.path);
+            _invalidateOfflineLookup(song.id);
+            _downloadedSongIds.add(song.id);
+
+            song.audioUrl = targetFile.path;
+            song.isPreview = downloadedBytes < 1600000 && song.isPreview;
+            song.isYouTubeAudio = false;
+            _syncSongPathToQueueAndDb(song);
+            _locatingStatusVersion++;
+            notifyListeners();
+            debugPrint(
+                '[MusicPlayerController] Successfully downloaded ${song.title} ($downloadedBytes bytes) to: ${targetFile.path}');
+
+            // Persist to local SQLite database so offline playback works permanently
+            unawaited(LocalDatabase.instance.updateImportedSong(
+              id: song.id,
+              audioUrl: targetFile.path,
+              isPreview: song.isPreview,
+              isYouTubeAudio: false,
+              durationMs: song.duration.inMilliseconds,
+              imageUrl: song.imageUrl,
+              lyrics: song.lyrics,
+            ).catchError((e) {
+              debugPrint('[MusicPlayerController] updateImportedSong error: $e');
+            }));
+
+            // Also cache artwork locally if available
+            if (song.imageUrl.startsWith('http')) {
+              try {
+                final artTarget = File(p.join(offlineDir.path, '${song.id}.jpg'));
+                if (!artTarget.existsSync()) {
+                  final artResp = await http.get(Uri.parse(song.imageUrl)).timeout(const Duration(seconds: 15));
+                  if (artResp.statusCode == 200 && artResp.bodyBytes.isNotEmpty) {
+                    await artTarget.writeAsBytes(artResp.bodyBytes, flush: true);
+                    _invalidateOfflineLookup(song.id, artwork: true);
+                  }
+                }
+              } catch (_) {}
+            }
+            return true;
+          } else {
+            if (await tempFile.exists()) {
+              try {
+                await tempFile.delete();
+              } catch (_) {}
+            }
+            return false;
+          }
+        } else {
+          if (await tempFile.exists()) {
+            try {
+              await tempFile.delete();
+            } catch (_) {}
+          }
+          if ((streamedResponse.statusCode == 429 || streamedResponse.statusCode == 403) && isGoogleVideo) {
+            _enrichment.noteGooglevideoThrottle();
+          }
+          return false;
+        }
+      } finally {
+        client.close();
+      }
+    } catch (e) {
+      debugPrint('[MusicPlayerController] Download error for ${song.title}: $e');
+      return false;
+    } finally {
+      _cachingIds.remove(song.id);
+      notifyListeners();
+    }
+  }
+
+  /// Downloads all pending songs in a playlist sequentially with responsive updates.
+  Future<void> downloadPlaylistSongs(List<Song> songs) async {
+    final toDownload = songs.where((s) => !isSongDownloaded(s.id) && !_cachingIds.contains(s.id)).toList();
+    if (toDownload.isEmpty) return;
+
+    for (final song in toDownload) {
+      if (_disposed) return;
+      await downloadSong(song);
+      await Future.delayed(const Duration(milliseconds: 150));
+    }
+  }
+
+  /// Removes a downloaded song and artwork from offline storage,
+  /// updating the local database and notifying listeners.
+  Future<bool> removeDownloadedSong(Song song) async {
+    try {
+      _downloadedSongIds.remove(song.id);
+      final cached = await _findCachedAudioFile(song.id);
+      if (cached != null && await cached.exists()) {
+        try {
+          await cached.delete();
+        } catch (_) {}
+      }
+      _invalidateOfflineLookup(song.id);
+
+      final artwork = await _findCachedArtworkFile(song.id);
+      if (artwork != null && await artwork.exists()) {
+        try {
+          await artwork.delete();
+        } catch (_) {}
+      }
+      _invalidateOfflineLookup(song.id, artwork: true);
+
+      song.audioUrl = '';
+      _syncSongPathToQueueAndDb(song);
+      _locatingStatusVersion++;
+      notifyListeners();
+
+      unawaited(LocalDatabase.instance.updateImportedSong(
+        id: song.id,
+        audioUrl: '',
+        isPreview: false,
+        isYouTubeAudio: true,
+      ).catchError((_) {}));
+
+      return true;
+    } catch (e) {
+      debugPrint('[MusicPlayerController] Error removing downloaded song ${song.title}: $e');
+      return false;
+    }
   }
 
   /// Public retry used by the lyrics sheet when a track has no lyrics yet

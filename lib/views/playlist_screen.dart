@@ -367,17 +367,64 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                           crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
                             // Download
-                            IconButton(
-                              icon: const Icon(Icons.download_outlined,
-                                  color: Colors.white, size: 26),
-                              tooltip: 'Download all',
-                              onPressed: () {
-                                widget.controller.cacheDisplayedDashboardAudio();
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text('Downloading tracks for offline use...'),
-                                    backgroundColor: Color(0xFF222222),
-                                  ),
+                            Builder(
+                              builder: (ctx) {
+                                final isDownloading =
+                                    widget.controller.isPlaylistDownloading(songs);
+                                final isDownloaded =
+                                    widget.controller.isPlaylistFullyDownloaded(songs);
+
+                                if (isDownloading) {
+                                  return const Padding(
+                                    padding: EdgeInsets.all(12),
+                                    child: SizedBox(
+                                      width: 24,
+                                      height: 24,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2.2,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                  );
+                                }
+
+                                if (isDownloaded) {
+                                  return IconButton(
+                                    icon: const Icon(Icons.download_done_rounded,
+                                        color: AppTheme.accentGreen, size: 26),
+                                    tooltip: 'Downloaded for offline use',
+                                    onPressed: () {
+                                      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(
+                                          content: Text('All tracks in this playlist are downloaded for offline use.'),
+                                          backgroundColor: Color(0xFF222222),
+                                          duration: Duration(seconds: 2),
+                                        ),
+                                      );
+                                    },
+                                  );
+                                }
+
+                                return IconButton(
+                                  icon: const Icon(Icons.download_outlined,
+                                      color: Colors.white, size: 26),
+                                  tooltip: 'Download all',
+                                  onPressed: () {
+                                    final pending = songs
+                                        .where((s) => !widget.controller.isSongDownloaded(s.id))
+                                        .toList();
+                                    if (pending.isEmpty) return;
+                                    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text('Downloading ${pending.length} tracks for offline use...'),
+                                        backgroundColor: const Color(0xFF222222),
+                                        duration: const Duration(seconds: 2),
+                                      ),
+                                    );
+                                    widget.controller.downloadPlaylistSongs(songs);
+                                  },
                                 );
                               },
                             ),
@@ -495,6 +542,7 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                           index: index,
                           isCurrent: isCurrent,
                           isPlaying: isCurrent && widget.controller.isPlaying,
+                          controller: widget.controller,
                           onTap: () => _playSongAt(songs, index),
                           onMoreTap: () => _showSongOptions(context, song),
                         );
@@ -631,6 +679,43 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                 Navigator.pop(ctx);
               },
             ),
+            if (!widget.controller.isSongDownloaded(song.id))
+              ListTile(
+                leading: const Icon(Icons.download_rounded, color: Colors.white),
+                title: const Text('Download song', style: TextStyle(color: Colors.white)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Downloading "${song.title}" for offline use...'),
+                      backgroundColor: const Color(0xFF222222),
+                      duration: const Duration(seconds: 2),
+                    ),
+                  );
+                  widget.controller.downloadSong(song);
+                },
+              )
+            else
+              ListTile(
+                leading: const Icon(Icons.delete_outline_rounded,
+                    color: AppTheme.accentPink),
+                title: const Text('Remove download',
+                    style: TextStyle(color: AppTheme.accentPink)),
+                onTap: () async {
+                  Navigator.pop(ctx);
+                  final removed = await widget.controller.removeDownloadedSong(song);
+                  if (mounted && removed) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Removed "${song.title}" from downloads'),
+                        backgroundColor: const Color(0xFF222222),
+                        duration: const Duration(seconds: 2),
+                      ),
+                    );
+                  }
+                },
+              ),
             if (widget.playlist != null)
               ListTile(
                 leading: const Icon(Icons.delete_outline_rounded,
@@ -795,6 +880,7 @@ class _PlaylistSongTile extends StatelessWidget {
   final int index;
   final bool isCurrent;
   final bool isPlaying;
+  final MusicPlayerController controller;
   final VoidCallback onTap;
   final VoidCallback onMoreTap;
 
@@ -803,6 +889,7 @@ class _PlaylistSongTile extends StatelessWidget {
     required this.index,
     required this.isCurrent,
     required this.isPlaying,
+    required this.controller,
     required this.onTap,
     required this.onMoreTap,
   });
@@ -894,6 +981,9 @@ class _PlaylistSongTile extends StatelessWidget {
               ),
             ),
 
+            // Individual Download action
+            _buildDownloadButton(context),
+
             // Trailing popup menu icon
             IconButton(
               icon: const Icon(Icons.more_vert, color: Colors.grey, size: 20),
@@ -902,6 +992,71 @@ class _PlaylistSongTile extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildDownloadButton(BuildContext context) {
+    final isDownloading = controller.isSongDownloading(song.id);
+    final isDownloaded = controller.isSongDownloaded(song.id);
+
+    if (isDownloading) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(horizontal: 10),
+        child: SizedBox(
+          width: 18,
+          height: 18,
+          child: CircularProgressIndicator(
+            strokeWidth: 2,
+            color: AppTheme.accentGreen,
+          ),
+        ),
+      );
+    }
+
+    if (isDownloaded) {
+      return IconButton(
+        icon: const Icon(Icons.download_done_rounded,
+            color: AppTheme.accentGreen, size: 20),
+        tooltip: 'Downloaded for offline playback',
+        splashRadius: 18,
+        onPressed: () {
+          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                  '"${song.title}" is downloaded and ready for offline playback.'),
+              backgroundColor: const Color(0xFF222222),
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        },
+      );
+    }
+
+    return IconButton(
+      icon: const Icon(Icons.download_outlined, color: Colors.grey, size: 20),
+      tooltip: 'Download song',
+      splashRadius: 18,
+      onPressed: () async {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Downloading "${song.title}" for offline use...'),
+            backgroundColor: const Color(0xFF222222),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+        final success = await controller.downloadSong(song);
+        if (context.mounted && !success) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                  'Could not download "${song.title}". Check your connection or settings.'),
+              backgroundColor: const Color(0xFF331111),
+            ),
+          );
+        }
+      },
     );
   }
 

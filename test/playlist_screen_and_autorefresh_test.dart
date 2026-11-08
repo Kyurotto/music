@@ -137,7 +137,7 @@ void main() {
 
       // Verify 2x2 Collage, circular Play button, and sticky mini-player play button exist
       expect(find.byIcon(Icons.play_arrow_rounded), findsAtLeastNWidgets(1));
-      expect(find.byIcon(Icons.download_outlined), findsOneWidget);
+      expect(find.byIcon(Icons.download_outlined), findsAtLeastNWidgets(1));
       expect(find.byIcon(Icons.share_outlined), findsOneWidget);
       expect(find.byIcon(Icons.bookmark_border_rounded), findsOneWidget);
 
@@ -152,6 +152,45 @@ void main() {
       expect(find.text('Samples'), findsOneWidget);
       expect(find.text('Explore'), findsOneWidget);
       expect(find.text('Library'), findsOneWidget);
+
+      controller.dispose();
+    });
+
+    testWidgets('Individual song tiles render download buttons and options in PlaylistScreen', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 1600));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final controller = MusicPlayerController();
+      final testSongs = <Song>[
+        Song(
+          id: 'song-dl-1',
+          title: 'Downloadable Song 1',
+          artist: 'Artist 1',
+          album: 'Album 1',
+          duration: const Duration(minutes: 3),
+          genre: 'Pop',
+          imageUrl: '',
+          gradientColors: const [],
+          plays: '10K',
+          lyrics: const [],
+          audioUrl: 'https://example.com/song1.mp3',
+          isPreview: false,
+        ),
+      ];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: PlaylistScreen(
+            title: 'Test Playlist',
+            songs: testSongs,
+            controller: controller,
+          ),
+        ),
+      );
+
+      // Verify download icon on individual tile and header
+      expect(find.byTooltip('Download song'), findsOneWidget);
+      expect(find.byTooltip('Download all'), findsOneWidget);
 
       controller.dispose();
     });
