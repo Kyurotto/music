@@ -102,7 +102,7 @@ class _SpotifyImportDialogState extends State<SpotifyImportDialog> {
     });
 
     try {
-      final outcome = widget.controller.importSpotifyTracks(
+      final outcome = await widget.controller.importSpotifyTracksAsync(
         playlistName: preview.title,
         tracks: preview.tracks,
         targetPlaylistId: _targetPlaylistId,

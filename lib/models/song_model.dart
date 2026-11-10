@@ -48,6 +48,9 @@ class Song {
   /// True when this song can actually produce sound (local asset or URL).
   bool get hasAudio => audioUrl.isNotEmpty;
 
+  /// True when this song has no resolved audio yet and is actively locating.
+  bool get isLocating => !hasAudio;
+
   /// Imported Spotify metadata starts silent — only true until enrichment
   /// resolves a playable preview URL.
   bool get isSilentPlaceholder => id.startsWith('spotify-') && !hasAudio;

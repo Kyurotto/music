@@ -81,6 +81,8 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
           songs.any((s) => s.id.startsWith('radio-') || s.id.startsWith('dm-'));
       if (isRadio) {
         widget.controller.fastLocateRadioSongs(songs);
+      } else {
+        widget.controller.fastLocateDiscoverySongs(songs);
       }
     });
   }
