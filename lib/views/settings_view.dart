@@ -63,7 +63,6 @@ class _SettingsViewState extends State<SettingsView> {
     'Very High (320 kbps)',
   ];
 
-
   @override
   void initState() {
     super.initState();
@@ -214,7 +213,9 @@ class _SettingsViewState extends State<SettingsView> {
   }
 
   Future<void> _showEqualizerPicker() async {
-    final initialPreset = EqualizerPreset.getByName(_equalizerPreset);
+    final initialPreset =
+        widget.controller?.currentEqualizer ??
+        EqualizerPreset.getByName(_equalizerPreset);
     final selected = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
@@ -268,7 +269,9 @@ class _SettingsViewState extends State<SettingsView> {
                               Container(
                                 padding: const EdgeInsets.all(8),
                                 decoration: BoxDecoration(
-                                  color: AppTheme.primary.withValues(alpha: 0.15),
+                                  color: AppTheme.primary.withValues(
+                                    alpha: 0.15,
+                                  ),
                                   borderRadius: BorderRadius.circular(10),
                                 ),
                                 child: const Icon(
@@ -302,8 +305,13 @@ class _SettingsViewState extends State<SettingsView> {
                             ],
                           ),
                           IconButton(
-                            icon: const Icon(Icons.close_rounded, color: AppTheme.textMuted),
-                            onPressed: () => Navigator.of(sheetContext).pop(activePresetName),
+                            icon: const Icon(
+                              Icons.close_rounded,
+                              color: AppTheme.textMuted,
+                            ),
+                            onPressed: () => Navigator.of(
+                              sheetContext,
+                            ).pop(activePresetName),
                           ),
                         ],
                       ),
@@ -314,7 +322,10 @@ class _SettingsViewState extends State<SettingsView> {
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 16),
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 14,
+                        ),
                         decoration: BoxDecoration(
                           color: AppTheme.cardSurface,
                           borderRadius: BorderRadius.circular(18),
@@ -336,9 +347,14 @@ class _SettingsViewState extends State<SettingsView> {
                                 ),
                                 Flexible(
                                   child: Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 3,
+                                    ),
                                     decoration: BoxDecoration(
-                                      color: AppTheme.primary.withValues(alpha: 0.12),
+                                      color: AppTheme.primary.withValues(
+                                        alpha: 0.12,
+                                      ),
                                       borderRadius: BorderRadius.circular(6),
                                     ),
                                     child: Text(
@@ -360,10 +376,12 @@ class _SettingsViewState extends State<SettingsView> {
                             SizedBox(
                               height: 125,
                               child: Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceEvenly,
                                 children: List.generate(5, (index) {
                                   final db = activeBands[index];
-                                  final label = EqualizerPreset.frequencyLabels[index];
+                                  final label =
+                                      EqualizerPreset.frequencyLabels[index];
 
                                   return Column(
                                     mainAxisSize: MainAxisSize.min,
@@ -373,7 +391,9 @@ class _SettingsViewState extends State<SettingsView> {
                                         style: TextStyle(
                                           fontSize: 10,
                                           fontWeight: FontWeight.bold,
-                                          color: db != 0 ? AppTheme.primary : AppTheme.textMuted,
+                                          color: db != 0
+                                              ? AppTheme.primary
+                                              : AppTheme.textMuted,
                                         ),
                                       ),
                                       Expanded(
@@ -382,10 +402,18 @@ class _SettingsViewState extends State<SettingsView> {
                                           child: SliderTheme(
                                             data: SliderTheme.of(context).copyWith(
                                               trackHeight: 3,
-                                              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
-                                              overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
-                                              activeTrackColor: AppTheme.primary,
-                                              inactiveTrackColor: AppTheme.border,
+                                              thumbShape:
+                                                  const RoundSliderThumbShape(
+                                                    enabledThumbRadius: 5,
+                                                  ),
+                                              overlayShape:
+                                                  const RoundSliderOverlayShape(
+                                                    overlayRadius: 10,
+                                                  ),
+                                              activeTrackColor:
+                                                  AppTheme.primary,
+                                              inactiveTrackColor:
+                                                  AppTheme.border,
                                               thumbColor: AppTheme.primary,
                                             ),
                                             child: Slider(
@@ -395,7 +423,25 @@ class _SettingsViewState extends State<SettingsView> {
                                               onChanged: (newVal) {
                                                 setSheetState(() {
                                                   activeBands[index] = newVal;
+                                                  activePresetName =
+                                                      EqualizerPreset
+                                                          .custom
+                                                          .name;
                                                 });
+                                                // Move the native equalizer
+                                                // while dragging, but only
+                                                // persist once the drag ends.
+                                                widget.controller
+                                                    ?.setCustomEqualizerBands(
+                                                      activeBands,
+                                                      save: false,
+                                                    );
+                                              },
+                                              onChangeEnd: (_) {
+                                                widget.controller
+                                                    ?.setCustomEqualizerBands(
+                                                      activeBands,
+                                                    );
                                               },
                                             ),
                                           ),
@@ -426,9 +472,13 @@ class _SettingsViewState extends State<SettingsView> {
                     Flexible(
                       child: ListView.separated(
                         shrinkWrap: true,
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 10,
+                        ),
                         itemCount: EqualizerPreset.all.length,
-                        separatorBuilder: (_, index) => const SizedBox(height: 6),
+                        separatorBuilder: (_, index) =>
+                            const SizedBox(height: 6),
                         itemBuilder: (context, index) {
                           final preset = EqualizerPreset.all[index];
                           final isSelected = preset.name == activePresetName;
@@ -438,21 +488,39 @@ class _SettingsViewState extends State<SettingsView> {
                             child: InkWell(
                               borderRadius: BorderRadius.circular(14),
                               onTap: () {
+                                final bands =
+                                    preset.name == EqualizerPreset.custom.name
+                                    ? List<double>.from(
+                                        widget
+                                                .controller
+                                                ?.customEqualizerBands ??
+                                            preset.bands,
+                                      )
+                                    : List<double>.from(preset.bands);
                                 setSheetState(() {
                                   activePresetName = preset.name;
-                                  activeBands = List<double>.from(preset.bands);
+                                  activeBands = bands;
                                 });
-                                widget.controller?.setEqualizerPreset(preset.name);
+                                widget.controller?.setEqualizerPreset(
+                                  preset.name,
+                                );
                               },
                               child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 14,
+                                  vertical: 11,
+                                ),
                                 decoration: BoxDecoration(
                                   color: isSelected
                                       ? AppTheme.primary.withValues(alpha: 0.12)
-                                      : AppTheme.cardSurface.withValues(alpha: 0.5),
+                                      : AppTheme.cardSurface.withValues(
+                                          alpha: 0.5,
+                                        ),
                                   borderRadius: BorderRadius.circular(14),
                                   border: Border.all(
-                                    color: isSelected ? AppTheme.primary : AppTheme.border,
+                                    color: isSelected
+                                        ? AppTheme.primary
+                                        : AppTheme.border,
                                     width: isSelected ? 1.5 : 1,
                                   ),
                                 ),
@@ -468,21 +536,28 @@ class _SettingsViewState extends State<SettingsView> {
                                       ),
                                       child: Icon(
                                         preset.icon,
-                                        color: isSelected ? Colors.black87 : AppTheme.textMuted,
+                                        color: isSelected
+                                            ? Colors.black87
+                                            : AppTheme.textMuted,
                                         size: 18,
                                       ),
                                     ),
                                     const SizedBox(width: 12),
                                     Expanded(
                                       child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
                                         children: [
                                           Text(
                                             preset.name,
                                             style: TextStyle(
                                               fontSize: 14,
-                                              fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
-                                              color: isSelected ? AppTheme.primary : AppTheme.textPrimary,
+                                              fontWeight: isSelected
+                                                  ? FontWeight.bold
+                                                  : FontWeight.w600,
+                                              color: isSelected
+                                                  ? AppTheme.primary
+                                                  : AppTheme.textPrimary,
                                             ),
                                           ),
                                           const SizedBox(height: 2),
@@ -528,7 +603,8 @@ class _SettingsViewState extends State<SettingsView> {
                             ),
                             elevation: 0,
                           ),
-                          onPressed: () => Navigator.of(sheetContext).pop(activePresetName),
+                          onPressed: () =>
+                              Navigator.of(sheetContext).pop(activePresetName),
                           child: const Text(
                             'Apply Equalizer Preset',
                             style: TextStyle(
@@ -1315,14 +1391,18 @@ class _SettingsViewState extends State<SettingsView> {
 
   Future<void> _showEditProfileDialog() async {
     final formKey = GlobalKey<FormState>();
-    final emailController =
-        TextEditingController(text: AuthService.instance.userEmail);
-    final backupEmailController =
-        TextEditingController(text: AuthService.instance.userBackupEmail);
-    final phoneController =
-        TextEditingController(text: AuthService.instance.userPhoneNumber);
-    final nameController =
-        TextEditingController(text: AuthService.instance.userDisplayName);
+    final emailController = TextEditingController(
+      text: AuthService.instance.userEmail,
+    );
+    final backupEmailController = TextEditingController(
+      text: AuthService.instance.userBackupEmail,
+    );
+    final phoneController = TextEditingController(
+      text: AuthService.instance.userPhoneNumber,
+    );
+    final nameController = TextEditingController(
+      text: AuthService.instance.userDisplayName,
+    );
     final passwordController = TextEditingController();
     final confirmPasswordController = TextEditingController();
 
@@ -1342,8 +1422,10 @@ class _SettingsViewState extends State<SettingsView> {
               side: const BorderSide(color: AppTheme.border),
             ),
             titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 24,
+              vertical: 8,
+            ),
             actionsPadding: const EdgeInsets.fromLTRB(24, 12, 24, 20),
             title: Row(
               children: [
@@ -1587,8 +1669,9 @@ class _SettingsViewState extends State<SettingsView> {
             ),
             actions: [
               TextButton(
-                onPressed:
-                    isSaving ? null : () => Navigator.of(dialogContext).pop(),
+                onPressed: isSaving
+                    ? null
+                    : () => Navigator.of(dialogContext).pop(),
                 child: const Text(
                   'Cancel',
                   style: TextStyle(color: AppTheme.textSecondary),

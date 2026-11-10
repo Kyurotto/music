@@ -17,6 +17,7 @@ import '../auth/auth_service.dart';
 import '../data/local_database.dart';
 import '../models/equalizer_preset.dart';
 import '../models/song_model.dart';
+import '../services/audio_equalizer_service.dart';
 import '../services/playlist_persistence_service.dart';
 import '../services/radio_discovery_service.dart';
 import '../services/spotify_import_service.dart';
@@ -57,14 +58,20 @@ class MusicPlayerController extends ChangeNotifier {
   DateTime _lastPositionNotify = DateTime(0);
   static const _positionNotifyInterval = Duration(milliseconds: 300);
 
-  // Real audio player
-  final AudioPlayer _audioPlayer = AudioPlayer(
+  // Real audio player. The Android equalizer effect is attached to the same
+  // audio session so preset changes modify the actual output signal.
+  final AudioEqualizerService _equalizer = AudioEqualizerService();
+  late final AudioPlayer _audioPlayer = AudioPlayer(
     useProxyForRequestHeaders: false,
+    audioPipeline: AudioEqualizerService.isPlatformSupported
+        ? AudioPipeline(androidAudioEffects: [_equalizer.effect])
+        : null,
   );
   StreamSubscription<Duration>? _positionSub;
   StreamSubscription<Duration?>? _durationSub;
   StreamSubscription<PlayerState>? _playerStateSub;
   StreamSubscription<PlaybackEvent>? _playbackEventSub;
+  StreamSubscription<int?>? _audioSessionSub;
   bool _audioPlayerHasSource = false;
   bool _isPlayingAudioInProgress = false;
 
@@ -149,42 +156,104 @@ class MusicPlayerController extends ChangeNotifier {
     }
   }
 
+  static const String _equalizerPresetSetting = 'equalizer_preset';
+  static const String _equalizerBandsSetting = 'equalizer_custom_bands';
+
   String _equalizerPreset = 'Bass Boost';
+  List<double> _customEqualizerBands = const [0, 0, 0, 0, 0];
+
   String get equalizerPreset => _equalizerPreset;
-  EqualizerPreset get currentEqualizer =>
-      EqualizerPreset.getByName(_equalizerPreset);
+
+  List<double> get customEqualizerBands => _customEqualizerBands;
+
+  EqualizerPreset get currentEqualizer {
+    if (_equalizerPreset == EqualizerPreset.custom.name) {
+      return EqualizerPreset.customWithBands(_customEqualizerBands);
+    }
+    return EqualizerPreset.getByName(_equalizerPreset);
+  }
 
   void setEqualizerPreset(String presetName, {bool save = true}) {
     _equalizerPreset = EqualizerPreset.getByName(presetName).name;
-    _assertNativeVolume();
+    _applyCurrentEqualizer();
     notifyListeners();
     if (save) {
-      unawaited(
-        LocalDatabase.instance.saveSetting(
-          'equalizer_preset',
-          _equalizerPreset,
-        ),
-      );
+      unawaited(_persistEqualizerPreset(_equalizerPreset));
+      if (_equalizerPreset == EqualizerPreset.custom.name) {
+        unawaited(_persistEqualizerBands(_customEqualizerBands));
+      }
     }
+  }
+
+  /// Applies a user-edited five-band curve (dB) and selects the Custom preset.
+  ///
+  /// Sliders call this while dragging, so the native equalizer follows the
+  /// curve immediately instead of only updating the drawing.
+  void setCustomEqualizerBands(List<double> bands, {bool save = true}) {
+    _customEqualizerBands = List<double>.unmodifiable(
+      bands.map((band) => band.clamp(-10.0, 10.0).toDouble()),
+    );
+    _equalizerPreset = EqualizerPreset.custom.name;
+    _applyCurrentEqualizer();
+    notifyListeners();
+    if (save) {
+      unawaited(_persistEqualizerPreset(_equalizerPreset));
+      unawaited(_persistEqualizerBands(_customEqualizerBands));
+    }
+  }
+
+  void _applyCurrentEqualizer() {
+    // Fire-and-forget: the service queues the latest curve until the native
+    // effect has published its band layout.
+    // ignore: discarded_futures
+    _equalizer.applyBands(currentEqualizer.bands);
   }
 
   Future<void> _loadEqualizerPreset() async {
     try {
-      final saved = await LocalDatabase.instance.getSetting('equalizer_preset');
-      if (saved != null && saved.isNotEmpty) {
-        _equalizerPreset = EqualizerPreset.getByName(saved).name;
-        _assertNativeVolume();
-        notifyListeners();
+      final savedPreset = await LocalDatabase.instance.getSetting(
+        _equalizerPresetSetting,
+      );
+      final savedBands = await LocalDatabase.instance.getSetting(
+        _equalizerBandsSetting,
+      );
+      _customEqualizerBands = _parseCustomBands(savedBands);
+      if (savedPreset != null && savedPreset.isNotEmpty) {
+        _equalizerPreset = EqualizerPreset.getByName(savedPreset).name;
       }
     } catch (_) {}
+    _applyCurrentEqualizer();
+    notifyListeners();
   }
 
-  /// Effective volume to push to the native player. Mirrors the guard used by
-  /// every play path and scales by the current equalizer preset gain factor.
+  static List<double> _parseCustomBands(String? raw) {
+    const flat = <double>[0, 0, 0, 0, 0];
+    if (raw == null || raw.trim().isEmpty) return flat;
+    final parsed = raw
+        .split(',')
+        .map((value) => double.tryParse(value.trim()))
+        .whereType<double>()
+        .toList();
+    if (parsed.length != EqualizerPreset.frequencyLabels.length) return flat;
+    return parsed
+        .map((value) => value.clamp(-10.0, 10.0).toDouble())
+        .toList(growable: false);
+  }
+
+  Future<void> _persistEqualizerPreset(String preset) =>
+      LocalDatabase.instance.saveSetting(_equalizerPresetSetting, preset);
+
+  Future<void> _persistEqualizerBands(List<double> bands) => LocalDatabase
+      .instance
+      .saveSetting(_equalizerBandsSetting, bands.join(','));
+
+  /// Effective volume to push to the native player.
+  ///
+  /// Equalization happens on the audio session via [AudioEqualizerService], so
+  /// volume no longer doubles as a fake preset gain.
   double get _effectiveVolume {
     final baseVol = _isMuted ? 0.0 : (_volume > 0.05 ? _volume : 0.8);
-    final gain = currentEqualizer.gainFactor;
-    return (baseVol * gain).clamp(0.0, 1.0);
+    return baseVol.clamp(0.0, 1.0).toDouble();
   }
 
   /// Re-assert volume on the native player.
@@ -232,12 +301,18 @@ class MusicPlayerController extends ChangeNotifier {
   /// `AudioSession` exposes no `isActive`, so we track our own request.
   bool _audioFocusRequested = false;
 
+  /// The controller currently receiving media-notification transport taps.
+  /// The notification outlives widgets, so this reference is static.
+  static MusicPlayerController? _notificationController;
+
   MusicPlayerController() {
     _allSongs.addAll(SampleMusicData.sampleSongs);
     _playlists.addAll(SampleMusicData.initialPlaylists);
     _queue = List<Song>.from(_allSongs);
 
     _initAudioPlayer();
+    _bindNotificationControls();
+    unawaited(_equalizer.initialize());
     unawaited(_offlineCandidateDirs());
     _startImportRetryLoop();
     _startConnectivityWatcher();
@@ -258,6 +333,37 @@ class MusicPlayerController extends ChangeNotifier {
       }),
     );
     unawaited(_loadEqualizerPreset());
+  }
+
+  /// Routes the media notification's previous/next buttons to this controller.
+  ///
+  /// `just_audio` is loaded one track at a time (`setAudioSource` per song), so
+  /// its native sequence never reports a next/previous item and the
+  /// notification would otherwise show only play/pause. The local fork in
+  /// `packages/just_audio_background` exposes these callbacks; see
+  /// [JustAudioBackground.onSkipToNext] / [onSkipToPrevious].
+  ///
+  /// Safe to call repeatedly: creating a new controller (e.g. after signing
+  /// out and back in) simply re-points the notification at the live instance.
+  void _bindNotificationControls() {
+    _notificationController = this;
+    JustAudioBackground.onSkipToNext = _skipToNextFromNotification;
+    JustAudioBackground.onSkipToPrevious = _skipToPreviousFromNotification;
+    // A notification from a previous session may still be visible; refresh it
+    // so the new buttons appear immediately. Idle players ignore this.
+    JustAudioBackground.refreshNotification();
+  }
+
+  static Future<void> _skipToNextFromNotification() async {
+    final controller = _notificationController;
+    if (controller == null || controller._disposed) return;
+    controller.next();
+  }
+
+  static Future<void> _skipToPreviousFromNotification() async {
+    final controller = _notificationController;
+    if (controller == null || controller._disposed) return;
+    controller.previous();
   }
 
   /// Configure and activate the shared audio session.
@@ -410,6 +516,19 @@ class MusicPlayerController extends ChangeNotifier {
           _onSongComplete();
         }
       });
+
+      // Keep the native equalizer bound to whatever audio session the player
+      // is currently using. The id changes when the platform recreates its
+      // audio track, and an effect attached to a dead session is silent.
+      _audioSessionSub = _audioPlayer.androidAudioSessionIdStream.listen(
+        (sessionId) {
+          // ignore: discarded_futures
+          _equalizer.setAudioSessionId(sessionId);
+        },
+        onError: (Object e) {
+          debugPrint('Audio session id stream error: $e');
+        },
+      );
 
       // Async media failures arrive on the playback-event channel.
       // If the current song encounters a playback error, immediately recover!
@@ -6011,7 +6130,16 @@ class MusicPlayerController extends ChangeNotifier {
     _durationSub?.cancel();
     _playerStateSub?.cancel();
     _playbackEventSub?.cancel();
+    _audioSessionSub?.cancel();
+    _equalizer.dispose();
     _enrichment.dispose();
+    // Only unbind if the notification still points at this controller; a
+    // newer instance may already have replaced these handlers.
+    if (identical(_notificationController, this)) {
+      _notificationController = null;
+      JustAudioBackground.onSkipToNext = null;
+      JustAudioBackground.onSkipToPrevious = null;
+    }
     try {
       // ignore: discarded_futures
       _audioPlayer.dispose().catchError((_) {});
