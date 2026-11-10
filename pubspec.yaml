@@ -52,7 +52,8 @@ dependencies:
 
   crypto: ^3.0.7
   flutter_secure_storage: ^11.2.0
-  just_audio_background: ^0.0.1-beta.17
+  just_audio_background:
+    path: packages/just_audio_background
 
 dev_dependencies:
   flutter_test:

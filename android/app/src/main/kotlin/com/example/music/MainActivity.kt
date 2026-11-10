@@ -12,6 +12,8 @@ import kotlin.math.roundToInt
 
 class MainActivity : AudioServiceActivity() {
     private val CHANNEL = "com.example.music/display_rate"
+    private val EQUALIZER_CHANNEL = "com.example.music/equalizer"
+    private val equalizerEffect = DynamicsProcessingEqualizer()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -21,6 +23,11 @@ class MainActivity : AudioServiceActivity() {
     override fun onResume() {
         super.onResume()
         applyOptimalRefreshRate()
+    }
+
+    override fun onDestroy() {
+        equalizerEffect.release()
+        super.onDestroy()
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -43,6 +50,32 @@ class MainActivity : AudioServiceActivity() {
                 else -> result.notImplemented()
             }
         }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, EQUALIZER_CHANNEL).setMethodCallHandler { call, result ->
+            try {
+                when (call.method) {
+                    "isSupported" -> result.success(equalizerEffect.isSupported())
+                    "attach" -> {
+                        val sessionId = (call.argument<Number>("sessionId"))?.toInt() ?: 0
+                        result.success(equalizerEffect.attach(sessionId, readBands(call.argument("bands"))))
+                    }
+                    "applyBands" -> {
+                        result.success(equalizerEffect.apply(readBands(call.argument("bands"))))
+                    }
+                    "release" -> {
+                        equalizerEffect.release()
+                        result.success(true)
+                    }
+                    else -> result.notImplemented()
+                }
+            } catch (t: Throwable) {
+                result.error("EQUALIZER_ERROR", t.message, null)
+            }
+        }
+    }
+
+    private fun readBands(raw: Any?): List<Float> {
+        val values = raw as? List<*> ?: return emptyList()
+        return values.map { (it as? Number)?.toFloat() ?: 0f }
     }
 
     private fun getTargetDisplay(): Display? {
