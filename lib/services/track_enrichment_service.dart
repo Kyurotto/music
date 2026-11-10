@@ -54,7 +54,7 @@ class TrackEnrichment {
 
 class TrackEnrichmentService {
   TrackEnrichmentService({http.Client? client})
-      : _client = client ?? http.Client();
+    : _client = client ?? http.Client();
 
   final http.Client _client;
 
@@ -173,10 +173,15 @@ class TrackEnrichmentService {
     if (youtubeOnly) {
       final sw = Stopwatch()..start();
       try {
+        // Strict YouTube resolution: one primary search, with a title-only
+        // fallback only when the first search yields no usable candidate.
+        // Never touch Saavn, SoundCloud, Archive.org, iTunes, Deezer, or the
+        // web-search fallback.
         final yt = await _fetchYouTubeFullAudio(
           title: title,
           artist: artist,
           duration: duration,
+          fastSearch: true,
         );
         _stageLog('yt-only', sw, yt != null ? 'HIT' : 'miss');
         return yt;
@@ -193,8 +198,7 @@ class TrackEnrichmentService {
       return const _PreviewHit(
         previewUrl:
             'https://archive.org/download/extreme-behavior_202512/08%20Lips%20Of%20An%20Angel.mp3',
-        artworkUrl:
-            'https://archive.org/services/img/extreme-behavior_202512',
+        artworkUrl: 'https://archive.org/services/img/extreme-behavior_202512',
         duration: Duration(seconds: 261),
         isFullLength: true,
       );
@@ -222,28 +226,43 @@ class TrackEnrichmentService {
       if (fastImport) {
         try {
           final results = await Future.wait([
-            _fetchYouTubeFullAudio(title: title, artist: artist, duration: duration)
-                .timeout(const Duration(seconds: 5), onTimeout: () => null),
-            _fetchSoundCloudFullAudio(title: title, artist: artist, duration: duration)
-                .timeout(const Duration(seconds: 4), onTimeout: () => null),
-            _fetchSaavnFullAudio(title: title, artist: artist)
-                .timeout(const Duration(seconds: 4), onTimeout: () => null),
-            _fetchArchiveOrgFullAudio(title: title, artist: artist, duration: duration)
-                .timeout(const Duration(seconds: 4), onTimeout: () => null),
+            _fetchYouTubeFullAudio(
+              title: title,
+              artist: artist,
+              duration: duration,
+            ).timeout(const Duration(seconds: 5), onTimeout: () => null),
+            _fetchSoundCloudFullAudio(
+              title: title,
+              artist: artist,
+              duration: duration,
+            ).timeout(const Duration(seconds: 4), onTimeout: () => null),
+            _fetchSaavnFullAudio(
+              title: title,
+              artist: artist,
+            ).timeout(const Duration(seconds: 4), onTimeout: () => null),
+            _fetchArchiveOrgFullAudio(
+              title: title,
+              artist: artist,
+              duration: duration,
+            ).timeout(const Duration(seconds: 4), onTimeout: () => null),
           ]);
           final validHits = results
               .whereType<_PreviewHit>()
-              .where((h) =>
-                  h.previewUrl.isNotEmpty &&
-                  !h.previewUrl.toLowerCase().contains('.m3u8'))
+              .where(
+                (h) =>
+                    h.previewUrl.isNotEmpty &&
+                    !h.previewUrl.toLowerCase().contains('.m3u8'),
+              )
               .toList();
           if (validHits.isNotEmpty) {
             // Sort to prefer unthrottled direct CDN or progressive MP4 streams
             validHits.sort((a, b) {
-              final aUnthrottled = !a.isYouTube ||
+              final aUnthrottled =
+                  !a.isYouTube ||
                   a.previewUrl.contains('mime=video%2Fmp4') ||
                   a.previewUrl.contains('itag=18');
-              final bUnthrottled = !b.isYouTube ||
+              final bUnthrottled =
+                  !b.isYouTube ||
                   b.previewUrl.contains('mime=video%2Fmp4') ||
                   b.previewUrl.contains('itag=18');
               if (aUnthrottled && !bUnthrottled) return -1;
@@ -251,7 +270,11 @@ class TrackEnrichmentService {
               return 0;
             });
             final hit = validHits.first;
-            _stageLog('fast-import', sw, 'HIT ${Uri.tryParse(hit.previewUrl)?.host}');
+            _stageLog(
+              'fast-import',
+              sw,
+              'HIT ${Uri.tryParse(hit.previewUrl)?.host}',
+            );
             return hit;
           }
         } catch (e) {
@@ -260,10 +283,12 @@ class TrackEnrichmentService {
       }
 
       try {
-        final full =
-            await _fetchSaavnFullAudio(title: title, artist: artist);
-        _stageLog('saavn', sw,
-            full != null ? 'HIT ${Uri.tryParse(full.previewUrl)?.host}' : 'miss');
+        final full = await _fetchSaavnFullAudio(title: title, artist: artist);
+        _stageLog(
+          'saavn',
+          sw,
+          full != null ? 'HIT ${Uri.tryParse(full.previewUrl)?.host}' : 'miss',
+        );
         if (full != null) return full;
       } catch (e) {
         _stageLog('saavn', sw, 'error $e');
@@ -274,9 +299,13 @@ class TrackEnrichmentService {
           artist: artist,
           duration: duration,
         );
-        _stageLog('soundcloud', sw,
-            sc != null ? 'HIT ${Uri.tryParse(sc.previewUrl)?.host}' : 'miss');
-        if (sc != null && !sc.previewUrl.toLowerCase().contains('.m3u8')) return sc;
+        _stageLog(
+          'soundcloud',
+          sw,
+          sc != null ? 'HIT ${Uri.tryParse(sc.previewUrl)?.host}' : 'miss',
+        );
+        if (sc != null && !sc.previewUrl.toLowerCase().contains('.m3u8'))
+          return sc;
       } catch (e) {
         _stageLog('soundcloud', sw, 'error $e');
       }
@@ -286,8 +315,11 @@ class TrackEnrichmentService {
           artist: artist,
           duration: duration,
         );
-        _stageLog('web', sw,
-            web != null ? 'HIT ${Uri.tryParse(web.previewUrl)?.host}' : 'miss');
+        _stageLog(
+          'web',
+          sw,
+          web != null ? 'HIT ${Uri.tryParse(web.previewUrl)?.host}' : 'miss',
+        );
         if (web != null && web.previewUrl.isNotEmpty) {
           return web;
         }
@@ -376,9 +408,8 @@ class TrackEnrichmentService {
     final http.Response response;
     try {
       response = await _client
-          .get(uri, headers: {'User-Agent': _browserUserAgent}).timeout(
-                const Duration(seconds: 10),
-              );
+          .get(uri, headers: {'User-Agent': _browserUserAgent})
+          .timeout(const Duration(seconds: 10));
     } catch (e) {
       debugPrint('[Enrich] saavn-query $host error $e');
       return null;
@@ -411,12 +442,15 @@ class TrackEnrichmentService {
       final url = _saavnBestUrl(item['downloadUrl']);
       if (url.isEmpty) continue;
 
-      final hitTitle = _normalize(_saavnFirstName(item['name']) ??
-          item['title']?.toString() ??
-          item['song']?.toString() ??
-          '');
+      final hitTitle = _normalize(
+        _saavnFirstName(item['name']) ??
+            item['title']?.toString() ??
+            item['song']?.toString() ??
+            '',
+      );
       if (hitTitle.isEmpty || wantTitle.isEmpty) continue;
-      final titleOverlaps = hitTitle == wantTitle ||
+      final titleOverlaps =
+          hitTitle == wantTitle ||
           hitTitle.contains(wantTitle) ||
           wantTitle.contains(hitTitle);
       if (!titleOverlaps) continue;
@@ -424,7 +458,8 @@ class TrackEnrichmentService {
 
       final hitArtist = _normalize(_saavnArtistNames(item));
       if (wantArtist.isNotEmpty) {
-        final artistOverlaps = hitArtist.isNotEmpty &&
+        final artistOverlaps =
+            hitArtist.isNotEmpty &&
             (hitArtist == wantArtist ||
                 hitArtist.contains(wantArtist) ||
                 wantArtist.contains(hitArtist));
@@ -477,8 +512,7 @@ class TrackEnrichmentService {
     String? pickHttp(String? url) {
       if (url == null || url.isEmpty) return null;
       final trimmed = url.trim();
-      if (!trimmed.startsWith('http://') &&
-          !trimmed.startsWith('https://')) {
+      if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
         return null;
       }
       return trimmed;
@@ -489,8 +523,9 @@ class TrackEnrichmentService {
     for (var i = value.length - 1; i >= 0; i--) {
       final entry = value[i];
       if (entry is Map) {
-        final url = pickHttp(entry['url']?.toString() ??
-            entry['link']?.toString());
+        final url = pickHttp(
+          entry['url']?.toString() ?? entry['link']?.toString(),
+        );
         if (url != null) return url;
       } else if (entry is String) {
         final url = pickHttp(entry);
@@ -728,9 +763,11 @@ class TrackEnrichmentService {
   static bool isNonStudioTitle(String title) {
     final lower = title.toLowerCase();
     final isVersion = versionTags(lower).isNotEmpty;
-    return _nonStudioMarkers.any((m) =>
-            !(isVersion && (m == 'cover' || m == 'tribute')) &&
-            _markerPatterns[m]!.hasMatch(lower)) ||
+    return _nonStudioMarkers.any(
+          (m) =>
+              !(isVersion && (m == 'cover' || m == 'tribute')) &&
+              _markerPatterns[m]!.hasMatch(lower),
+        ) ||
         _alwaysSkipMarkers.any((m) => _markerPatterns[m]!.hasMatch(lower));
   }
 
@@ -753,7 +790,9 @@ class TrackEnrichmentService {
     if (dot > 0) base = base.substring(0, dot);
     base = base.replaceFirst(RegExp(r'^\d+\s*[.\-_ ]+\s*'), '');
     base = base.replaceFirst(
-        RegExp(r'^(track|trk)\s*\d+\s*[-_.]?\s*', caseSensitive: false), '');
+      RegExp(r'^(track|trk)\s*\d+\s*[-_.]?\s*', caseSensitive: false),
+      '',
+    );
     return normalizeKey(base);
   }
 
@@ -778,8 +817,7 @@ class TrackEnrichmentService {
 
   /// Record a googlevideo throttle signal (call only on 429).
   void noteGooglevideoThrottle() {
-    _googlevideoCoolDownUntil =
-        DateTime.now().add(const Duration(seconds: 45));
+    _googlevideoCoolDownUntil = DateTime.now().add(const Duration(seconds: 45));
   }
 
   /// Explicitly reset any active cooldown when user demands playback.
@@ -828,22 +866,38 @@ class TrackEnrichmentService {
     required String title,
     required String artist,
     Duration? duration,
+    bool fastSearch = false,
   }) async {
     final cleanTitle = _cleanQuery(title);
     final cleanArtist = _cleanQuery(artist);
     if (cleanTitle.isEmpty) return null;
     final versionQ = _versionQuery(title);
     final primaryArtist = cleanArtist.split(RegExp(r'[,&/]')).first.trim();
-    final queries = <String>[
-      if (versionQ.isNotEmpty) '$cleanTitle $versionQ $cleanArtist'.trim(),
-      if (primaryArtist.isNotEmpty && primaryArtist != cleanArtist)
-        '$cleanTitle $primaryArtist'.trim(),
-      '$cleanTitle $cleanArtist'.trim(),
-      if (primaryArtist.isNotEmpty && primaryArtist != cleanArtist)
-        '$cleanTitle $primaryArtist official audio'.trim(),
-      '$cleanTitle $cleanArtist official audio'.trim(),
-      cleanTitle,
-    ];
+
+    // Strict YouTube mode (Explore radio / discovery) uses the single best
+    // query first. A title-only query is kept as a last resort so a missing
+    // artist spelling cannot leave a real track stuck on "LOCATING".
+    final queries = fastSearch
+        ? <String>{
+            if (versionQ.isNotEmpty)
+              '$cleanTitle $versionQ $cleanArtist'.trim()
+            else if (cleanArtist.isNotEmpty)
+              '$cleanTitle $cleanArtist'.trim()
+            else
+              cleanTitle,
+            if (cleanArtist.isNotEmpty) cleanTitle,
+          }.take(2).toList()
+        : <String>[
+            if (versionQ.isNotEmpty)
+              '$cleanTitle $versionQ $cleanArtist'.trim(),
+            if (primaryArtist.isNotEmpty && primaryArtist != cleanArtist)
+              '$cleanTitle $primaryArtist'.trim(),
+            '$cleanTitle $cleanArtist'.trim(),
+            if (primaryArtist.isNotEmpty && primaryArtist != cleanArtist)
+              '$cleanTitle $primaryArtist official audio'.trim(),
+            '$cleanTitle $cleanArtist official audio'.trim(),
+            cleanTitle,
+          ];
 
     for (final query in queries) {
       try {
@@ -852,6 +906,8 @@ class TrackEnrichmentService {
           title: title,
           artist: artist,
           duration: duration,
+          maxCandidates: fastSearch ? 3 : 5,
+          preferMusicSearch: fastSearch,
         );
         if (hit != null) return hit;
       } catch (_) {
@@ -866,33 +922,71 @@ class TrackEnrichmentService {
     required String title,
     required String artist,
     Duration? duration,
+    int maxCandidates = 5,
+    bool preferMusicSearch = false,
   }) async {
-    final candidates = await _ytSearch(query);
+    // YouTube Music search is not age-gated like the main YouTube search and
+    // returns proper song matches ("XXXX (feat. Hev Abi)") for explicit tracks.
+    // Fall back to the main YouTube search when it has no music result.
+    var candidates = preferMusicSearch
+        ? await _ytMusicSearch(query)
+        : const <_YouTubeCandidate>[];
+    final usedMusicSearch = candidates.isNotEmpty;
+    if (candidates.isEmpty) {
+      candidates = await _ytSearch(query);
+    }
     if (candidates.isEmpty) return null;
-    debugPrint('[Enrich] yt ${candidates.length} candidates: '
-        '${candidates.take(3).map((c) => '${c.title} / ${c.channel}').join(' | ')}');
+    debugPrint(
+      '[Enrich] ${usedMusicSearch ? 'ytm' : 'yt'} ${candidates.length} candidates: '
+      '${candidates.take(3).map((c) => '${c.title} / ${c.channel}').join(' | ')}',
+    );
 
     final wantTitle = _normalize(title);
     final wantArtist = _normalize(artist);
     final wantSeconds = duration?.inSeconds ?? 0;
 
-    // Smart multi-artist matching tokens
-    final artistTokens = artist
-        .split(RegExp(r'[,&/]|\bfeat\.?|\bft\.?', caseSensitive: false))
-        .map((a) => _normalize(a.replaceAll(RegExp(r'(records|music|topic|official)', caseSensitive: false), '')))
-        .where((a) => a.length >= 2)
-        .toList();
+    // Smart multi-artist matching tokens. Featured artists in the catalog
+    // title count too: "Araw-Araw Love (feat. Flow G)" is often uploaded
+    // under Flow G even when the artist field says "Luz".
+    final artistTokens =
+        <String>[
+              ...artist.split(
+                RegExp(r'[,&/]|\bfeat\.?|\bft\.?', caseSensitive: false),
+              ),
+              ..._featuredArtists(title),
+            ]
+            .map(
+              (a) => _normalize(
+                a.replaceAll(
+                  RegExp(
+                    r'(records|music|topic|official)',
+                    caseSensitive: false,
+                  ),
+                  '',
+                ),
+              ),
+            )
+            .where((a) => a.length >= 2)
+            .toList();
 
-    final scored = <({ _YouTubeCandidate c, int score })>[];
+    final scored = <({_YouTubeCandidate c, int score})>[];
     for (final c in candidates) {
       if (c.videoId.isEmpty || c.title.isEmpty) continue;
       final hitTitle = _normalize(c.title);
       if (wantTitle.isEmpty) continue;
-      final titleExact = hitTitle == wantTitle;
-      final titleOverlaps = titleExact ||
-          hitTitle.contains(wantTitle) ||
-          wantTitle.contains(hitTitle);
-      if (!titleOverlaps) continue;
+
+      // YouTube titles usually carry the artist as a prefix and words such as
+      // "Official Audio" / "Lyrics" as a suffix. Comparing the raw strings
+      // rejected perfectly valid uploads (e.g. "Hev Abi, Kristina Dawn -
+      // Makasarili Malambing (Audio)" vs "Makasarili Malambing (feat. Hev
+      // Abi)"), which made locating fall through every slow fallback.
+      final titleMatch = _youtubeTitleMatch(
+        wantTitle: title,
+        wantArtist: artist,
+        hitTitle: c.title,
+        hitChannel: c.channel,
+      );
+      if (!titleMatch.matches) continue;
       if (!versionCompatible(wantTitle, hitTitle)) continue;
 
       final lowered = '${c.title} ${c.channel}'.toLowerCase();
@@ -900,19 +994,21 @@ class TrackEnrichmentService {
 
       final hitChannel = _normalize(c.channel);
       if (wantArtist.isNotEmpty) {
-        final channelOverlaps = hitChannel.isNotEmpty &&
-            (hitChannel == wantArtist ||
-                hitChannel.contains(wantArtist) ||
-                wantArtist.contains(hitChannel));
-        final titleHasArtist = hitTitle.contains(wantArtist);
+        final channelOverlaps = _looseContains(hitChannel, wantArtist);
+        final titleHasArtist = _looseContains(hitTitle, wantArtist);
 
         final cleanChannel = hitChannel.replaceAll('topic', '');
         final channelMatchesAny = artistTokens.any(
-            (tok) => cleanChannel.contains(tok) || tok.contains(cleanChannel));
+          (tok) =>
+              _looseContains(cleanChannel, tok) ||
+              (cleanChannel.length >= 3 && _looseContains(tok, cleanChannel)),
+        );
         final titleMatchesAny = artistTokens.any(
-            (tok) => hitTitle.contains(tok));
+          (tok) => _looseContains(hitTitle, tok),
+        );
 
-        final artistMatches = channelOverlaps ||
+        final artistMatches =
+            channelOverlaps ||
             titleHasArtist ||
             channelMatchesAny ||
             titleMatchesAny;
@@ -920,7 +1016,7 @@ class TrackEnrichmentService {
         if (!artistMatches) continue;
       }
 
-      var score = titleExact ? 4 : 2;
+      var score = titleMatch.exact ? 4 : 2;
       if (wantArtist.isNotEmpty) score += 3;
 
       if (lowered.contains('official audio') ||
@@ -957,7 +1053,7 @@ class TrackEnrichmentService {
     // Try the best candidates in order: progressive MP4 streams (itag 18)
     // are unthrottled and directly streamable by ExoPlayer/just_audio with
     // no range probe overhead or throttle cooldown risk.
-    for (final entry in scored.take(5)) {
+    for (final entry in scored.take(maxCandidates)) {
       final stream = await _ytAudioStream(entry.c.videoId);
       if (stream == null || stream.url.isEmpty) continue;
 
@@ -968,8 +1064,7 @@ class TrackEnrichmentService {
 
       return _PreviewHit(
         previewUrl: stream.url,
-        artworkUrl:
-            'https://i.ytimg.com/vi/${entry.c.videoId}/hqdefault.jpg',
+        artworkUrl: 'https://i.ytimg.com/vi/${entry.c.videoId}/hqdefault.jpg',
         duration: stream.lengthSeconds > 0
             ? Duration(seconds: stream.lengthSeconds)
             : null,
@@ -982,11 +1077,10 @@ class TrackEnrichmentService {
   }
 
   Future<List<_YouTubeCandidate>> _ytSearch(String query) async {
-    final uri = Uri.https(
-      'www.youtube.com',
-      '/youtubei/v1/search',
-      {'key': _ytKey, 'prettyPrint': 'false'},
-    );
+    final uri = Uri.https('www.youtube.com', '/youtubei/v1/search', {
+      'key': _ytKey,
+      'prettyPrint': 'false',
+    });
     final body = jsonEncode({
       'context': {
         'client': {
@@ -1064,9 +1158,8 @@ class TrackEnrichmentService {
         if (vr == null) continue;
         final videoId = vr['videoId']?.toString() ?? '';
         if (videoId.isEmpty) continue;
-        final title = _ytRunsText(vr['title']) ??
-            vr['headline']?.toString() ??
-            '';
+        final title =
+            _ytRunsText(vr['title']) ?? vr['headline']?.toString() ?? '';
         var channel = '';
         for (final key in ['ownerText', 'longBylineText', 'shortBylineText']) {
           final text = _ytRunsText(vr[key]);
@@ -1077,12 +1170,189 @@ class TrackEnrichmentService {
         }
         final lengthSeconds = _ytLengthSeconds(vr['lengthText']);
         if (title.trim().isEmpty || lengthSeconds <= 0) continue;
-        out.add(_YouTubeCandidate(
-          videoId: videoId,
-          title: title.trim(),
-          channel: channel.trim(),
-          lengthSeconds: lengthSeconds,
-        ));
+        out.add(
+          _YouTubeCandidate(
+            videoId: videoId,
+            title: title.trim(),
+            channel: channel.trim(),
+            lengthSeconds: lengthSeconds,
+          ),
+        );
+        if (out.length >= 12) return out;
+      }
+    }
+    return out;
+  }
+
+  /// Search YouTube Music for proper song entries.
+  ///
+  /// The regular YouTube search returns an age-confirmation promo instead of
+  /// results for explicit tracks, leaving songs such as "XXXX" and "Quickie"
+  /// stuck on LOCATING. YouTube Music returns the actual song with a playable
+  /// video id, and its results already carry clean title/artist metadata.
+  Future<List<_YouTubeCandidate>> _ytMusicSearch(String query) async {
+    final uri = Uri.https('music.youtube.com', '/youtubei/v1/search', {
+      'key': _ytKey,
+      'prettyPrint': 'false',
+    });
+    final body = jsonEncode({
+      'context': {
+        'client': {
+          'clientName': 'WEB_REMIX',
+          'clientVersion': '1.20250101.01.00',
+          'hl': 'en',
+          'gl': 'US',
+        },
+      },
+      'query': query,
+    });
+
+    final http.Response response;
+    try {
+      response = await _client
+          .post(
+            uri,
+            headers: {
+              'User-Agent': _browserUserAgent,
+              'Content-Type': 'application/json',
+            },
+            body: body,
+          )
+          .timeout(const Duration(seconds: 12));
+    } catch (e) {
+      debugPrint('[Enrich] ytm-search error $e');
+      return const [];
+    }
+    if (response.statusCode != 200) {
+      debugPrint('[Enrich] ytm-search status ${response.statusCode}');
+      return const [];
+    }
+
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(
+        utf8.decode(response.bodyBytes, allowMalformed: true),
+      );
+    } catch (_) {
+      return const [];
+    }
+    if (decoded is! Map<String, dynamic>) return const [];
+
+    Object? contents = decoded['contents'];
+    if (contents is Map<String, dynamic>) {
+      final tabbed = contents['tabbedSearchResultsRenderer'];
+      if (tabbed is Map<String, dynamic>) {
+        final tabs = tabbed['tabs'];
+        if (tabs is List && tabs.isNotEmpty) {
+          final tab = tabs.first;
+          if (tab is Map<String, dynamic>) {
+            final tabRenderer = tab['tabRenderer'];
+            if (tabRenderer is Map<String, dynamic>) {
+              contents = tabRenderer['content'];
+            }
+          }
+        }
+      }
+    }
+    if (contents is! Map<String, dynamic>) return const [];
+    final sectionListRenderer = contents['sectionListRenderer'];
+    if (sectionListRenderer is! Map<String, dynamic>) return const [];
+    final sectionList = sectionListRenderer['contents'];
+    if (sectionList is! List) return const [];
+
+    final out = <_YouTubeCandidate>[];
+    for (final section in sectionList) {
+      if (section is! Map<String, dynamic>) continue;
+      final itemSection = section['itemSectionRenderer'];
+      if (itemSection is! Map<String, dynamic>) continue;
+      final items = itemSection['contents'];
+      if (items is! List) continue;
+      for (final item in items) {
+        if (item is! Map<String, dynamic>) continue;
+        final renderer = item['musicResponsiveListItemRenderer'];
+        if (renderer is! Map<String, dynamic>) continue;
+
+        var videoId = '';
+        final playlistItem = renderer['playlistItemData'];
+        if (playlistItem is Map<String, dynamic>) {
+          videoId = playlistItem['videoId']?.toString() ?? '';
+        }
+        if (videoId.isEmpty) {
+          final overlay = renderer['overlay'];
+          if (overlay is Map<String, dynamic>) {
+            final overlayRenderer =
+                overlay['musicItemThumbnailOverlayRenderer'];
+            if (overlayRenderer is Map<String, dynamic>) {
+              final content = overlayRenderer['content'];
+              if (content is Map<String, dynamic>) {
+                final playButton = content['musicPlayButtonRenderer'];
+                if (playButton is Map<String, dynamic>) {
+                  final endpoint = playButton['playNavigationEndpoint'];
+                  if (endpoint is Map<String, dynamic>) {
+                    final watch = endpoint['watchEndpoint'];
+                    if (watch is Map<String, dynamic>) {
+                      videoId = watch['videoId']?.toString() ?? '';
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        if (videoId.isEmpty) continue;
+
+        final flexColumns = renderer['flexColumns'];
+        if (flexColumns is! List || flexColumns.isEmpty) continue;
+        final firstColumn = flexColumns.first;
+        if (firstColumn is! Map<String, dynamic>) continue;
+        final firstRenderer =
+            firstColumn['musicResponsiveListItemFlexColumnRenderer'];
+        if (firstRenderer is! Map<String, dynamic>) continue;
+        final title = _ytRunsText(firstRenderer['text']) ?? '';
+        if (title.trim().isEmpty) continue;
+
+        var channel = '';
+        if (flexColumns.length > 1) {
+          final secondColumn = flexColumns[1];
+          if (secondColumn is Map<String, dynamic>) {
+            final secondRenderer =
+                secondColumn['musicResponsiveListItemFlexColumnRenderer'];
+            if (secondRenderer is Map<String, dynamic>) {
+              final text = secondRenderer['text'];
+              if (text is Map<String, dynamic>) {
+                final runs = text['runs'];
+                if (runs is List) {
+                  final parts = <String>[];
+                  for (final run in runs) {
+                    if (run is Map<String, dynamic>) {
+                      final value = run['text']?.toString().trim() ?? '';
+                      if (value.isNotEmpty && value != '•') parts.add(value);
+                    }
+                  }
+                  // "Song • Loonie • 23M plays"
+                  // "Video • Channel • 94K views"
+                  for (final part in parts.skip(1)) {
+                    final lower = part.toLowerCase();
+                    if (lower.endsWith(' plays') || lower.endsWith(' views')) {
+                      continue;
+                    }
+                    channel = part;
+                    break;
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        out.add(
+          _YouTubeCandidate(
+            videoId: videoId,
+            title: title.trim(),
+            channel: channel,
+            lengthSeconds: 0,
+          ),
+        );
         if (out.length >= 12) return out;
       }
     }
@@ -1090,11 +1360,10 @@ class TrackEnrichmentService {
   }
 
   Future<_YouTubeStream?> _ytAudioStream(String videoId) async {
-    final uri = Uri.https(
-      'www.youtube.com',
-      '/youtubei/v1/player',
-      {'key': _ytKey, 'prettyPrint': 'false'},
-    );
+    final uri = Uri.https('www.youtube.com', '/youtubei/v1/player', {
+      'key': _ytKey,
+      'prettyPrint': 'false',
+    });
     final body = jsonEncode({
       'context': {
         'client': {
@@ -1144,8 +1413,10 @@ class TrackEnrichmentService {
     final playability = decoded['playabilityStatus'];
     if (playability is Map<String, dynamic>) {
       if (playability['status']?.toString() != 'OK') {
-        debugPrint('[Enrich] yt-player $videoId playability '
-            '${playability['status']} reason=${playability['reason']}');
+        debugPrint(
+          '[Enrich] yt-player $videoId playability '
+          '${playability['status']} reason=${playability['reason']}',
+        );
         return null;
       }
     }
@@ -1166,7 +1437,8 @@ class TrackEnrichmentService {
         if (url.isEmpty) continue;
         final mime = f['mimeType']?.toString() ?? '';
         final itag = f['itag'];
-        final hasAudio = mime.contains('mp4a') ||
+        final hasAudio =
+            mime.contains('mp4a') ||
             f.containsKey('audioSampleRate') ||
             f.containsKey('audioQuality');
         if (itag == 18 || (mime.startsWith('video/mp4') && hasAudio)) {
@@ -1346,9 +1618,8 @@ class TrackEnrichmentService {
     final http.Response response;
     try {
       response = await _client
-          .get(uri, headers: {'User-Agent': _browserUserAgent}).timeout(
-                const Duration(seconds: 12),
-              );
+          .get(uri, headers: {'User-Agent': _browserUserAgent})
+          .timeout(const Duration(seconds: 12));
     } catch (_) {
       return null;
     }
@@ -1390,7 +1661,8 @@ class TrackEnrichmentService {
       if (isNonStudioVariant(combined, '$title $artist')) continue;
 
       if (wantArtist.isNotEmpty) {
-        final artistMatches = hitArtist == wantArtist ||
+        final artistMatches =
+            hitArtist == wantArtist ||
             hitArtist.contains(wantArtist) ||
             wantArtist.contains(hitArtist);
         if (!artistMatches) continue;
@@ -1440,9 +1712,8 @@ class TrackEnrichmentService {
     final http.Response response;
     try {
       response = await _client
-          .get(uri, headers: {'User-Agent': _browserUserAgent}).timeout(
-                const Duration(seconds: 12),
-              );
+          .get(uri, headers: {'User-Agent': _browserUserAgent})
+          .timeout(const Duration(seconds: 12));
     } catch (_) {
       return null;
     }
@@ -1480,13 +1751,16 @@ class TrackEnrichmentService {
       if (!versionCompatible(wantTitle, hitTitle)) continue;
 
       final rawTitle = (item['title']?.toString() ?? '').toLowerCase();
-      final rawArtist = (artistObj is Map ? (artistObj['name']?.toString() ?? '') : '').toLowerCase();
+      final rawArtist =
+          (artistObj is Map ? (artistObj['name']?.toString() ?? '') : '')
+              .toLowerCase();
       final combined = '$rawTitle $rawArtist';
 
       if (isNonStudioVariant(combined, '$title $artist')) continue;
 
       if (wantArtist.isNotEmpty) {
-        final artistMatches = hitArtist == wantArtist ||
+        final artistMatches =
+            hitArtist == wantArtist ||
             hitArtist.contains(wantArtist) ||
             wantArtist.contains(hitArtist);
         if (!artistMatches) continue;
@@ -1533,10 +1807,12 @@ class TrackEnrichmentService {
     }
 
     try {
-      final homeRes = await _client.get(
-        Uri.parse('https://soundcloud.com'),
-        headers: {'User-Agent': _browserUserAgent},
-      ).timeout(const Duration(seconds: 4));
+      final homeRes = await _client
+          .get(
+            Uri.parse('https://soundcloud.com'),
+            headers: {'User-Agent': _browserUserAgent},
+          )
+          .timeout(const Duration(seconds: 4));
 
       if (homeRes.statusCode == 200) {
         final jsRegex = RegExp(r'<script[^>]+src="([^">]+\.js)"');
@@ -1623,7 +1899,8 @@ class TrackEnrichmentService {
           if (durSec <= 0) continue;
 
           // If expected song length is > 60s, skip short previews < 35s or snipped tracks
-          final isSnipped = item['snipped'] == true ||
+          final isSnipped =
+              item['snipped'] == true ||
               item['policy'] == 'SNIP' ||
               (wantSec > 60 && durSec < 35);
           if (isSnipped) continue;
@@ -1632,7 +1909,8 @@ class TrackEnrichmentService {
           if (hitTitle.isEmpty) continue;
 
           final titleExact = hitTitle == wantTitle;
-          final titleOverlaps = titleExact ||
+          final titleOverlaps =
+              titleExact ||
               hitTitle.contains(wantTitle) ||
               wantTitle.contains(hitTitle);
           if (!titleOverlaps) continue;
@@ -1664,14 +1942,20 @@ class TrackEnrichmentService {
             for (final t in transcodings) {
               if (t is! Map<String, dynamic>) continue;
               final format = t['format'];
-              final protocol = (format is Map ? format['protocol']?.toString() : null)?.toLowerCase() ?? '';
+              final protocol =
+                  (format is Map ? format['protocol']?.toString() : null)
+                      ?.toLowerCase() ??
+                  '';
               final infoUrl = t['url']?.toString();
               if (infoUrl == null || infoUrl.isEmpty) continue;
 
               // Strictly reject HLS streams: ExoPlayer fails on SoundCloud m3u8 manifests with gzip/source errors,
               // and m3u8 text playlists cannot be cached or played as direct audio files.
               if (protocol == 'hls' || infoUrl.contains('/hls')) continue;
-              if (protocol.isNotEmpty && protocol != 'progressive' && !infoUrl.contains('/progressive')) continue;
+              if (protocol.isNotEmpty &&
+                  protocol != 'progressive' &&
+                  !infoUrl.contains('/progressive'))
+                continue;
 
               try {
                 final resolveRes = await _client
@@ -1704,9 +1988,10 @@ class TrackEnrichmentService {
                 streamUrl.isNotEmpty &&
                 !streamUrl.toLowerCase().contains('.m3u8')) {
               bestScore = score;
-              final artwork = item['artwork_url']
-                  ?.toString()
-                  .replaceAll('large.jpg', 't500x500.jpg');
+              final artwork = item['artwork_url']?.toString().replaceAll(
+                'large.jpg',
+                't500x500.jpg',
+              );
               bestHit = _PreviewHit(
                 previewUrl: streamUrl,
                 artworkUrl: artwork,
@@ -1747,7 +2032,9 @@ class TrackEnrichmentService {
       ]);
       final archive = results[0];
       if (archive != null) {
-        debugPrint('[Enrich] webyt archive HIT ${Uri.tryParse(archive.previewUrl)?.host}');
+        debugPrint(
+          '[Enrich] webyt archive HIT ${Uri.tryParse(archive.previewUrl)?.host}',
+        );
         return archive;
       }
       final yt = results[1];
@@ -1788,7 +2075,8 @@ class TrackEnrichmentService {
     final wantSeconds = duration?.inSeconds ?? 0;
 
     final queries = <String>[
-      if (cleanArtist.isNotEmpty) 'title:("$cleanTitle") AND creator:("$cleanArtist")',
+      if (cleanArtist.isNotEmpty)
+        'title:("$cleanTitle") AND creator:("$cleanArtist")',
       'title:("$cleanTitle")',
       if (cleanArtist.isNotEmpty) '"$cleanTitle" AND "$cleanArtist"',
       if (cleanArtist.isNotEmpty) '$cleanArtist $cleanTitle',
@@ -1826,9 +2114,8 @@ class TrackEnrichmentService {
     final http.Response response;
     try {
       response = await _client
-          .get(uri, headers: {'User-Agent': _browserUserAgent}).timeout(
-                const Duration(seconds: 8),
-              );
+          .get(uri, headers: {'User-Agent': _browserUserAgent})
+          .timeout(const Duration(seconds: 8));
     } catch (_) {
       return const [];
     }
@@ -1888,8 +2175,9 @@ class TrackEnrichmentService {
       return null;
     }
 
-    final itemCreator =
-        details is Map<String, dynamic> ? _archiveCreator(details['creator']) : '';
+    final itemCreator = details is Map<String, dynamic>
+        ? _archiveCreator(details['creator'])
+        : '';
     if (wantArtist.isNotEmpty) {
       if (itemCreator.isEmpty) {
         if (!itemTitle.contains(wantArtist)) return null;
@@ -1915,7 +2203,15 @@ class TrackEnrichmentService {
       final name = file['name']?.toString() ?? '';
       if (name.isEmpty) continue;
       final lower = name.toLowerCase();
-      const audioExtensions = ['mp3', 'ogg', 'oga', 'flac', 'm4a', 'mp4', 'wav'];
+      const audioExtensions = [
+        'mp3',
+        'ogg',
+        'oga',
+        'flac',
+        'm4a',
+        'mp4',
+        'wav',
+      ];
       if (!audioExtensions.contains(lower.split('.').last)) continue;
       if (lower.contains('sample') || lower.contains('preview')) continue;
 
@@ -1936,7 +2232,8 @@ class TrackEnrichmentService {
           _archiveSiblings.putIfAbsent(
             key,
             () => (
-              url: 'https://archive.org/download/$identifier/'
+              url:
+                  'https://archive.org/download/$identifier/'
                   '${name.split('/').map(Uri.encodeComponent).join('/')}',
               seconds: fileDuration?.inSeconds ?? -1,
             ),
@@ -1959,19 +2256,21 @@ class TrackEnrichmentService {
         continue;
       }
 
-      final score =
-          (fileDuration?.inSeconds ?? 0) * 1000 + bytes.clamp(0, 999);
+      final score = (fileDuration?.inSeconds ?? 0) * 1000 + bytes.clamp(0, 999);
       if (score <= bestBytes) continue;
       bestBytes = score;
       bestDuration = fileDuration;
-      bestUrl = 'https://archive.org/download/$identifier/'
+      bestUrl =
+          'https://archive.org/download/$identifier/'
           '${name.split('/').map(Uri.encodeComponent).join('/')}';
     }
 
     if (bestUrl == null) return null;
     final bytesServed = await _probeAudioUrl(bestUrl);
     if (bytesServed == null) return null;
-    if (bestDuration == null && bytesServed > 0 && bytesServed < _minPlausibleFullTrackBytes) {
+    if (bestDuration == null &&
+        bytesServed > 0 &&
+        bytesServed < _minPlausibleFullTrackBytes) {
       return null;
     }
 
@@ -2026,11 +2325,7 @@ class TrackEnrichmentService {
           continue;
         }
       }
-      return _PreviewHit(
-        previewUrl: url,
-        duration: null,
-        isFullLength: true,
-      );
+      return _PreviewHit(previewUrl: url, duration: null, isFullLength: true);
     }
     return null;
   }
@@ -2065,9 +2360,8 @@ class TrackEnrichmentService {
     final http.Response response;
     try {
       response = await _client
-          .get(uri, headers: {'User-Agent': _browserUserAgent}).timeout(
-                const Duration(seconds: 8),
-              );
+          .get(uri, headers: {'User-Agent': _browserUserAgent})
+          .timeout(const Duration(seconds: 8));
     } catch (_) {
       return const [];
     }
@@ -2095,8 +2389,7 @@ class TrackEnrichmentService {
       if (target == null || target.isEmpty) return null;
       return Uri.tryParse(target)?.toString();
     }
-    if (uri.isAbsolute &&
-        (uri.scheme == 'http' || uri.scheme == 'https')) {
+    if (uri.isAbsolute && (uri.scheme == 'http' || uri.scheme == 'https')) {
       return uri.toString();
     }
     return null;
@@ -2188,17 +2481,22 @@ class TrackEnrichmentService {
 
     try {
       final request = http.Request('GET', parsed);
-      request.headers['User-Agent'] = isGoogleVideo ? ytAndroidUserAgent : _browserUserAgent;
+      request.headers['User-Agent'] = isGoogleVideo
+          ? ytAndroidUserAgent
+          : _browserUserAgent;
       request.headers['Range'] = 'bytes=0-1';
       final streamed = await _client
           .send(request)
           .timeout(const Duration(seconds: 6));
-      final ok = (streamed.statusCode == 200 || streamed.statusCode == 206) &&
+      final ok =
+          (streamed.statusCode == 200 || streamed.statusCode == 206) &&
           _looksLikeAudio(streamed.headers['content-type'] ?? '');
       await streamed.stream.take(1).drain<void>();
       if (!ok) {
-        debugPrint('[Enrich] probe GET ${streamed.statusCode} '
-            '${streamed.headers['content-type']} $url');
+        debugPrint(
+          '[Enrich] probe GET ${streamed.statusCode} '
+          '${streamed.headers['content-type']} $url',
+        );
         noteThrottle(streamed.statusCode);
         return null;
       }
@@ -2215,7 +2513,9 @@ class TrackEnrichmentService {
 
   static bool _looksLikeAudio(String contentType) {
     final ct = contentType.toLowerCase();
-    if (ct.contains('mpegurl') || ct.contains('m3u8') || ct.contains('x-scpls')) {
+    if (ct.contains('mpegurl') ||
+        ct.contains('m3u8') ||
+        ct.contains('x-scpls')) {
       return false;
     }
     return ct.startsWith('audio/') ||
@@ -2233,7 +2533,8 @@ class TrackEnrichmentService {
     String? album,
     Duration? duration,
   }) async {
-    final hasArtist = artist.isNotEmpty &&
+    final hasArtist =
+        artist.isNotEmpty &&
         artist.toLowerCase() != 'unknown artist' &&
         artist.toLowerCase() != 'spotify';
     final queries = hasArtist
@@ -2297,7 +2598,16 @@ class TrackEnrichmentService {
     var a = artist
         .replaceAll(RegExp(r'\s+\(.*?\)'), '')
         .replaceAll(RegExp(r'\s*\[.*?\]'), '');
-    for (final sep in [' feat ', ' ft ', ' featuring ', ' with ', ' & ', ', ', ' x ', ' X ']) {
+    for (final sep in [
+      ' feat ',
+      ' ft ',
+      ' featuring ',
+      ' with ',
+      ' & ',
+      ', ',
+      ' x ',
+      ' X ',
+    ]) {
       final idx = a.toLowerCase().indexOf(sep);
       if (idx > 0) {
         a = a.substring(0, idx);
@@ -2319,9 +2629,8 @@ class TrackEnrichmentService {
 
     try {
       final response = await _client
-          .get(uri, headers: {'User-Agent': _browserUserAgent}).timeout(
-                const Duration(seconds: 12),
-              );
+          .get(uri, headers: {'User-Agent': _browserUserAgent})
+          .timeout(const Duration(seconds: 12));
       if (response.statusCode != 200) return const [];
       final decoded = jsonDecode(
         utf8.decode(response.bodyBytes, allowMalformed: true),
@@ -2388,17 +2697,15 @@ class TrackEnrichmentService {
   }) async {
     final cleaned = _cleanQuery(title);
     final attempts = <Map<String, String>>[
-      {
-        'artist_name': artist.trim(),
-        'track_name': cleaned,
-      },
-      {
-        'q': '$cleaned ${artist.trim()}'.trim(),
-      },
+      {'artist_name': artist.trim(), 'track_name': cleaned},
+      {'q': '$cleaned ${artist.trim()}'.trim()},
     ];
     for (final params in attempts) {
-      final lines = await _fetchLrclibSearchParams(params,
-          title: title, artist: artist);
+      final lines = await _fetchLrclibSearchParams(
+        params,
+        title: title,
+        artist: artist,
+      );
       if (lines.isNotEmpty) return lines;
     }
     return const [];
@@ -2407,11 +2714,13 @@ class TrackEnrichmentService {
   Future<List<String>> _fetchLrclibSearchByQuery(String query) async {
     final q = query.trim();
     if (q.isEmpty) return const [];
-    final lines = await _fetchLrclibSearchParams({'q': q},
-        title: q, artist: '');
+    final lines = await _fetchLrclibSearchParams(
+      {'q': q},
+      title: q,
+      artist: '',
+    );
     if (lines.isNotEmpty) return lines;
-    return _fetchLrclibSearchParams({'track_name': q},
-        title: q, artist: '');
+    return _fetchLrclibSearchParams({'track_name': q}, title: q, artist: '');
   }
 
   Future<List<String>> _fetchLrclibSearchParams(
@@ -2423,9 +2732,8 @@ class TrackEnrichmentService {
     final http.Response response;
     try {
       response = await _client
-          .get(uri, headers: {'User-Agent': _browserUserAgent}).timeout(
-                const Duration(seconds: 8),
-              );
+          .get(uri, headers: {'User-Agent': _browserUserAgent})
+          .timeout(const Duration(seconds: 8));
     } catch (e) {
       debugPrint('[Enrich] archive-search error $e');
       return const [];
@@ -2433,8 +2741,7 @@ class TrackEnrichmentService {
     if (response.statusCode != 200) {
       debugPrint('[Enrich] archive-search status ${response.statusCode}');
       if (response.statusCode == 429 || response.statusCode == 403) {
-        _archiveCoolDownUntil =
-            DateTime.now().add(const Duration(minutes: 5));
+        _archiveCoolDownUntil = DateTime.now().add(const Duration(minutes: 5));
       }
       return const [];
     }
@@ -2476,16 +2783,19 @@ class TrackEnrichmentService {
       final lines = _splitSyncedLines(synced);
       if (lines.isNotEmpty) {
         debugPrint(
-            'Lyrics (lrclib synced) for $title - $artist (${lines.length} lines)');
+          'Lyrics (lrclib synced) for $title - $artist (${lines.length} lines)',
+        );
         return lines;
       }
     }
-    
+
     final plain = decoded['plainLyrics'];
     if (plain is String && plain.trim().isNotEmpty) {
       final lines = _splitLyricLines(plain);
       if (lines.isNotEmpty) {
-        debugPrint('Lyrics (lrclib) for $title - $artist (${lines.length} lines)');
+        debugPrint(
+          'Lyrics (lrclib) for $title - $artist (${lines.length} lines)',
+        );
         return lines;
       }
     }
@@ -2496,9 +2806,8 @@ class TrackEnrichmentService {
     final http.Response response;
     try {
       response = await _client
-          .get(uri, headers: {'User-Agent': _browserUserAgent}).timeout(
-                const Duration(seconds: 12),
-              );
+          .get(uri, headers: {'User-Agent': _browserUserAgent})
+          .timeout(const Duration(seconds: 12));
     } catch (e) {
       debugPrint('[Enrich] json ${uri.host} error $e');
       return null;
@@ -2507,8 +2816,7 @@ class TrackEnrichmentService {
       debugPrint('[Enrich] json ${uri.host} status ${response.statusCode}');
       if ((response.statusCode == 429 || response.statusCode == 403) &&
           uri.host.endsWith('archive.org')) {
-        _archiveCoolDownUntil =
-            DateTime.now().add(const Duration(minutes: 5));
+        _archiveCoolDownUntil = DateTime.now().add(const Duration(minutes: 5));
       }
       return null;
     }
@@ -2544,11 +2852,176 @@ class TrackEnrichmentService {
     var v = value
         .replaceAll(RegExp(r'\(.*?\)', multiLine: true), ' ')
         .replaceAll(RegExp(r'\[.*?\]'), ' ')
-        .replaceAll(RegExp(r'\b(feat|ft|featuring)\b\.?.*$',
-            caseSensitive: false), ' ')
+        .replaceAll(
+          RegExp(r'\b(feat|ft|featuring)\b\.?.*$', caseSensitive: false),
+          ' ',
+        )
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
     return v;
+  }
+
+  /// Words that do not identify a song and are commonly appended to YouTube
+  /// upload titles. They are ignored when comparing a search result to the
+  /// wanted track.
+  static const Set<String> _titleNoiseWords = {
+    'official',
+    'audio',
+    'video',
+    'music',
+    'lyric',
+    'lyrics',
+    'visualizer',
+    'visualiser',
+    'mv',
+    'hd',
+    '4k',
+    '8k',
+    'remaster',
+    'remastered',
+    'explicit',
+    'clean',
+    'full',
+    'song',
+    'track',
+    'new',
+    'latest',
+    'feat',
+    'ft',
+    'featuring',
+    'and',
+    'the',
+    'a',
+    'an',
+    'of',
+    'to',
+    'in',
+    'on',
+    'for',
+    'with',
+    'x',
+    '2023',
+    '2024',
+    '2025',
+    '2026',
+  };
+
+  static Set<String> _significantTitleTokens(
+    String normalized, {
+    Set<String> drop = const {},
+  }) {
+    return normalized
+        .split(' ')
+        .where(
+          (w) =>
+              w.isNotEmpty &&
+              !_titleNoiseWords.contains(w) &&
+              !drop.contains(w),
+        )
+        .toSet();
+  }
+
+  static Set<String> _artistWordSet(String artist, String channel) {
+    final out = <String>{};
+    for (final value in [artist, channel]) {
+      for (final word in _normalize(value).split(' ')) {
+        if (word.length >= 2) out.add(word);
+      }
+    }
+    return out;
+  }
+
+  /// Removes a `feat.` / `ft.` / `featuring` clause from a title. Featured
+  /// artists are optional metadata on YouTube uploads, so "Unreleased
+  /// (feat. Bosx1ne...)" must still match "Unreleased (Mahirap na)".
+  static String _stripFeatured(String value) {
+    return value
+        .replaceAll(
+          RegExp(
+            r'[\(\[\{]\s*(?:feat|ft|featuring)\.?\s+[^\)\]\}\(]*[\)\]\}]',
+            caseSensitive: false,
+          ),
+          ' ',
+        )
+        .replaceAll(
+          RegExp(
+            r'\b(?:feat|ft|featuring)\.?\s+[^\(\[]*$',
+            caseSensitive: false,
+          ),
+          ' ',
+        );
+  }
+
+  /// Removes bracketed version qualifiers such as "[Brian Cua Dance Remix]",
+  /// "(Acoustic)", or "(Single Version)". The base song is still the same
+  /// recording family, and leaving the qualifier in the wanted tokens made
+  /// remix/acoustic catalog entries miss every YouTube result.
+  static String _stripVersionQualifiers(String value) {
+    return value.replaceAll(
+      RegExp(
+        r'[\(\[\{][^\)\]\}]*\b(?:remix|mix|version|remaster(?:ed)?|acoustic|live|demo|edit|instrumental|karaoke|sped up|slowed)\b[^\)\]\}]*[\)\]\}]',
+        caseSensitive: false,
+      ),
+      ' ',
+    );
+  }
+
+  /// Artist names listed in a title's `feat.` clause.
+  static List<String> _featuredArtists(String title) {
+    final match = RegExp(
+      r'\b(?:feat|ft|featuring)\.?\s+([^\)\]\}\(]+)',
+      caseSensitive: false,
+    ).firstMatch(title);
+    if (match == null) return const [];
+    return (match.group(1) ?? '')
+        .split(RegExp(r',|&|\band\b', caseSensitive: false))
+        .map(_normalize)
+        .where((a) => a.length >= 2)
+        .toList();
+  }
+
+  /// True when a YouTube title belongs to the wanted song.
+  ///
+  /// YouTube titles are usually `Artist - Song (Official Audio)` while the
+  /// catalog title is `Song (feat. Artist)`. Removing the artist prefix and
+  /// the common upload noise before comparing tokens makes those matches
+  /// succeed without relaxing the artist check.
+  static ({bool matches, bool exact}) _youtubeTitleMatch({
+    required String wantTitle,
+    required String wantArtist,
+    required String hitTitle,
+    required String hitChannel,
+  }) {
+    final wantCore = _normalize(
+      _stripVersionQualifiers(_stripFeatured(wantTitle)),
+    );
+    final hitCore = _normalize(_stripFeatured(hitTitle));
+    if (wantCore.isEmpty || hitCore.isEmpty) {
+      return (matches: false, exact: false);
+    }
+
+    final drop = _artistWordSet(wantArtist, hitChannel);
+    final wantTokens = _significantTitleTokens(wantCore, drop: drop);
+    final hitTokens = _significantTitleTokens(hitCore, drop: drop);
+
+    if (wantTokens.isEmpty || hitTokens.isEmpty) {
+      final overlaps = hitCore.contains(wantCore) || wantCore.contains(hitCore);
+      return (matches: overlaps, exact: hitCore == wantCore);
+    }
+
+    final contains = hitTokens.containsAll(wantTokens);
+    final exact = contains && hitTokens.length == wantTokens.length;
+    return (matches: contains, exact: exact);
+  }
+
+  /// Case/space-insensitive containment used for artist and channel names
+  /// ("The Cranberries" must match "TheCranberriesTV").
+  static bool _looseContains(String haystack, String needle) {
+    if (haystack.isEmpty || needle.isEmpty) return false;
+    if (haystack.contains(needle)) return true;
+    final compactHaystack = haystack.replaceAll(' ', '');
+    final compactNeedle = needle.replaceAll(' ', '');
+    return compactNeedle.isNotEmpty && compactHaystack.contains(compactNeedle);
   }
 
   static String _normalize(String value) {

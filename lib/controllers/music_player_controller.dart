@@ -2606,7 +2606,8 @@ class MusicPlayerController extends ChangeNotifier {
         song.id.startsWith('spotify-') ||
         song.id.startsWith('itunes-') ||
         song.id.startsWith('radio-') ||
-        song.id.startsWith('dm-');
+        song.id.startsWith('dm-') ||
+        song.id.startsWith('recent-');
     if (!isImported) {
       // Local/bundled tracks have no full-track catalog to search.
       try {
@@ -2655,6 +2656,16 @@ class MusicPlayerController extends ChangeNotifier {
         }
       } catch (_) {}
     }
+  }
+
+  /// Catalog tracks are resolved strictly via YouTube. Local/bundled tracks
+  /// keep their own audio and must never be searched on YouTube.
+  static bool _isYouTubeCatalogSong(Song song) {
+    return song.id.startsWith('spotify-') ||
+        song.id.startsWith('itunes-') ||
+        song.id.startsWith('radio-') ||
+        song.id.startsWith('dm-') ||
+        song.id.startsWith('recent-');
   }
 
   Future<void> _enrichOneSong(
@@ -2763,9 +2774,10 @@ class MusicPlayerController extends ChangeNotifier {
         }
       }
 
-      final isRadioSong =
-          song.id.startsWith('radio-') || song.id.startsWith('dm-');
-
+      // Every catalog track is resolved strictly via YouTube. Discovery and
+      // imported tracks previously fell through Saavn → SoundCloud → web →
+      // YouTube, which took 30-45s per song. Local/bundled tracks keep their
+      // own audio and never reach this path.
       final enrichment = await _enrichment.enrichTrack(
         title: song.title,
         artist: song.artist,
@@ -2775,7 +2787,7 @@ class MusicPlayerController extends ChangeNotifier {
         allowPreviewFallback: false,
         prioritizeYouTube: true,
         fastImport: fastImport,
-        youtubeOnly: isRadioSong,
+        youtubeOnly: _isYouTubeCatalogSong(song),
       );
       _logDiag(
         'enrichment done in ${DateTime.now().difference(enrichStart).inMilliseconds}ms '
@@ -2817,7 +2829,8 @@ class MusicPlayerController extends ChangeNotifier {
         song.id.startsWith('spotify-') ||
         song.id.startsWith('itunes-') ||
         song.id.startsWith('radio-') ||
-        song.id.startsWith('dm-');
+        song.id.startsWith('dm-') ||
+        song.id.startsWith('recent-');
     final isFallbackAudio = _offlineFallbackIds.contains(song.id);
     final isM3u8 =
         enrichment.previewUrl?.toLowerCase().contains('.m3u8') ?? false;
@@ -3636,6 +3649,7 @@ class MusicPlayerController extends ChangeNotifier {
             previewFallbackOnly: false,
             allowPreviewFallback: false,
             prioritizeYouTube: true,
+            youtubeOnly: _isYouTubeCatalogSong(song),
           );
           if (enrichment.hasAudio &&
               enrichment.previewUrl != null &&
@@ -3903,6 +3917,7 @@ class MusicPlayerController extends ChangeNotifier {
             previewFallbackOnly: false,
             allowPreviewFallback: allowPreviewFallback,
             prioritizeYouTube: true,
+            youtubeOnly: _isYouTubeCatalogSong(song),
           );
           if (enrichment.hasAudio &&
               enrichment.previewUrl != null &&
@@ -4152,6 +4167,7 @@ class MusicPlayerController extends ChangeNotifier {
         duration: song.duration,
         allowPreviewFallback: true,
         prioritizeYouTube: false,
+        youtubeOnly: _isYouTubeCatalogSong(song),
       );
       if (enrichment.hasAudio || enrichment.hasLyrics) {
         _enrichedIds.add(song.id);
