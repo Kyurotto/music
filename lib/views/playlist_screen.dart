@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../controllers/music_player_controller.dart';
 import '../models/song_model.dart';
+import '../services/radio_discovery_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/bottom_player_bar.dart';
 import '../widgets/song_artwork_widget.dart';
@@ -69,6 +70,23 @@ class PlaylistScreen extends StatefulWidget {
 class _PlaylistScreenState extends State<PlaylistScreen> {
   int _selectedBottomNav = 0;
 
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final songs = _resolveSongs();
+      final isRadio = widget.playlist?.id.startsWith('radio-') == true ||
+          widget.playlist?.id.startsWith('dailymix-') == true ||
+          songs.any((s) => s.id.startsWith('radio-') || s.id.startsWith('dm-'));
+      if (isRadio) {
+        widget.controller.fastLocateRadioSongs(songs);
+      } else {
+        widget.controller.fastLocateDiscoverySongs(songs);
+      }
+    });
+  }
+
   List<Song> _resolveSongs() {
     List<Song> base;
     if (widget.playlist != null) {
@@ -108,10 +126,13 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
     if (widget.creatorName != null && widget.creatorName!.isNotEmpty) {
       return widget.creatorName!;
     }
+    if (widget.playlist != null && widget.playlist!.id.startsWith('radio-')) {
+      return 'Spotify Radio';
+    }
     if (widget.playlist != null && widget.playlist!.subtitle.isNotEmpty) {
       return widget.playlist!.subtitle;
     }
-    return 'YouTube Music';
+    return 'Spotify Radio';
   }
 
   String _formatTotalRuntime(List<Song> songs) {
@@ -262,7 +283,14 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
             color: Colors.white,
             backgroundColor: const Color(0xFF222222),
             onRefresh: () async {
-              widget.controller.fastLocateDiscoverySongs(songs);
+              final isRadio = widget.playlist?.id.startsWith('radio-') == true ||
+                  widget.playlist?.id.startsWith('dailymix-') == true ||
+                  songs.any((s) => s.id.startsWith('radio-') || s.id.startsWith('dm-'));
+              if (isRadio) {
+                widget.controller.fastLocateRadioSongs(songs);
+              } else {
+                widget.controller.fastLocateDiscoverySongs(songs);
+              }
               widget.controller.bumpLocatingVersion();
               await Future<void>.delayed(const Duration(milliseconds: 600));
             },
@@ -301,6 +329,7 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                         // Creator row with CircleAvatar
                         Row(
                           mainAxisAlignment: MainAxisAlignment.center,
+                          mainAxisSize: MainAxisSize.min,
                           children: [
                             CircleAvatar(
                               radius: 12,
@@ -316,12 +345,16 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                                   : null,
                             ),
                             const SizedBox(width: 8),
-                            Text(
-                              _displayCreator,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
+                            Flexible(
+                              child: Text(
+                                _displayCreator,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
                             ),
                             const SizedBox(width: 6),
@@ -362,118 +395,219 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                         const SizedBox(height: 24),
 
                         // 3. Action buttons row with an elevated white circular Play button in the center
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                          crossAxisAlignment: CrossAxisAlignment.center,
-                          children: [
-                            // Download
-                            IconButton(
-                              icon: const Icon(Icons.download_outlined,
-                                  color: Colors.white, size: 26),
-                              tooltip: 'Download all',
-                              onPressed: () {
-                                widget.controller.cacheDisplayedDashboardAudio();
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text('Downloading tracks for offline use...'),
-                                    backgroundColor: Color(0xFF222222),
+                        SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              // Fast Import (available for Spotify Radio stations)
+                              if (widget.playlist != null && widget.playlist!.id.startsWith('radio-'))
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                                  child: IconButton(
+                                    icon: const Icon(Icons.playlist_add_rounded,
+                                        color: AppTheme.accentGreen, size: 28),
+                                    tooltip: 'Fast Import to Library',
+                                    onPressed: () {
+                                      final isAlreadyImported = widget.controller.playlists
+                                          .any((p) => p.title == _displayTitle);
+                                      if (isAlreadyImported) {
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          SnackBar(
+                                            content: Text('"$_displayTitle" is already in your Library.'),
+                                            backgroundColor: const Color(0xFF222222),
+                                          ),
+                                        );
+                                        return;
+                                      }
+                                      final radioStation = RadioStation(
+                                        id: widget.playlist!.id.replaceFirst('radio-', ''),
+                                        title: _displayTitle,
+                                        artistName: _displayTitle.replaceAll(' Radio', ''),
+                                        subtitle: widget.subtitle ?? '',
+                                        backgroundColor: widget.playlist!.gradient.firstOrNull ??
+                                            AppTheme.cardSurface,
+                                        gradientColors: widget.playlist!.gradient,
+                                        heroImageUrl: widget.playlist!.imageUrl,
+                                        avatarUrls: [
+                                          if (widget.playlist!.imageUrl.isNotEmpty)
+                                            widget.playlist!.imageUrl
+                                        ],
+                                        songs: songs,
+                                      );
+                                      widget.controller.fastImportRadioStation(radioStation);
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(
+                                          content: Text(
+                                              'Successfully imported "$_displayTitle" (${songs.length} tracks) to your Library!'),
+                                          backgroundColor: AppTheme.accentGreen,
+                                        ),
+                                      );
+                                    },
                                   ),
-                                );
-                              },
-                            ),
+                                ),
 
-                            // Bookmark / Library Add
-                            IconButton(
-                              icon: const Icon(Icons.bookmark_border_rounded,
-                                  color: Colors.white, size: 26),
-                              tooltip: 'Save to library',
-                              onPressed: () {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text('Playlist saved to your library'),
-                                    backgroundColor: Color(0xFF222222),
-                                  ),
-                                );
-                              },
-                            ),
+                              // Download
+                              Builder(
+                                builder: (ctx) {
+                                  final isDownloading =
+                                      widget.controller.isPlaylistDownloading(songs);
+                                  final isDownloaded =
+                                      widget.controller.isPlaylistFullyDownloaded(songs);
 
-                            // Elevated white circular Play button in the center
-                            Container(
-                              width: 62,
-                              height: 62,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: Colors.white,
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.white.withValues(alpha: 0.3),
-                                    blurRadius: 18,
-                                    spreadRadius: 2,
-                                    offset: const Offset(0, 4),
-                                  ),
-                                  BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.4),
-                                    blurRadius: 12,
-                                    offset: const Offset(0, 6),
-                                  ),
-                                ],
+                                  if (isDownloading) {
+                                    return const Padding(
+                                      padding: EdgeInsets.all(12),
+                                      child: SizedBox(
+                                        width: 24,
+                                        height: 24,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2.2,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                    );
+                                  }
+
+                                  if (isDownloaded) {
+                                    return IconButton(
+                                      icon: const Icon(Icons.download_done_rounded,
+                                          color: AppTheme.accentGreen, size: 26),
+                                      tooltip: 'Downloaded for offline use',
+                                      onPressed: () {
+                                        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          const SnackBar(
+                                            content: Text(
+                                                'All tracks in this playlist are downloaded for offline use.'),
+                                            backgroundColor: Color(0xFF222222),
+                                            duration: Duration(seconds: 2),
+                                          ),
+                                        );
+                                      },
+                                    );
+                                  }
+
+                                  return IconButton(
+                                    icon: const Icon(Icons.download_outlined,
+                                        color: Colors.white, size: 26),
+                                    tooltip: 'Download all',
+                                    onPressed: () {
+                                      final pending = songs
+                                          .where((s) => !widget.controller.isSongDownloaded(s.id))
+                                          .toList();
+                                      if (pending.isEmpty) return;
+                                      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(
+                                          content: Text(
+                                              'Downloading ${pending.length} tracks for offline use...'),
+                                          backgroundColor: const Color(0xFF222222),
+                                          duration: const Duration(seconds: 2),
+                                        ),
+                                      );
+                                      widget.controller.downloadPlaylistSongs(songs);
+                                    },
+                                  );
+                                },
                               ),
-                              child: Material(
-                                color: Colors.transparent,
-                                child: InkWell(
-                                  customBorder: const CircleBorder(),
-                                  onTap: () => _togglePlayPause(songs),
-                                  child: Center(
-                                    child: Icon(
-                                      isPlayingCurrent
-                                          ? Icons.pause_rounded
-                                          : Icons.play_arrow_rounded,
-                                      color: Colors.black,
-                                      size: 38,
+
+                              // Bookmark / Library Add (for non-radio playlists)
+                              if (widget.playlist == null || !widget.playlist!.id.startsWith('radio-'))
+                                IconButton(
+                                  icon: const Icon(Icons.bookmark_border_rounded,
+                                      color: Colors.white, size: 26),
+                                  tooltip: 'Save to library',
+                                  onPressed: () {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text('Playlist saved to your library'),
+                                        backgroundColor: Color(0xFF222222),
+                                      ),
+                                    );
+                                  },
+                                ),
+
+                              // Elevated white circular Play button in the center
+                              Container(
+                                width: 62,
+                                height: 62,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: Colors.white,
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.white.withValues(alpha: 0.3),
+                                      blurRadius: 18,
+                                      spreadRadius: 2,
+                                      offset: const Offset(0, 4),
+                                    ),
+                                    BoxShadow(
+                                      color: Colors.black.withValues(alpha: 0.4),
+                                      blurRadius: 12,
+                                      offset: const Offset(0, 6),
+                                    ),
+                                  ],
+                                ),
+                                child: Material(
+                                  color: Colors.transparent,
+                                  child: InkWell(
+                                    customBorder: const CircleBorder(),
+                                    onTap: () => _togglePlayPause(songs),
+                                    child: Center(
+                                      child: Icon(
+                                        isPlayingCurrent
+                                            ? Icons.pause_rounded
+                                            : Icons.play_arrow_rounded,
+                                        color: Colors.black,
+                                        size: 38,
+                                      ),
                                     ),
                                   ),
                                 ),
                               ),
-                            ),
 
-                            // Share
-                            IconButton(
-                              icon: const Icon(Icons.share_outlined,
-                                  color: Colors.white, size: 24),
-                              tooltip: 'Share',
-                              onPressed: () {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text('Shared "$_displayTitle"'),
-                                    backgroundColor: const Color(0xFF222222),
-                                  ),
-                                );
-                              },
-                            ),
-
-                            // Shuffle
-                            IconButton(
-                              icon: Icon(
-                                widget.controller.isShuffle
-                                    ? Icons.shuffle_on_rounded
-                                    : Icons.shuffle_rounded,
-                                color: widget.controller.isShuffle
-                                    ? AppTheme.accentGreen
-                                    : Colors.white,
-                                size: 26,
-                              ),
-                              tooltip: 'Shuffle',
-                              onPressed: () => _shufflePlay(songs),
-                            ),
-
-                            if (widget.playlist != null)
+                              // Share
                               IconButton(
-                                icon: const Icon(Icons.delete_outline_rounded,
+                                icon: const Icon(Icons.share_outlined,
                                     color: Colors.white, size: 24),
-                                tooltip: 'Delete playlist',
-                                onPressed: _confirmDeletePlaylist,
+                                tooltip: 'Share',
+                                onPressed: () {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text('Shared "$_displayTitle"'),
+                                      backgroundColor: const Color(0xFF222222),
+                                    ),
+                                  );
+                                },
                               ),
-                          ],
+
+                              // Shuffle
+                              IconButton(
+                                icon: Icon(
+                                  widget.controller.isShuffle
+                                      ? Icons.shuffle_on_rounded
+                                      : Icons.shuffle_rounded,
+                                  color: widget.controller.isShuffle
+                                      ? AppTheme.accentGreen
+                                      : Colors.white,
+                                  size: 26,
+                                ),
+                                tooltip: 'Shuffle',
+                                onPressed: () => _shufflePlay(songs),
+                              ),
+
+                              // Delete (only for user-created, non-radio playlists)
+                              if (widget.playlist != null && !widget.playlist!.id.startsWith('radio-'))
+                                IconButton(
+                                  icon: const Icon(Icons.delete_outline_rounded,
+                                      color: Colors.white, size: 24),
+                                  tooltip: 'Delete playlist',
+                                  onPressed: _confirmDeletePlaylist,
+                                ),
+                            ],
+                          ),
                         ),
                       ],
                     ),
@@ -495,6 +629,7 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                           index: index,
                           isCurrent: isCurrent,
                           isPlaying: isCurrent && widget.controller.isPlaying,
+                          controller: widget.controller,
                           onTap: () => _playSongAt(songs, index),
                           onMoreTap: () => _showSongOptions(context, song),
                         );
@@ -631,6 +766,44 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                 Navigator.pop(ctx);
               },
             ),
+            if (!widget.controller.isSongDownloaded(song.id))
+              ListTile(
+                leading: const Icon(Icons.download_rounded, color: Colors.white),
+                title: const Text('Download song', style: TextStyle(color: Colors.white)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Downloading "${song.title}" for offline use...'),
+                      backgroundColor: const Color(0xFF222222),
+                      duration: const Duration(seconds: 2),
+                    ),
+                  );
+                  widget.controller.downloadSong(song);
+                },
+              )
+            else
+              ListTile(
+                leading: const Icon(Icons.delete_outline_rounded,
+                    color: AppTheme.accentPink),
+                title: const Text('Remove download',
+                    style: TextStyle(color: AppTheme.accentPink)),
+                onTap: () async {
+                  final messenger = ScaffoldMessenger.of(context);
+                  Navigator.pop(ctx);
+                  final removed = await widget.controller.removeDownloadedSong(song);
+                  if (mounted && removed) {
+                    messenger.showSnackBar(
+                      SnackBar(
+                        content: Text('Removed "${song.title}" from downloads'),
+                        backgroundColor: const Color(0xFF222222),
+                        duration: const Duration(seconds: 2),
+                      ),
+                    );
+                  }
+                },
+              ),
             if (widget.playlist != null)
               ListTile(
                 leading: const Icon(Icons.delete_outline_rounded,
@@ -795,6 +968,7 @@ class _PlaylistSongTile extends StatelessWidget {
   final int index;
   final bool isCurrent;
   final bool isPlaying;
+  final MusicPlayerController controller;
   final VoidCallback onTap;
   final VoidCallback onMoreTap;
 
@@ -803,6 +977,7 @@ class _PlaylistSongTile extends StatelessWidget {
     required this.index,
     required this.isCurrent,
     required this.isPlaying,
+    required this.controller,
     required this.onTap,
     required this.onMoreTap,
   });
@@ -875,8 +1050,20 @@ class _PlaylistSongTile extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       // Real-time audio locating / full track badge first
-                      ExcludeSemantics(child: _buildTrackBadge(song)),
-                      const SizedBox(width: 6),
+                      Flexible(
+                        flex: 0,
+                        child: ExcludeSemantics(
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 80),
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              alignment: Alignment.centerLeft,
+                              child: _buildTrackBadge(song),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
                       Expanded(
                         child: Text(
                           '${song.artist} • ${_clock(song.duration)}',
@@ -894,6 +1081,9 @@ class _PlaylistSongTile extends StatelessWidget {
               ),
             ),
 
+            // Individual Download action
+            _buildDownloadButton(context),
+
             // Trailing popup menu icon
             IconButton(
               icon: const Icon(Icons.more_vert, color: Colors.grey, size: 20),
@@ -905,13 +1095,78 @@ class _PlaylistSongTile extends StatelessWidget {
     );
   }
 
+  Widget _buildDownloadButton(BuildContext context) {
+    final isDownloading = controller.isSongDownloading(song.id);
+    final isDownloaded = controller.isSongDownloaded(song.id);
+
+    if (isDownloading) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(horizontal: 10),
+        child: SizedBox(
+          width: 18,
+          height: 18,
+          child: CircularProgressIndicator(
+            strokeWidth: 2,
+            color: AppTheme.accentGreen,
+          ),
+        ),
+      );
+    }
+
+    if (isDownloaded) {
+      return IconButton(
+        icon: const Icon(Icons.download_done_rounded,
+            color: AppTheme.accentGreen, size: 20),
+        tooltip: 'Downloaded for offline playback',
+        splashRadius: 18,
+        onPressed: () {
+          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                  '"${song.title}" is downloaded and ready for offline playback.'),
+              backgroundColor: const Color(0xFF222222),
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        },
+      );
+    }
+
+    return IconButton(
+      icon: const Icon(Icons.download_outlined, color: Colors.grey, size: 20),
+      tooltip: 'Download song',
+      splashRadius: 18,
+      onPressed: () async {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Downloading "${song.title}" for offline use...'),
+            backgroundColor: const Color(0xFF222222),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+        final success = await controller.downloadSong(song);
+        if (context.mounted && !success) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                  'Could not download "${song.title}". Check your connection or settings.'),
+              backgroundColor: const Color(0xFF331111),
+            ),
+          );
+        }
+      },
+    );
+  }
+
   Widget _buildTrackBadge(Song song) {
     if (!song.hasAudio) {
       return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1.5),
         decoration: BoxDecoration(
           color: Colors.black,
-          borderRadius: BorderRadius.circular(4),
+          borderRadius: BorderRadius.circular(3),
           border: Border.all(
             color: AppTheme.accentPink.withValues(alpha: 0.6),
             width: 1,
@@ -921,20 +1176,20 @@ class _PlaylistSongTile extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             SizedBox(
-              width: 7,
-              height: 7,
+              width: 6,
+              height: 6,
               child: CircularProgressIndicator(
-                strokeWidth: 1.5,
+                strokeWidth: 1.2,
                 color: AppTheme.accentPink,
               ),
             ),
-            SizedBox(width: 4),
+            SizedBox(width: 3),
             Text(
-              'LOCATING AUDIO',
+              'LOCATING',
               style: TextStyle(
-                fontSize: 8.5,
+                fontSize: 8,
                 fontWeight: FontWeight.bold,
-                letterSpacing: 0.4,
+                letterSpacing: 0.2,
                 color: AppTheme.accentPink,
               ),
             ),

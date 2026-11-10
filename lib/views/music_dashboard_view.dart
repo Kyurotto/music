@@ -18,6 +18,7 @@ import 'settings_view.dart';
 import 'discovery_sections.dart';
 import 'playlist_screen.dart';
 import '../services/discovery_service.dart';
+import '../services/radio_discovery_service.dart';
 
 class MusicDashboardView extends StatefulWidget {
   const MusicDashboardView({super.key});
@@ -29,11 +30,20 @@ class MusicDashboardView extends StatefulWidget {
 class _MusicDashboardViewState extends State<MusicDashboardView> {
   late final MusicPlayerController _controller;
   final TextEditingController _searchTextController = TextEditingController();
+  final TextEditingController _librarySearchController = TextEditingController();
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final GlobalKey<DiscoverySectionsState> _discoveryKey = GlobalKey<DiscoverySectionsState>();
   bool _pullToRefreshActive = false;
   String? _selectedPlaylistId;
   StreamSubscription<Object?>? _authSub;
+
+  String _libraryFilter = 'All'; // 'All', 'Playlists', 'Artists', 'Albums'
+  String _librarySearchQuery = '';
+  bool _isLibraryGridView = false;
+  String _exploreCategory = 'All'; // 'All', 'Music', 'Podcasts', 'Audiobooks'
+  List<RadioStation> _dynamicPopularRadios = [];
+  bool _isLoadingDynamicRadios = false;
+  final TextEditingController _radioSearchController = TextEditingController();
 
   String? _lastSongId;
   bool _lastIsPlaying = false;
@@ -72,6 +82,80 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
         _controller.cacheDisplayedDashboardAudio();
       }
     });
+    _dynamicPopularRadios = RadioDiscoveryService.instance.getPopularRadios();
+    _controller.preLocateExploreRadios(_dynamicPopularRadios);
+    _loadDynamicRadios();
+  }
+
+  Future<void> _loadDynamicRadios() async {
+    if (_isLoadingDynamicRadios) return;
+    setState(() => _isLoadingDynamicRadios = true);
+    try {
+      final stations = await RadioDiscoveryService.instance.fetchTrendingRadios();
+      unawaited(RadioDiscoveryService.instance.fetchOpmRadios());
+      unawaited(RadioDiscoveryService.instance.fetchGlobalRadios());
+      if (mounted) {
+        setState(() {
+          _dynamicPopularRadios = stations;
+          _isLoadingDynamicRadios = false;
+        });
+        _controller.preLocateExploreRadios(stations);
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _isLoadingDynamicRadios = false);
+      }
+    }
+  }
+
+  void _fastImportRadio(RadioStation station) {
+    _controller.fastImportRadioStation(station);
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Successfully imported "${station.title}" (${station.songs.length} tracks) to your Library!'),
+        backgroundColor: AppTheme.accentGreen,
+        action: SnackBarAction(
+          label: 'View',
+          textColor: Colors.black,
+          onPressed: () {
+            _controller.setNavIndex(2);
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<void> _searchRadioStation(String query) async {
+    final trimmed = query.trim();
+    if (trimmed.isEmpty) {
+      setState(() {
+        _dynamicPopularRadios = RadioDiscoveryService.instance.getPopularRadios();
+      });
+      return;
+    }
+    setState(() => _isLoadingDynamicRadios = true);
+    try {
+      final station = await RadioDiscoveryService.instance.searchSpotifyRadio(trimmed);
+      if (mounted) {
+        setState(() {
+          final existing = List<RadioStation>.from(_dynamicPopularRadios);
+          existing.removeWhere((s) => s.id == station.id);
+          _dynamicPopularRadios = [station, ...existing];
+          _isLoadingDynamicRadios = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLoadingDynamicRadios = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('No Spotify radio found for "$trimmed"'),
+            backgroundColor: const Color(0xFFDC2626),
+          ),
+        );
+      }
+    }
   }
 
   void _onStateChange() {
@@ -121,14 +205,62 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
     _controller.removeListener(_onStateChange);
     _controller.dispose();
     _searchTextController.dispose();
+    _librarySearchController.dispose();
+    _radioSearchController.dispose();
     super.dispose();
   }
 
   void _openPlaylist(String playlistId) {
     setState(() {
       _selectedPlaylistId = playlistId;
-      _controller.setNavIndex(2);
     });
+
+    final playlist = _controller.playlistById(playlistId);
+    if (playlist != null) {
+      Navigator.of(context).push(
+        PlaylistScreen.route(
+          playlist: playlist,
+          controller: _controller,
+        ),
+      );
+      return;
+    }
+
+    final radio = RadioDiscoveryService.instance
+        .getPopularRadios()
+        .where((r) => r.id == playlistId || 'radio-${r.id}' == playlistId)
+        .firstOrNull;
+    if (radio != null) {
+      Navigator.of(context).push(
+        PlaylistScreen.route(
+          playlist: radio.toPlaylist(),
+          songs: radio.songs,
+          controller: _controller,
+        ),
+      );
+      return;
+    }
+
+    if (playlistId == 'playlist-2000s' || playlistId == '2000s') {
+      final p2000s = MusicPlaylist(
+        id: 'playlist-2000s',
+        title: "2000's",
+        subtitle: 'loser',
+        gradient: const [Color(0xFFF59E0B), Color(0xFFD97706)],
+        imageUrl: '',
+        songIds: [],
+      );
+      Navigator.of(context).push(
+        PlaylistScreen.route(
+          playlist: p2000s,
+          controller: _controller,
+        ),
+      );
+      return;
+    }
+
+    // Default fallback to Library navigation
+    _controller.setNavIndex(2);
   }
 
   void _playSongWithLyrics(Song song) {
@@ -320,60 +452,6 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
           SnackBar(
             content: Text('Deleted "$title" from library and database.'),
             duration: const Duration(seconds: 3),
-          ),
-        );
-      }
-    }
-  }
-
-  Future<void> _confirmDeleteSongFromPlaylist(
-    MusicPlaylist playlist,
-    Song song,
-  ) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogCtx) => AlertDialog(
-        backgroundColor: AppTheme.cardSurface,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-          side: const BorderSide(color: AppTheme.border),
-        ),
-        title: const Text(
-          'Delete Song',
-          style: TextStyle(
-            color: AppTheme.textPrimary,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        content: Text(
-          'Are you sure you want to remove "${song.title}" from "${playlist.title}" and delete it from the database?',
-          style: const TextStyle(color: AppTheme.textSecondary),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogCtx).pop(false),
-            child: const Text('Cancel', style: TextStyle(color: AppTheme.textMuted)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppTheme.accentPink,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            ),
-            onPressed: () => Navigator.of(dialogCtx).pop(true),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed == true && mounted) {
-      await _controller.deleteSongFromPlaylist(playlist.id, song.id);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Deleted "${song.title}" from database.'),
-            duration: const Duration(seconds: 2),
           ),
         );
       }
@@ -654,72 +732,6 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
     }
   }
 
-  /// Selected-playlist detail shared by the Library tab and the dashboard,
-  /// so tapping a featured playlist on the dashboard opens it right here
-  /// instead of jumping to the Library tab.
-  Widget _buildSelectedPlaylistDetail(MusicPlaylist selectedPlaylist) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _buildHeaderWithActions(
-          title: selectedPlaylist.title,
-          subtitle:
-              '${selectedPlaylist.trackCount} ${selectedPlaylist.trackCount == 1 ? 'song' : 'songs'}',
-          actions: [
-            if (_controller.songsForPlaylist(selectedPlaylist.id).isNotEmpty)
-              ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppTheme.primary,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                ),
-                onPressed: () => _playPlaylistWithLyrics(selectedPlaylist.id),
-                icon: const Icon(Icons.play_arrow_rounded),
-                label: const Text('Play'),
-              ),
-            ElevatedButton.icon(
-              key: const ValueKey('delete_selected_playlist_btn'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.cardSurface,
-                foregroundColor: AppTheme.accentPink,
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  side: BorderSide(
-                    color: AppTheme.accentPink.withValues(alpha: 0.6),
-                    width: 1,
-                  ),
-                ),
-              ),
-              onPressed: () => _confirmDeletePlaylist(selectedPlaylist),
-              icon: const Icon(Icons.delete_outline_rounded, size: 18),
-              label: const Text('Delete playlist'),
-            ),
-          ],
-        ),
-        const SizedBox(height: 14),
-        Container(
-          decoration: BoxDecoration(
-            color: AppTheme.cardSurface,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: AppTheme.border, width: 1),
-          ),
-          child: TrackListView(
-            songs: _controller.songsForPlaylist(selectedPlaylist.id),
-            controller: _controller,
-            onSongTap: _playSongWithLyrics,
-            onAddToPlaylist: _showAddToPlaylistSheet,
-            onDelete: (song) => _confirmDeleteSongFromPlaylist(selectedPlaylist, song),
-            emptyTitle: 'No songs in this playlist yet',
-            emptySubtitle: 'Add songs from "All saved songs" below by clicking "+"',
-          ),
-        ),
-        const SizedBox(height: 32),
-      ],
-    );
-  }
-
   Widget _buildHomeFeed(bool isMobile) {
     final featuredSong = _controller.allSongs.where((s) => s.isFeatured).firstOrNull ??
         _controller.allSongs.firstOrNull;
@@ -977,49 +989,350 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
   }
 
   Widget _buildExploreTab() {
+    final popularRadios = _dynamicPopularRadios.isNotEmpty
+        ? _dynamicPopularRadios
+        : RadioDiscoveryService.instance.getPopularRadios();
+    final opmRadios = RadioDiscoveryService.instance.getOpmRadios();
+    final globalRadios = RadioDiscoveryService.instance.getGlobalRadios();
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildSectionHeader('Explore Playlists', 'Find soundscapes crafted for your day'),
-        const SizedBox(height: 20),
-        LayoutBuilder(
-          builder: (context, constraints) => GridView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: _controller.playlists.length,
-            gridDelegate: _albumGridDelegate(constraints.maxWidth, maxExtent: 220),
+        // Category Pills (All, Music, Podcasts, Audiobooks) as seen in Screenshot 1
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: ['All', 'Music', 'Podcasts', 'Audiobooks'].map((cat) {
+              final isSelected = _exploreCategory == cat;
+              return Padding(
+                padding: const EdgeInsets.only(right: 8.0),
+                child: FilterChip(
+                  label: Text(cat),
+                  selected: isSelected,
+                  onSelected: (_) => setState(() => _exploreCategory = cat),
+                  backgroundColor: AppTheme.cardSurface,
+                  selectedColor: AppTheme.primary,
+                  checkmarkColor: Colors.white,
+                  labelStyle: TextStyle(
+                    fontSize: 13,
+                    fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                    color: isSelected ? Colors.white : AppTheme.textSecondary,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20),
+                    side: BorderSide(
+                      color: isSelected ? AppTheme.primary : AppTheme.border,
+                    ),
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+        ),
+
+        const SizedBox(height: 16),
+
+        // Spotify Radio / Artist Dynamic Search Bar
+        Container(
+          height: 44,
+          decoration: BoxDecoration(
+            color: AppTheme.cardSurface,
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: AppTheme.border),
+          ),
+          child: Row(
+            children: [
+              const SizedBox(width: 14),
+              const Icon(Icons.search_rounded, size: 20, color: AppTheme.textSecondary),
+              const SizedBox(width: 10),
+              Expanded(
+                child: TextField(
+                  controller: _radioSearchController,
+                  onSubmitted: _searchRadioStation,
+                  style: const TextStyle(fontSize: 13, color: AppTheme.textPrimary),
+                  decoration: const InputDecoration(
+                    hintText: 'Search any Spotify radio or artist (e.g. Flow G, Air Supply, LANY, Ben&Ben)...',
+                    hintStyle: TextStyle(fontSize: 13, color: AppTheme.textMuted),
+                    border: InputBorder.none,
+                    isDense: true,
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+              ),
+              if (_isLoadingDynamicRadios)
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 14),
+                  child: SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.accentGreen),
+                  ),
+                )
+              else if (_radioSearchController.text.isNotEmpty)
+                IconButton(
+                  icon: const Icon(Icons.clear_rounded, size: 16, color: AppTheme.textMuted),
+                  onPressed: () {
+                    _radioSearchController.clear();
+                    _searchRadioStation('');
+                  },
+                )
+              else
+                IconButton(
+                  tooltip: 'Search radio',
+                  icon: const Icon(Icons.arrow_forward_rounded, size: 16, color: AppTheme.accentGreen),
+                  onPressed: () => _searchRadioStation(_radioSearchController.text),
+                ),
+            ],
+          ),
+        ),
+
+        const SizedBox(height: 24),
+
+        // Section 1: "Popular radio" matching Screenshot 2 & 3
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Text(
+              'Popular radio',
+              style: TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.bold,
+                color: AppTheme.textPrimary,
+              ),
+            ),
+            Row(
+              children: [
+                if (_isLoadingDynamicRadios) ...[
+                  const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.accentGreen),
+                  ),
+                  const SizedBox(width: 8),
+                ],
+                TextButton(
+                  onPressed: _loadDynamicRadios,
+                  child: const Text(
+                    'Show all',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.textSecondary,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+
+        // Horizontal Carousel of Popular Radio Cards
+        SizedBox(
+          height: 250,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: popularRadios.length,
+            separatorBuilder: (context, index) => const SizedBox(width: 16),
             itemBuilder: (context, index) {
-              final playlist = _controller.playlists[index];
-              return AlbumCard(
-                playlist: playlist,
-                isSelected: playlist.id == _selectedPlaylistId,
+              final station = popularRadios[index];
+              return _PopularRadioCard(
+                station: station,
                 onTap: () {
                   Navigator.of(context).push(
                     PlaylistScreen.route(
-                      playlist: playlist,
+                      playlist: station.toPlaylist(),
+                      songs: station.songs,
                       controller: _controller,
                     ),
                   );
                 },
-                onPlay: () => _playPlaylistWithLyrics(playlist.id),
+                onPlay: () {
+                  if (station.songs.isNotEmpty) {
+                    _controller.playSongList(station.songs, startIndex: 0);
+                  }
+                },
+                onFastImport: () => _fastImportRadio(station),
               );
             },
           ),
         ),
-        const SizedBox(height: 32),
-        _buildSectionHeader('All Available Catalog', 'Complete library tracks'),
-        const SizedBox(height: 14),
-        Container(
-          decoration: BoxDecoration(
-            color: AppTheme.cardSurface,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: AppTheme.border, width: 1),
+
+        const SizedBox(height: 36),
+
+        // Section 2: "More like Sugarfree" (OPM Radio) matching Screenshot 3
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 32,
+                  height: 32,
+                  decoration: const BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Color(0xFFFDE047),
+                  ),
+                  child: const Center(
+                    child: Icon(Icons.radio_rounded, size: 18, color: Colors.black87),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'More like',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.white.withValues(alpha: 0.6),
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const Text(
+                      'Sugarfree',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            TextButton(
+              onPressed: () {},
+              child: const Text(
+                'Show all',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: AppTheme.textSecondary,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+
+        // Horizontal Carousel of OPM Radio Cards
+        SizedBox(
+          height: 250,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: opmRadios.length,
+            separatorBuilder: (context, index) => const SizedBox(width: 16),
+            itemBuilder: (context, index) {
+              final station = opmRadios[index];
+              return _PopularRadioCard(
+                station: station,
+                onTap: () {
+                  Navigator.of(context).push(
+                    PlaylistScreen.route(
+                      playlist: station.toPlaylist(),
+                      songs: station.songs,
+                      controller: _controller,
+                    ),
+                  );
+                },
+                onPlay: () {
+                  if (station.songs.isNotEmpty) {
+                    _controller.playSongList(station.songs, startIndex: 0);
+                  }
+                },
+                onFastImport: () => _fastImportRadio(station),
+              );
+            },
           ),
-          child: TrackListView(
-            songs: _controller.allSongs,
-            controller: _controller,
-            onSongTap: _playSongWithLyrics,
-            onAddToPlaylist: _showAddToPlaylistSheet,
+        ),
+
+        const SizedBox(height: 36),
+
+        // Section 3: "More like Maroon 5" (Global Radio) matching Screenshot 1
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 32,
+                  height: 32,
+                  decoration: const BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Color(0xFFF87171),
+                  ),
+                  child: const Center(
+                    child: Icon(Icons.music_note_rounded, size: 18, color: Colors.white),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'More like',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.white.withValues(alpha: 0.6),
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const Text(
+                      'Maroon 5',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            TextButton(
+              onPressed: () {},
+              child: const Text(
+                'Show all',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: AppTheme.textSecondary,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+
+        // Horizontal Carousel of Global Radio Cards
+        SizedBox(
+          height: 250,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: globalRadios.length,
+            separatorBuilder: (context, index) => const SizedBox(width: 16),
+            itemBuilder: (context, index) {
+              final station = globalRadios[index];
+              return _PopularRadioCard(
+                station: station,
+                onTap: () {
+                  Navigator.of(context).push(
+                    PlaylistScreen.route(
+                      playlist: station.toPlaylist(),
+                      songs: station.songs,
+                      controller: _controller,
+                    ),
+                  );
+                },
+                onPlay: () {
+                  if (station.songs.isNotEmpty) {
+                    _controller.playSongList(station.songs, startIndex: 0);
+                  }
+                },
+                onFastImport: () => _fastImportRadio(station),
+              );
+            },
           ),
         ),
       ],
@@ -1067,17 +1380,28 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
   }
 
   Widget _buildLibraryTab() {
-    final selectedPlaylist = _selectedPlaylistId == null
-        ? null
-        : _controller.playlistById(_selectedPlaylistId!);
+    final allPlaylists = _controller.playlists;
+
+    final q = _librarySearchQuery.trim().toLowerCase();
+
+    // Filter playlists
+    final filteredPlaylists = allPlaylists.where((p) {
+      if (q.isNotEmpty &&
+          !p.title.toLowerCase().contains(q) &&
+          !p.subtitle.toLowerCase().contains(q)) {
+        return false;
+      }
+      return true;
+    }).toList();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // Header with Action Buttons (preserves overflow test expectations)
         _buildHeaderWithActions(
           title: 'Your Library',
           subtitle:
-              '${_controller.allSongs.length} saved songs across ${_controller.playlists.length} playlists',
+              '${allPlaylists.length} ${allPlaylists.length == 1 ? 'playlist' : 'playlists'}',
           actions: [
             ElevatedButton.icon(
               style: ElevatedButton.styleFrom(
@@ -1106,51 +1430,228 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
             ),
           ],
         ),
-        const SizedBox(height: 20),
-        LayoutBuilder(
-          builder: (context, constraints) => GridView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: _controller.playlists.length,
-            gridDelegate: _albumGridDelegate(constraints.maxWidth),
-            itemBuilder: (context, index) {
-              final playlist = _controller.playlists[index];
-              return AlbumCard(
-                playlist: playlist,
-                isSelected: playlist.id == _selectedPlaylistId,
-                onTap: () {
-                  Navigator.of(context).push(
-                    PlaylistScreen.route(
-                      playlist: playlist,
-                      controller: _controller,
+
+        const SizedBox(height: 18),
+
+        // Spotify Filter Pills: [All] [Playlists] [Albums]
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: ['All', 'Playlists', 'Albums'].map((filter) {
+              final isSelected = _libraryFilter == filter;
+              return Padding(
+                padding: const EdgeInsets.only(right: 8.0),
+                child: FilterChip(
+                  label: Text(filter),
+                  selected: isSelected,
+                  onSelected: (_) => setState(() => _libraryFilter = filter),
+                  backgroundColor: AppTheme.cardSurface,
+                  selectedColor: AppTheme.primary,
+                  checkmarkColor: Colors.white,
+                  labelStyle: TextStyle(
+                    fontSize: 13,
+                    fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                    color: isSelected ? Colors.white : AppTheme.textSecondary,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20),
+                    side: BorderSide(
+                      color: isSelected ? AppTheme.primary : AppTheme.border,
                     ),
-                  );
-                },
-                onPlay: () => _playPlaylistWithLyrics(playlist.id),
-                onDelete: () => _confirmDeletePlaylist(playlist),
+                  ),
+                ),
               );
-            },
+            }).toList(),
           ),
         ),
-        const SizedBox(height: 32),
-        if (selectedPlaylist != null)
-          _buildSelectedPlaylistDetail(selectedPlaylist),
-        _buildSectionHeader('All saved songs', 'Add any song to a playlist'),
+
         const SizedBox(height: 14),
-        Container(
-          decoration: BoxDecoration(
-            color: AppTheme.cardSurface,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: AppTheme.border, width: 1),
-          ),
-          child: TrackListView(
-            songs: _controller.allSongs,
-            controller: _controller,
-            onSongTap: _playSongWithLyrics,
-            onAddToPlaylist: _showAddToPlaylistSheet,
-            onDelete: (song) => _confirmDeleteSong(song),
-          ),
+
+        // Search in Library and Sort / Layout Switcher Row
+        Row(
+          children: [
+            Expanded(
+              child: Container(
+                height: 38,
+                decoration: BoxDecoration(
+                  color: AppTheme.cardSurface,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppTheme.border),
+                ),
+                child: TextField(
+                  controller: _librarySearchController,
+                  onChanged: (val) => setState(() => _librarySearchQuery = val),
+                  style: const TextStyle(fontSize: 13, color: AppTheme.textPrimary),
+                  decoration: InputDecoration(
+                    hintText: 'Search in Your Library...',
+                    hintStyle: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
+                    prefixIcon: const Icon(Icons.search, size: 18, color: AppTheme.textSecondary),
+                    suffixIcon: _librarySearchQuery.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.clear, size: 14, color: AppTheme.textMuted),
+                            onPressed: () {
+                              _librarySearchController.clear();
+                              setState(() => _librarySearchQuery = '');
+                            },
+                          )
+                        : null,
+                    border: InputBorder.none,
+                    contentPadding: const EdgeInsets.symmetric(vertical: 9),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            // Recents indicator & Layout toggle
+            Row(
+              children: [
+                const Text(
+                  'Recents',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: AppTheme.textSecondary,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                IconButton(
+                  tooltip: _isLibraryGridView ? 'Switch to List view' : 'Switch to Grid view',
+                  icon: Icon(
+                    _isLibraryGridView ? Icons.list_rounded : Icons.grid_view_rounded,
+                    size: 20,
+                    color: AppTheme.textSecondary,
+                  ),
+                  onPressed: () => setState(() => _isLibraryGridView = !_isLibraryGridView),
+                ),
+              ],
+            ),
+          ],
         ),
+
+        const SizedBox(height: 18),
+
+        // The Library Items
+        if (filteredPlaylists.isEmpty)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(vertical: 40, horizontal: 20),
+            decoration: BoxDecoration(
+              color: AppTheme.cardSurface,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: AppTheme.border),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.library_music_outlined,
+                  size: 48,
+                  color: AppTheme.textMuted.withValues(alpha: 0.6),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  _librarySearchQuery.isNotEmpty
+                      ? 'No playlists match "$_librarySearchQuery"'
+                      : 'Your library is empty',
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: AppTheme.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  _librarySearchQuery.isNotEmpty
+                      ? 'Check your search spelling or clear the filter.'
+                      : 'Import a Spotify playlist link or create a new playlist.',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: AppTheme.textSecondary,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                if (_librarySearchQuery.isEmpty) ...[
+                  const SizedBox(height: 20),
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 8,
+                    alignment: WrapAlignment.center,
+                    children: [
+                      ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppTheme.primary,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                        onPressed: _importFromSpotify,
+                        icon: const Icon(Icons.download_rounded, size: 16),
+                        label: const Text('Import Spotify link'),
+                      ),
+                      OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: AppTheme.textPrimary,
+                          side: const BorderSide(color: AppTheme.border),
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                        onPressed: _showCreatePlaylistDialog,
+                        icon: const Icon(Icons.add_rounded, size: 16),
+                        label: const Text('Create playlist'),
+                      ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          )
+        else if (_isLibraryGridView)
+          // Grid View
+          LayoutBuilder(
+            builder: (context, constraints) => GridView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: filteredPlaylists.length,
+              gridDelegate: _albumGridDelegate(constraints.maxWidth),
+              itemBuilder: (context, index) {
+                final playlist = filteredPlaylists[index];
+                return AlbumCard(
+                  playlist: playlist,
+                  isSelected: playlist.id == _selectedPlaylistId,
+                  onTap: () => _openPlaylist(playlist.id),
+                  onPlay: () => _playPlaylistWithLyrics(playlist.id),
+                  onDelete: () => _confirmDeletePlaylist(playlist),
+                );
+              },
+            ),
+          )
+        else
+          // Spotify-style List View
+          Container(
+            decoration: BoxDecoration(
+              color: AppTheme.cardSurface,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: AppTheme.border),
+            ),
+            child: ListView.separated(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: filteredPlaylists.length,
+              separatorBuilder: (context, index) => Divider(
+                height: 1,
+                thickness: 0.5,
+                color: AppTheme.border.withValues(alpha: 0.5),
+              ),
+              itemBuilder: (context, index) {
+                final playlist = filteredPlaylists[index];
+                return _LibraryPlaylistTile(
+                  playlist: playlist,
+                  onTap: () => _openPlaylist(playlist.id),
+                  onDelete: () => _confirmDeletePlaylist(playlist),
+                );
+              },
+            ),
+          ),
       ],
     );
   }
@@ -1281,6 +1782,751 @@ class _CreatePlaylistDialogState extends State<_CreatePlaylistDialog> {
           child: const Text('Create'),
         ),
       ],
+    );
+  }
+}
+
+class _PopularRadioCard extends StatefulWidget {
+  final RadioStation station;
+  final VoidCallback onTap;
+  final VoidCallback onPlay;
+  final VoidCallback? onFastImport;
+
+  const _PopularRadioCard({
+    required this.station,
+    required this.onTap,
+    required this.onPlay,
+    this.onFastImport,
+  });
+
+  @override
+  State<_PopularRadioCard> createState() => _PopularRadioCardState();
+}
+
+class _PopularRadioCardState extends State<_PopularRadioCard> {
+  bool _isHovered = false;
+
+  Widget _buildAvatarCircle({
+    required String? url,
+    required double size,
+    required String fallbackText,
+    required List<Color> gradientColors,
+  }) {
+    final hasUrl = url != null && url.isNotEmpty;
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: Colors.white,
+        border: Border.all(color: Colors.white, width: 2),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.25),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: ClipOval(
+        child: hasUrl
+            ? Image.network(
+                url,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) =>
+                    _buildFallback(fallbackText, gradientColors, size),
+              )
+            : _buildFallback(fallbackText, gradientColors, size),
+      ),
+    );
+  }
+
+  Widget _buildFallback(String text, List<Color> gradientColors, double size) {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: gradientColors.length >= 2
+              ? gradientColors
+              : const [Color(0xFF334155), Color(0xFF64748B)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+      ),
+      child: Center(
+        child: Text(
+          text,
+          style: TextStyle(
+            fontSize: size * 0.38,
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final station = widget.station;
+    final primaryAvatar =
+        station.avatarUrls.isNotEmpty ? station.avatarUrls[0] : null;
+    final leftAvatar =
+        station.avatarUrls.length > 1 ? station.avatarUrls[1] : null;
+    final rightAvatar =
+        station.avatarUrls.length > 2 ? station.avatarUrls[2] : null;
+
+    final initialLetter = station.artistName.isNotEmpty
+        ? station.artistName.substring(0, 1).toUpperCase()
+        : 'R';
+
+    return MouseRegion(
+      onEnter: (_) => setState(() => _isHovered = true),
+      onExit: (_) => setState(() => _isHovered = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: SizedBox(
+          width: 176,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Top Colored Pastel Card Container matching Spotify Screenshot
+              Container(
+                height: 180,
+                width: 176,
+                decoration: BoxDecoration(
+                  color: station.backgroundColor,
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.35),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Stack(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Top Bar: Sound/Spotify-style icon and RADIO text
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Container(
+                                width: 22,
+                                height: 22,
+                                decoration: const BoxDecoration(
+                                  color: Colors.black,
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Center(
+                                  child: Icon(
+                                    Icons.graphic_eq_rounded,
+                                    size: 13,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                              const Text(
+                                'RADIO',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w900,
+                                  color: Colors.black87,
+                                  letterSpacing: 1.2,
+                                ),
+                              ),
+                            ],
+                          ),
+
+                          const SizedBox(height: 10),
+
+                          // 3-Avatar Cluster (Center overlapping circles with real artist images)
+                          Center(
+                            child: SizedBox(
+                              height: 80,
+                              width: 140,
+                              child: Stack(
+                                alignment: Alignment.center,
+                                children: [
+                                  // Left collaborator avatar
+                                  Positioned(
+                                    left: 4,
+                                    child: _buildAvatarCircle(
+                                      url: leftAvatar,
+                                      size: 50,
+                                      fallbackText: '1',
+                                      gradientColors: const [Color(0xFF334155), Color(0xFF64748B)],
+                                    ),
+                                  ),
+                                  // Right collaborator avatar
+                                  Positioned(
+                                    right: 4,
+                                    child: _buildAvatarCircle(
+                                      url: rightAvatar,
+                                      size: 50,
+                                      fallbackText: '2',
+                                      gradientColors: const [Color(0xFF1E293B), Color(0xFF475569)],
+                                    ),
+                                  ),
+                                  // Center primary artist avatar
+                                  _buildAvatarCircle(
+                                    url: primaryAvatar,
+                                    size: 70,
+                                    fallbackText: initialLetter,
+                                    gradientColors: station.gradientColors,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+
+                          const Spacer(),
+
+                          // Station Artist Name in solid bold dark text inside the pastel card
+                          Text(
+                            station.artistName,
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w900,
+                              color: Colors.black,
+                              letterSpacing: -0.4,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    // Floating Fast Import Button on Hover (bottom left of colored card)
+                    if (_isHovered && widget.onFastImport != null)
+                      Positioned(
+                        left: 10,
+                        bottom: 10,
+                        child: Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            onTap: widget.onFastImport,
+                            borderRadius: BorderRadius.circular(18),
+                            child: Container(
+                              width: 36,
+                              height: 36,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: Colors.black.withValues(alpha: 0.75),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.4),
+                                    blurRadius: 6,
+                                    offset: const Offset(0, 2),
+                                  ),
+                                ],
+                              ),
+                              child: const Center(
+                                child: Icon(
+                                  Icons.playlist_add_rounded,
+                                  color: AppTheme.accentGreen,
+                                  size: 20,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+
+                    // Floating Green Play Button on Hover (bottom right of colored card)
+                    if (_isHovered)
+                      Positioned(
+                        right: 10,
+                        bottom: 10,
+                        child: Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            onTap: widget.onPlay,
+                            borderRadius: BorderRadius.circular(22),
+                            child: Container(
+                              width: 42,
+                              height: 42,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: AppTheme.accentGreen,
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.5),
+                                    blurRadius: 8,
+                                    offset: const Offset(0, 3),
+                                  ),
+                                ],
+                              ),
+                              child: const Center(
+                                child: Icon(
+                                  Icons.play_arrow_rounded,
+                                  color: Colors.black,
+                                  size: 28,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 8),
+
+              // Station Subtitle below card ("With SUPAFLY, Lo ki, Hev Abi and more")
+              Text(
+                station.subtitle,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: Colors.white.withValues(alpha: 0.65),
+                  height: 1.3,
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _LibraryPlaylistTile extends StatelessWidget {
+  final MusicPlaylist playlist;
+  final VoidCallback onTap;
+  final VoidCallback? onDelete;
+
+  const _LibraryPlaylistTile({
+    required this.playlist,
+    required this.onTap,
+    this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cleanSubtitle = playlist.subtitle.isNotEmpty
+        ? playlist.subtitle
+        : (playlist.songIds.isNotEmpty
+            ? '${playlist.songIds.length} ${playlist.songIds.length == 1 ? 'song' : 'songs'}'
+            : '');
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          child: Row(
+            children: [
+              // Square Artwork with rounded corners (Spotify Style)
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Container(
+                  width: 52,
+                  height: 52,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: playlist.gradient.isNotEmpty
+                          ? playlist.gradient
+                          : [const Color(0xFF334155), const Color(0xFF64748B)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                  ),
+                  child: SongArtworkWidget(
+                    imageUrl: playlist.imageUrl,
+                    title: playlist.title,
+                    artist: playlist.subtitle,
+                    gradientColors: playlist.gradient,
+                    size: 52,
+                    borderRadius: 8,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      playlist.title,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.textPrimary,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    if (cleanSubtitle.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        cleanSubtitle,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          color: AppTheme.textMuted,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              if (onDelete != null)
+                IconButton(
+                  tooltip: 'Delete playlist',
+                  icon: const Icon(Icons.delete_outline_rounded, size: 18, color: AppTheme.textMuted),
+                  onPressed: onDelete,
+                ),
+              const SizedBox(width: 4),
+              const Icon(
+                Icons.arrow_forward_ios_rounded,
+                size: 14,
+                color: AppTheme.textMuted,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DailyMixCard extends StatefulWidget {
+  final DailyMix mix;
+  final VoidCallback onTap;
+  final VoidCallback onPlay;
+
+  const _DailyMixCard({
+    required this.mix,
+    required this.onTap,
+    required this.onPlay,
+  });
+
+  @override
+  State<_DailyMixCard> createState() => _DailyMixCardState();
+}
+
+class _DailyMixCardState extends State<_DailyMixCard> {
+  bool _isHovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final mix = widget.mix;
+
+    return MouseRegion(
+      onEnter: (_) => setState(() => _isHovered = true),
+      onExit: (_) => setState(() => _isHovered = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: Container(
+          width: 172,
+          decoration: BoxDecoration(
+            color: const Color(0xFF181818),
+            borderRadius: BorderRadius.circular(14),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.3),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Stack(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Dual-Tone Header Banner matching Spotify Daily Mix in Screenshot 1
+                    Container(
+                      height: 130,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(8),
+                        gradient: LinearGradient(
+                          colors: mix.gradientColors,
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                      ),
+                      child: Stack(
+                        children: [
+                          // Top bar with "Daily Mix" and "01" number tag
+                          Positioned(
+                            top: 8,
+                            left: 8,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: Colors.black.withValues(alpha: 0.6),
+                                    borderRadius: const BorderRadius.horizontal(left: Radius.circular(4)),
+                                  ),
+                                  child: const Text(
+                                    'Daily Mix',
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                                  decoration: const BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.horizontal(right: Radius.circular(4)),
+                                  ),
+                                  child: Text(
+                                    mix.number,
+                                    style: const TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w900,
+                                      color: Colors.black,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          // Music visualizer icon in center
+                          Center(
+                            child: Icon(
+                              Icons.album_rounded,
+                              size: 48,
+                              color: Colors.white.withValues(alpha: 0.85),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    const SizedBox(height: 10),
+
+                    // Mix Title
+                    Text(
+                      mix.title,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+
+                    const SizedBox(height: 4),
+
+                    // Artists Subtitle
+                    Text(
+                      mix.subtitle,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.white.withValues(alpha: 0.65),
+                        height: 1.3,
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+
+              // Green hover play button
+              if (_isHovered)
+                Positioned(
+                  right: 18,
+                  bottom: 74,
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: widget.onPlay,
+                      borderRadius: BorderRadius.circular(22),
+                      child: Container(
+                        width: 42,
+                        height: 42,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: AppTheme.accentGreen,
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.5),
+                              blurRadius: 8,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        child: const Center(
+                          child: Icon(
+                            Icons.play_arrow_rounded,
+                            color: Colors.black,
+                            size: 28,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RecentReleaseCard extends StatefulWidget {
+  final Song song;
+  final VoidCallback onTap;
+  final VoidCallback onPlay;
+
+  const _RecentReleaseCard({
+    required this.song,
+    required this.onTap,
+    required this.onPlay,
+  });
+
+  @override
+  State<_RecentReleaseCard> createState() => _RecentReleaseCardState();
+}
+
+class _RecentReleaseCardState extends State<_RecentReleaseCard> {
+  bool _isHovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final song = widget.song;
+
+    return MouseRegion(
+      onEnter: (_) => setState(() => _isHovered = true),
+      onExit: (_) => setState(() => _isHovered = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: Container(
+          width: 172,
+          decoration: BoxDecoration(
+            color: const Color(0xFF181818),
+            borderRadius: BorderRadius.circular(14),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.3),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Stack(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Artwork
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Container(
+                        height: 130,
+                        width: double.infinity,
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: song.gradientColors,
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
+                        ),
+                        child: Center(
+                          child: Icon(
+                            Icons.music_note_rounded,
+                            size: 48,
+                            color: Colors.white.withValues(alpha: 0.85),
+                          ),
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 10),
+
+                    // Song Title
+                    Text(
+                      song.title,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+
+                    const SizedBox(height: 3),
+
+                    // Artist Name
+                    Text(
+                      song.artist,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.white.withValues(alpha: 0.65),
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+
+              // Green hover play button
+              if (_isHovered)
+                Positioned(
+                  right: 18,
+                  bottom: 74,
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: widget.onPlay,
+                      borderRadius: BorderRadius.circular(22),
+                      child: Container(
+                        width: 42,
+                        height: 42,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: AppTheme.accentGreen,
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.5),
+                              blurRadius: 8,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        child: const Center(
+                          child: Icon(
+                            Icons.play_arrow_rounded,
+                            color: Colors.black,
+                            size: 28,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

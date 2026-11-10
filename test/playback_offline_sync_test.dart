@@ -221,4 +221,43 @@ void main() {
       expect(MusicPlayerController.nextFullTrackIndex([], 0, true), isNull);
     });
   });
+
+  group('Download & Offline Cache Controller Tests', () {
+    late MusicPlayerController controller;
+
+    setUp(() {
+      controller = MusicPlayerController();
+    });
+
+    tearDown(() {
+      controller.dispose();
+    });
+
+    test('isSongDownloaded returns false for un-downloaded song', () {
+      expect(controller.isSongDownloaded('non-existent-id'), isFalse);
+    });
+
+    test('isSongDownloading returns false initially', () {
+      expect(controller.isSongDownloading('test-song-id'), isFalse);
+    });
+
+    test('isPlaylistFullyDownloaded reports false when songs are not cached', () {
+      final songs = [
+        Song(
+          id: 'song-test-1',
+          title: 'Song 1',
+          artist: 'Artist 1',
+          album: 'Album 1',
+          duration: const Duration(minutes: 2),
+          genre: 'Pop',
+          imageUrl: '',
+          gradientColors: const [],
+          plays: '',
+          lyrics: const [],
+        ),
+      ];
+      expect(controller.isPlaylistFullyDownloaded(songs), isFalse);
+      expect(controller.isPlaylistDownloading(songs), isFalse);
+    });
+  });
 }
