@@ -86,15 +86,27 @@ class SongArtworkWidget extends StatelessWidget {
     final h = height ?? size ?? 44.0;
     final rawUrl = _effectiveImageUrl;
     final colors = _effectiveColors;
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    final cacheWidth = (w * dpr).round().clamp(1, 2048);
+    final cacheHeight = (h * dpr).round().clamp(1, 2048);
 
     Widget content;
     if (rawUrl.isNotEmpty) {
-      content = _buildImageWithFallback(rawUrl, colors, w, h);
+      content = _buildImageWithFallback(
+        rawUrl,
+        colors,
+        w,
+        h,
+        cacheWidth,
+        cacheHeight,
+      );
     } else {
       content = _buildSpotifyProceduralArt(colors, w, h);
     }
 
-    final shapeBorderRadius = isCircle ? BorderRadius.circular(w / 2) : BorderRadius.circular(borderRadius);
+    final shapeBorderRadius = isCircle
+        ? BorderRadius.circular(w / 2)
+        : BorderRadius.circular(borderRadius);
 
     return Container(
       width: w,
@@ -115,35 +127,52 @@ class SongArtworkWidget extends StatelessWidget {
             : null,
       ),
       child: ClipRRect(
-        borderRadius: isCircle ? BorderRadius.circular(w / 2) : shapeBorderRadius,
+        borderRadius: isCircle
+            ? BorderRadius.circular(w / 2)
+            : shapeBorderRadius,
         child: content,
       ),
     );
   }
 
-  Widget _buildImageWithFallback(String url, List<Color> colors, double w, double h) {
+  Widget _buildImageWithFallback(
+    String url,
+    List<Color> colors,
+    double w,
+    double h,
+    int cacheWidth,
+    int cacheHeight,
+  ) {
     if (url.startsWith('http://') || url.startsWith('https://')) {
       return Image.network(
         url,
         width: w,
         height: h,
         fit: fit,
+        cacheWidth: cacheWidth,
+        cacheHeight: cacheHeight,
         frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
           if (wasSynchronouslyLoaded || frame != null) return child;
           return _buildSpotifyProceduralArt(colors, w, h);
         },
-        errorBuilder: (context, error, stackTrace) => _buildSpotifyProceduralArt(colors, w, h),
+        errorBuilder: (context, error, stackTrace) =>
+            _buildSpotifyProceduralArt(colors, w, h),
       );
     }
 
     if (url.startsWith('assets/') || url.startsWith('asset:/')) {
-      final cleanPath = url.replaceFirst('asset:/', 'assets/').replaceFirst(RegExp(r'^/+'), '');
+      final cleanPath = url
+          .replaceFirst('asset:/', 'assets/')
+          .replaceFirst(RegExp(r'^/+'), '');
       return Image.asset(
         cleanPath,
         width: w,
         height: h,
         fit: fit,
-        errorBuilder: (context, error, stackTrace) => _buildSpotifyProceduralArt(colors, w, h),
+        cacheWidth: cacheWidth,
+        cacheHeight: cacheHeight,
+        errorBuilder: (context, error, stackTrace) =>
+            _buildSpotifyProceduralArt(colors, w, h),
       );
     }
 
@@ -156,7 +185,10 @@ class SongArtworkWidget extends StatelessWidget {
           width: w,
           height: h,
           fit: fit,
-          errorBuilder: (context, error, stackTrace) => _buildSpotifyProceduralArt(colors, w, h),
+          cacheWidth: cacheWidth,
+          cacheHeight: cacheHeight,
+          errorBuilder: (context, error, stackTrace) =>
+              _buildSpotifyProceduralArt(colors, w, h),
         );
       }
     } catch (_) {}
@@ -188,7 +220,9 @@ class SongArtworkWidget extends StatelessWidget {
         children: [
           // Subtle vinyl groove lines
           CustomPaint(
-            painter: _VinylGroovePainter(color: Colors.white.withValues(alpha: 0.08)),
+            painter: _VinylGroovePainter(
+              color: Colors.white.withValues(alpha: 0.08),
+            ),
           ),
 
           // Diagonal light sheen
@@ -231,8 +265,8 @@ class SongArtworkWidget extends StatelessWidget {
                             fontSize: isSmall
                                 ? 15
                                 : isMedium
-                                    ? 24
-                                    : 36,
+                                ? 24
+                                : 36,
                             fontWeight: FontWeight.w900,
                             letterSpacing: 1.0,
                             shadows: const [

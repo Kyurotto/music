@@ -14,7 +14,8 @@ class SpotifyLyricsSheet extends StatefulWidget {
     required this.controller,
   });
 
-  static Future<void> show(BuildContext context, {
+  static Future<void> show(
+    BuildContext context, {
     required Song song,
     required MusicPlayerController controller,
   }) {
@@ -23,10 +24,8 @@ class SpotifyLyricsSheet extends StatefulWidget {
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       barrierColor: Colors.black.withValues(alpha: 0.65),
-      builder: (context) => SpotifyLyricsSheet(
-        song: song,
-        controller: controller,
-      ),
+      builder: (context) =>
+          SpotifyLyricsSheet(song: song, controller: controller),
     );
   }
 
@@ -56,7 +55,9 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
   }
 
   Future<void> _maybeFetchLyrics(Song song) async {
-    final hasSyncedLyrics = song.lyrics.any((l) => Song.parseLyricTimestamp(l) != null);
+    final hasSyncedLyrics = song.lyrics.any(
+      (l) => Song.parseLyricTimestamp(l) != null,
+    );
     if (song.lyrics.isNotEmpty && hasSyncedLyrics) return;
     // Auto-lookup for Spotify imports — bundled songs already ship lyrics,
     // but imported previews still need a full-length upgrade pass.
@@ -172,7 +173,10 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
     final sheetHeight = mediaQuery.size.height * 0.90;
 
     return ListenableBuilder(
-      listenable: widget.controller,
+      listenable: Listenable.merge([
+        widget.controller,
+        widget.controller.positionListenable,
+      ]),
       builder: (context, _) {
         final currentSong = widget.controller.currentSong ?? widget.song;
         // If the track changed while the sheet is open (auto-next, skip),
@@ -181,8 +185,9 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
           _lastSeenSongId = currentSong.id;
           _highlightedLineIndex = null;
           _userPinnedLine = false;
-          final hasSyncedLyrics =
-              currentSong.lyrics.any((l) => Song.parseLyricTimestamp(l) != null);
+          final hasSyncedLyrics = currentSong.lyrics.any(
+            (l) => Song.parseLyricTimestamp(l) != null,
+          );
           if (currentSong.id.startsWith('spotify-') &&
               (currentSong.lyrics.isEmpty ||
                   !hasSyncedLyrics ||
@@ -314,12 +319,17 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
                       ),
                       IconButton(
                         icon: Icon(
-                          currentSong.isLiked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
-                          color: currentSong.isLiked ? AppTheme.accentPink : Colors.white70,
+                          currentSong.isLiked
+                              ? Icons.favorite_rounded
+                              : Icons.favorite_border_rounded,
+                          color: currentSong.isLiked
+                              ? AppTheme.accentPink
+                              : Colors.white70,
                           size: 24,
                         ),
                         tooltip: 'Like',
-                        onPressed: () => widget.controller.toggleLike(currentSong.id),
+                        onPressed: () =>
+                            widget.controller.toggleLike(currentSong.id),
                       ),
                     ],
                   ),
@@ -329,16 +339,19 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
 
                 // Song Header Preview Card
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 8,
+                  ),
                   child: Row(
                     children: [
                       // Thumbnail
-                        SongArtworkWidget(
-                          song: currentSong,
-                          size: 58,
-                          borderRadius: 12,
-                          showGlow: true,
-                        ),
+                      SongArtworkWidget(
+                        song: currentSong,
+                        size: 58,
+                        borderRadius: 12,
+                        showGlow: true,
+                      ),
                       const SizedBox(width: 14),
 
                       // Info
@@ -366,7 +379,9 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
                                     style: TextStyle(
                                       fontSize: 14,
                                       fontWeight: FontWeight.w500,
-                                      color: Colors.white.withValues(alpha: 0.85),
+                                      color: Colors.white.withValues(
+                                        alpha: 0.85,
+                                      ),
                                     ),
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
@@ -374,7 +389,10 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
                                 ),
                                 const SizedBox(width: 6),
                                 Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 2,
+                                  ),
                                   decoration: BoxDecoration(
                                     color: Colors.white.withValues(alpha: 0.15),
                                     borderRadius: BorderRadius.circular(6),
@@ -396,16 +414,25 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
 
                       // Lyrics tag badge
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
+                        ),
                         decoration: BoxDecoration(
                           color: Colors.white.withValues(alpha: 0.15),
                           borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.2),
+                          ),
                         ),
                         child: const Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(Icons.lyrics_rounded, size: 14, color: Colors.white),
+                            Icon(
+                              Icons.lyrics_rounded,
+                              size: 14,
+                              color: Colors.white,
+                            ),
                             SizedBox(width: 5),
                             Text(
                               'LYRICS',
@@ -430,8 +457,7 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
                   child: currentSong.lyrics.isEmpty
                       ? Center(
                           child: SingleChildScrollView(
-                            padding:
-                                const EdgeInsets.symmetric(horizontal: 32),
+                            padding: const EdgeInsets.symmetric(horizontal: 32),
                             child: Column(
                               mainAxisAlignment: MainAxisAlignment.center,
                               mainAxisSize: MainAxisSize.min,
@@ -484,12 +510,14 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
                                     style: OutlinedButton.styleFrom(
                                       foregroundColor: Colors.white,
                                       side: const BorderSide(
-                                          color: Colors.white30),
+                                        color: Colors.white30,
+                                      ),
                                     ),
                                     onPressed: _retryLyrics,
                                     icon: const Icon(
-                                        Icons.refresh_rounded,
-                                        size: 18),
+                                      Icons.refresh_rounded,
+                                      size: 18,
+                                    ),
                                     label: const Text('Retry lyrics lookup'),
                                   ),
                                 ],
@@ -514,7 +542,10 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
                           blendMode: BlendMode.dstIn,
                           child: ListView.builder(
                             controller: _scrollController,
-                            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 24,
+                              vertical: 16,
+                            ),
                             itemCount: currentSong.lyrics.length,
                             itemBuilder: (context, index) {
                               final line = currentSong.lyrics[index];
@@ -524,7 +555,10 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
                                 borderRadius: BorderRadius.circular(12),
                                 onTap: () => _onLineTapped(currentSong, index),
                                 child: Container(
-                                  padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 10,
+                                    horizontal: 8,
+                                  ),
                                   margin: const EdgeInsets.only(bottom: 6),
                                   decoration: BoxDecoration(
                                     color: isSelected
@@ -534,7 +568,9 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
                                     border: Border.all(
                                       color: isSelected
                                           ? Colors.white.withValues(alpha: 0.35)
-                                          : Colors.white.withValues(alpha: 0.08),
+                                          : Colors.white.withValues(
+                                              alpha: 0.08,
+                                            ),
                                       width: 1,
                                     ),
                                   ),
@@ -583,19 +619,27 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
                       SliderTheme(
                         data: SliderTheme.of(context).copyWith(
                           trackHeight: 3.5,
-                          thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-                          overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
+                          thumbShape: const RoundSliderThumbShape(
+                            enabledThumbRadius: 6,
+                          ),
+                          overlayShape: const RoundSliderOverlayShape(
+                            overlayRadius: 12,
+                          ),
                           activeTrackColor: Colors.white,
                           inactiveTrackColor: Colors.white24,
                           thumbColor: Colors.white,
                         ),
                         child: Builder(
                           builder: (context) {
-                            final totalDur = widget.controller.displayDurationFor(currentSong);
+                            final totalDur = widget.controller
+                                .displayDurationFor(currentSong);
                             final maxMs = totalDur.inMilliseconds > 0
                                 ? totalDur.inMilliseconds.toDouble()
                                 : 1.0;
-                            final currentMs = widget.controller.currentPosition.inMilliseconds
+                            final currentMs = widget
+                                .controller
+                                .currentPosition
+                                .inMilliseconds
                                 .toDouble()
                                 .clamp(0.0, maxMs);
                             return Slider(
@@ -604,7 +648,8 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
                               max: maxMs,
                               onChanged: (val) {
                                 widget.controller.seekTo(
-                                    Duration(milliseconds: val.toInt()));
+                                  Duration(milliseconds: val.toInt()),
+                                );
                               },
                             );
                           },
@@ -616,16 +661,27 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
                             Text(
-                              Song.formatTime(widget.controller.currentPosition),
-                              style: const TextStyle(fontSize: 11, color: Colors.white60),
+                              Song.formatTime(
+                                widget.controller.currentPosition,
+                              ),
+                              style: const TextStyle(
+                                fontSize: 11,
+                                color: Colors.white60,
+                              ),
                             ),
                             Text(
                               // Use the real playable length for the current
                               // track so a ~30s preview shows 0:30 (matching
                               // the slider) instead of a full-length timer.
-                              Song.formatTime(widget.controller
-                                  .displayDurationFor(currentSong)),
-                              style: const TextStyle(fontSize: 11, color: Colors.white60),
+                              Song.formatTime(
+                                widget.controller.displayDurationFor(
+                                  currentSong,
+                                ),
+                              ),
+                              style: const TextStyle(
+                                fontSize: 11,
+                                color: Colors.white60,
+                              ),
                             ),
                           ],
                         ),
@@ -670,7 +726,9 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
                               gradient: AppTheme.primaryGradient,
                               boxShadow: [
                                 BoxShadow(
-                                  color: AppTheme.primary.withValues(alpha: 0.45),
+                                  color: AppTheme.primary.withValues(
+                                    alpha: 0.45,
+                                  ),
                                   blurRadius: 14,
                                   offset: const Offset(0, 4),
                                 ),
@@ -678,7 +736,9 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
                             ),
                             child: IconButton(
                               icon: Icon(
-                                isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                                isPlaying
+                                    ? Icons.pause_rounded
+                                    : Icons.play_arrow_rounded,
                                 size: 30,
                                 color: Colors.white,
                               ),
@@ -701,11 +761,14 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
                           // Repeat
                           IconButton(
                             icon: Icon(
-                              widget.controller.repeatMode == PlaybackRepeatMode.one
+                              widget.controller.repeatMode ==
+                                      PlaybackRepeatMode.one
                                   ? Icons.repeat_one_rounded
                                   : Icons.repeat_rounded,
                               size: 22,
-                              color: widget.controller.repeatMode != PlaybackRepeatMode.off
+                              color:
+                                  widget.controller.repeatMode !=
+                                      PlaybackRepeatMode.off
                                   ? AppTheme.primary
                                   : Colors.white54,
                             ),
