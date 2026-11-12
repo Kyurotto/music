@@ -55,6 +55,7 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
   PlaybackRepeatMode _lastRepeatMode = PlaybackRepeatMode.all;
   bool _lastShuffle = false;
   bool _lastIsMuted = false;
+  int _lastExplicitNoticeVersion = 0;
 
   @override
   void initState() {
@@ -70,16 +71,12 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
     _lastRepeatMode = _controller.repeatMode;
     _lastShuffle = _controller.isShuffle;
     _lastIsMuted = _controller.isMuted;
+    _lastExplicitNoticeVersion = _controller.explicitBlockNoticeVersion;
     _controller.addListener(_onStateChange);
     DisplayRateService.instance.initialize();
     _authSub = AuthService.instance.authChanges.listen((_) {
       if (mounted) {
         _controller.loadSavedPlaylists();
-      }
-    });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        _controller.cacheDisplayedDashboardAudio();
       }
     });
     _dynamicPopularRadios = RadioDiscoveryService.instance.getPopularRadios();
@@ -160,6 +157,20 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
 
   void _onStateChange() {
     if (!mounted) return;
+    final noticeVersion = _controller.explicitBlockNoticeVersion;
+    if (noticeVersion != _lastExplicitNoticeVersion) {
+      _lastExplicitNoticeVersion = noticeVersion;
+      final notice = _controller.explicitBlockNotice;
+      if (notice != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(notice),
+            backgroundColor: const Color(0xFFDC2626),
+          ),
+        );
+        _controller.clearExplicitBlockNotice();
+      }
+    }
     final currentSongId = _controller.currentSong?.id;
     final isPlaying = _controller.isPlaying;
     final navIndex = _controller.currentNavIndex;
@@ -170,10 +181,6 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
     final repeatMode = _controller.repeatMode;
     final shuffle = _controller.isShuffle;
     final isMuted = _controller.isMuted;
-
-    if (songCount != _lastSongCount) {
-      _controller.cacheDisplayedDashboardAudio();
-    }
 
     if (currentSongId != _lastSongId ||
         isPlaying != _lastIsPlaying ||

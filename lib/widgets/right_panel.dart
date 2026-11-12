@@ -212,87 +212,89 @@ class _RightActivityPanelState extends State<RightActivityPanel>
                     overflow: TextOverflow.ellipsis,
                   ),
 
-                  const SizedBox(height: 16),
+                  if (widget.controller.visualizerEnabled)
+                    const SizedBox(height: 16),
 
                   // Live Animated Equalizer
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                    decoration: BoxDecoration(
-                      color: AppTheme.cardSurface,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: AppTheme.border, width: 1),
-                    ),
-                    child: Column(
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            const Flexible(
-                              child: Text(
-                                'AUDIO FREQUENCY',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.bold,
-                                  letterSpacing: 1.0,
-                                  color: AppTheme.textMuted,
+                  if (widget.controller.visualizerEnabled)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: AppTheme.cardSurface,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: AppTheme.border, width: 1),
+                      ),
+                      child: Column(
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Flexible(
+                                child: Text(
+                                  'AUDIO FREQUENCY',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                    letterSpacing: 1.0,
+                                    color: AppTheme.textMuted,
+                                  ),
                                 ),
                               ),
-                            ),
-                            const SizedBox(width: 4),
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: AppTheme.primary.withValues(alpha: 0.15),
-                                    borderRadius: BorderRadius.circular(6),
-                                    border: Border.all(
-                                      color: AppTheme.primary.withValues(alpha: 0.3),
-                                      width: 0.8,
+                              const SizedBox(width: 4),
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: AppTheme.primary.withValues(alpha: 0.15),
+                                      borderRadius: BorderRadius.circular(6),
+                                      border: Border.all(
+                                        color: AppTheme.primary.withValues(alpha: 0.3),
+                                        width: 0.8,
+                                      ),
+                                    ),
+                                    child: Text(
+                                      widget.controller.equalizerPreset,
+                                      style: const TextStyle(
+                                        fontSize: 9.5,
+                                        color: AppTheme.primary,
+                                        fontWeight: FontWeight.w600,
+                                      ),
                                     ),
                                   ),
-                                  child: Text(
-                                    widget.controller.equalizerPreset,
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    '${(widget.controller.volume * 100).toInt()}% Vol',
                                     style: const TextStyle(
-                                      fontSize: 9.5,
-                                      color: AppTheme.primary,
+                                      fontSize: 10.5,
+                                      color: AppTheme.secondary,
                                       fontWeight: FontWeight.w600,
                                     ),
                                   ),
-                                ),
-                                const SizedBox(width: 6),
-                                Text(
-                                  '${(widget.controller.volume * 100).toInt()}% Vol',
-                                  style: const TextStyle(
-                                    fontSize: 10.5,
-                                    color: AppTheme.secondary,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        SizedBox(
-                          height: 38,
-                          child: Center(
-                            child: AnimatedVisualizer(
-                              isPlaying: isPlaying,
-                              barCount: 24,
-                              maxHeight: 34,
-                              barWidth: 4.5,
-                              gradientColors: currentSong?.gradientColors,
-                              equalizerBands: widget.controller.currentEqualizer.bands,
+                                ],
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          SizedBox(
+                            height: 38,
+                            child: Center(
+                              child: AnimatedVisualizer(
+                                isPlaying: isPlaying,
+                                barCount: 24,
+                                maxHeight: 34,
+                                barWidth: 4.5,
+                                gradientColors: currentSong?.gradientColors,
+                                equalizerBands: widget.controller.currentEqualizer.bands,
+                              ),
                             ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
 
                   const SizedBox(height: 20),
 

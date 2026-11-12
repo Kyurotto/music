@@ -143,6 +143,17 @@ class BottomPlayerBar extends StatelessWidget {
                   ),
                 ),
               ),
+              if (controller.visualizerEnabled)
+                SizedBox(
+                  width: 26,
+                  height: 18,
+                  child: AnimatedVisualizer(
+                    isPlaying: isPlaying,
+                    barCount: 5,
+                    maxHeight: 16,
+                    barWidth: 2.2,
+                  ),
+                ),
               IconButton(
                 icon: Icon(
                   (song?.isLiked ?? false)
@@ -541,17 +552,19 @@ class BottomPlayerBar extends StatelessWidget {
                     splashRadius: 18,
                     onPressed: song != null ? onOpenLyrics : null,
                   ),
-                SizedBox(
-                  width: 32,
-                  height: 20,
-                  child: AnimatedVisualizer(
-                    isPlaying: isPlaying,
-                    barCount: 5,
-                    maxHeight: 18,
-                    barWidth: 2.5,
+                if (controller.visualizerEnabled) ...[
+                  SizedBox(
+                    width: 32,
+                    height: 20,
+                    child: AnimatedVisualizer(
+                      isPlaying: isPlaying,
+                      barCount: 5,
+                      maxHeight: 18,
+                      barWidth: 2.5,
+                    ),
                   ),
-                ),
-                const SizedBox(width: 8),
+                  const SizedBox(width: 8),
+                ],
                 IconButton(
                   icon: Icon(
                     controller.isMuted || controller.volume == 0

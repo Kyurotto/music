@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../auth/auth_service.dart';
 import '../controllers/music_player_controller.dart';
@@ -52,8 +54,13 @@ class _SettingsViewState extends State<SettingsView> {
   bool _autoLyrics = false;
   bool _allowExplicit = true;
   bool _downloadOnMobile = false;
+  bool _autoCachePlayedSongs = true;
 
-  int _cacheSizeMb = 142;
+  int _cacheSizeBytes = -1;
+  bool _clearingCache = false;
+  bool _cacheRefreshInFlight = false;
+  bool _cacheRefreshQueued = false;
+  Timer? _cacheRefreshDebounce;
 
   final List<String> _qualityOptions = const [
     'Automatic',
@@ -70,6 +77,8 @@ class _SettingsViewState extends State<SettingsView> {
       _equalizerPreset = widget.controller!.equalizerPreset;
     }
     _loadSettings();
+    _refreshCacheSize();
+    LocalDatabase.audioCacheRevision.addListener(_onAudioCacheChanged);
     if (widget.openProfileEdit) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _showEditProfileDialog();
@@ -122,9 +131,8 @@ class _SettingsViewState extends State<SettingsView> {
         if (settings.containsKey('download_on_mobile_data')) {
           _downloadOnMobile = settings['download_on_mobile_data'] == 'true';
         }
-        if (settings.containsKey('cache_size_mb')) {
-          _cacheSizeMb =
-              int.tryParse(settings['cache_size_mb']!) ?? _cacheSizeMb;
+        if (settings.containsKey('auto_cache_played_songs')) {
+          _autoCachePlayedSongs = settings['auto_cache_played_songs'] == 'true';
         }
       });
     } catch (e) {
@@ -138,6 +146,52 @@ class _SettingsViewState extends State<SettingsView> {
     } catch (e) {
       debugPrint('Error saving setting $key: $e');
     }
+  }
+
+  void _onAudioCacheChanged() {
+    _cacheRefreshDebounce?.cancel();
+    _cacheRefreshDebounce = Timer(const Duration(milliseconds: 1200), () {
+      _refreshCacheSize();
+    });
+  }
+
+  Future<void> _refreshCacheSize() async {
+    if (_cacheRefreshInFlight) {
+      _cacheRefreshQueued = true;
+      return;
+    }
+    _cacheRefreshInFlight = true;
+    try {
+      final bytes = await LocalDatabase.getLocalAudioCacheSizeBytes();
+      if (!mounted || bytes == _cacheSizeBytes) return;
+      setState(() => _cacheSizeBytes = bytes);
+    } catch (e) {
+      debugPrint('Error reading audio cache size: $e');
+    } finally {
+      _cacheRefreshInFlight = false;
+      if (_cacheRefreshQueued) {
+        _cacheRefreshQueued = false;
+        unawaited(_refreshCacheSize());
+      }
+    }
+  }
+
+  String _formatCacheSize(int bytes) {
+    if (bytes < 0) return 'Calculating…';
+    if (bytes == 0) return '0 MB';
+    const kb = 1024;
+    const mb = kb * 1024;
+    const gb = mb * 1024;
+    if (bytes >= gb) return '${(bytes / gb).toStringAsFixed(1)} GB';
+    if (bytes >= mb) return '${(bytes / mb).toStringAsFixed(1)} MB';
+    return '${(bytes / kb).toStringAsFixed(0)} KB';
+  }
+
+  /// Visual share of a nominal 8 GB cache budget for the storage bar.
+  int get _cacheBarFlex {
+    if (_cacheSizeBytes <= 0) return 1;
+    const referenceBytes = 8 * 1024 * 1024 * 1024;
+    return ((_cacheSizeBytes / referenceBytes) * 100).clamp(1, 100).round();
   }
 
   Future<void> _showQualityPicker({required bool isStreaming}) async {
@@ -689,16 +743,20 @@ class _SettingsViewState extends State<SettingsView> {
     );
 
     if (confirm == true && mounted) {
-      final freed = _cacheSizeMb;
-      setState(() => _cacheSizeMb = 0);
-      await _saveSetting('cache_size_mb', '0');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Cache cleared! Freed $freed MB of storage.')),
+      setState(() => _clearingCache = true);
+      final freed = await LocalDatabase.clearLocalAudioCache();
+      if (!mounted) return;
+      await _refreshCacheSize();
+      if (!mounted) return;
+      setState(() => _clearingCache = false);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(
+            'Cache cleared! Freed ${_formatCacheSize(freed)} of storage.',
+          )),
         );
       }
     }
-  }
 
   Future<void> _handleLogout() async {
     final displayName = AuthService.instance.userDisplayName;
@@ -765,6 +823,13 @@ class _SettingsViewState extends State<SettingsView> {
         const SnackBar(content: Text('You have been logged out.')),
       );
     }
+  }
+
+  @override
+  void dispose() {
+    LocalDatabase.audioCacheRevision.removeListener(_onAudioCacheChanged);
+    _cacheRefreshDebounce?.cancel();
+    super.dispose();
   }
 
   @override
@@ -1019,6 +1084,7 @@ class _SettingsViewState extends State<SettingsView> {
                     value: _canvasAnimation,
                     onChanged: (val) {
                       setState(() => _canvasAnimation = val);
+                      widget.controller?.setVisualizerEnabled(val, save: false);
                       _saveSetting('canvas_animation', val.toString());
                     },
                   ),
@@ -1036,11 +1102,13 @@ class _SettingsViewState extends State<SettingsView> {
                   const Divider(height: 1, color: AppTheme.border),
                   _buildSwitchTile(
                     title: 'Explicit Content Filter',
-                    subtitle: 'Allow playback of explicit-rated content',
-                    value: _allowExplicit,
+                    subtitle: 'Block playback of explicit-rated tracks',
+                    value: !_allowExplicit,
                     onChanged: (val) {
-                      setState(() => _allowExplicit = val);
-                      _saveSetting('allow_explicit', val.toString());
+                      final allow = !val;
+                      setState(() => _allowExplicit = allow);
+                      widget.controller?.setAllowExplicit(allow, save: false);
+                      _saveSetting('allow_explicit', allow.toString());
                     },
                   ),
                 ]),
@@ -1065,7 +1133,7 @@ class _SettingsViewState extends State<SettingsView> {
                               ),
                             ),
                             Text(
-                              '$_cacheSizeMb MB',
+                              _formatCacheSize(_cacheSizeBytes),
                               style: const TextStyle(
                                 fontSize: 14,
                                 fontWeight: FontWeight.bold,
@@ -1080,7 +1148,7 @@ class _SettingsViewState extends State<SettingsView> {
                           child: Row(
                             children: [
                               Expanded(
-                                flex: _cacheSizeMb > 0 ? 15 : 1,
+                                flex: _cacheBarFlex,
                                 child: Container(
                                   height: 8,
                                   color: AppTheme.primary,
@@ -1124,22 +1192,36 @@ class _SettingsViewState extends State<SettingsView> {
                         ),
                         const SizedBox(height: 14),
                         OutlinedButton.icon(
-                          onPressed: _cacheSizeMb > 0 ? _clearCache : null,
-                          icon: const Icon(
+                          onPressed: _cacheSizeBytes > 0 && !_clearingCache
+                              ? _clearCache : null,
+                          icon: _clearingCache
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: AppTheme.textMuted,
+                                  ),
+                                )
+                              : const Icon(
                             Icons.delete_sweep_outlined,
                             size: 18,
                           ),
                           label: Text(
-                            _cacheSizeMb > 0
+                            _clearingCache
+                                ? 'Clearing cache…'
+                                : _cacheSizeBytes < 0
+                                ? 'Calculating…'
+                                : _cacheSizeBytes > 0
                                 ? 'Clear Audio Cache'
                                 : 'Cache is Clean (0 MB)',
                           ),
                           style: OutlinedButton.styleFrom(
-                            foregroundColor: _cacheSizeMb > 0
+                            foregroundColor: _cacheSizeBytes > 0
                                 ? AppTheme.textPrimary
                                 : AppTheme.textMuted,
                             side: BorderSide(
-                              color: _cacheSizeMb > 0
+                              color: _cacheSizeBytes > 0
                                   ? AppTheme.border
                                   : AppTheme.border.withValues(alpha: 0.3),
                             ),
@@ -1147,6 +1229,21 @@ class _SettingsViewState extends State<SettingsView> {
                         ),
                       ],
                     ),
+                  ),
+                  const Divider(height: 1, color: AppTheme.border),
+                  _buildSwitchTile(
+                    title: 'Cache played songs',
+                    subtitle:
+                        'Only save audio when you play it; imports no longer download automatically',
+                    value: _autoCachePlayedSongs,
+                    onChanged: (val) {
+                      setState(() => _autoCachePlayedSongs = val);
+                      if (widget.controller != null) {
+                        widget.controller!.setAutoCachePlayedSongs(val);
+                      } else {
+                        _saveSetting('auto_cache_played_songs', val.toString());
+                      }
+                    },
                   ),
                   const Divider(height: 1, color: AppTheme.border),
                   _buildSwitchTile(
