@@ -172,6 +172,7 @@ class DiscoveryService {
         'ms': s.duration.inMilliseconds,
         'art': s.imageUrl,
         'preview': '',
+        'explicit': s.isExplicit ? 1 : 0,
       };
 
   static Song? _songFromJson(Map<String, dynamic> j) {
@@ -195,6 +196,9 @@ class DiscoveryService {
       lyrics: <String>[],
       audioUrl: '',
       isPreview: false,
+      isExplicit: j['explicit'] is bool
+          ? j['explicit'] as bool
+          : (j['explicit'] is int ? (j['explicit'] as int) == 1 : null),
     );
   }
 
@@ -351,6 +355,9 @@ class DiscoveryService {
         artworkUrl: _hiRes(item['artworkUrl100'] as String?),
         previewUrl: (item['previewUrl'] as String?) ?? '',
         durationMs: millis is int ? millis : 0,
+        isExplicit:
+            item['trackExplicitness']?.toString().toLowerCase().trim() ==
+            'explicit',
       ));
     }
     return out;
@@ -407,6 +414,7 @@ class DiscoveryTrack {
     required this.artworkUrl,
     required this.previewUrl,
     required this.durationMs,
+    this.isExplicit = false,
   });
 
   final int trackId;
@@ -416,6 +424,7 @@ class DiscoveryTrack {
   final String artworkUrl;
   final String previewUrl;
   final int durationMs;
+  final bool isExplicit;
 
   /// `spotify-itunes-<trackId>` is the id the iTunes artist import already
   /// uses, so the player gives these songs the full imported-track treatment
@@ -438,6 +447,7 @@ class DiscoveryTrack {
         // full track audio (YouTube, SoundCloud, Saavn, Archive.org).
         audioUrl: '',
         isPreview: false,
+        isExplicit: isExplicit,
       );
 }
 

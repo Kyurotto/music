@@ -25,6 +25,9 @@ class SpotifyImportedTrack {
   final String previewUrl;
   final String artworkUrl;
 
+  /// True when Spotify / iTunes marks this track as explicit.
+  final bool isExplicit;
+
   const SpotifyImportedTrack({
     required this.spotifyId,
     required this.title,
@@ -33,6 +36,7 @@ class SpotifyImportedTrack {
     required this.duration,
     this.previewUrl = '',
     this.artworkUrl = '',
+    this.isExplicit = false,
   });
 }
 
@@ -419,6 +423,7 @@ class SpotifyImportService {
         duration: _durationFromTrackMillis(item['trackTimeMillis']),
         previewUrl: preview is String ? preview : '',
         artworkUrl: _hiResArtwork(item['artworkUrl100']),
+        isExplicit: _isExplicitRating(item['trackExplicitness']),
       ));
       if (tracks.length >= clamped) break;
     }
@@ -494,6 +499,16 @@ class SpotifyImportService {
     if (ms <= 0) return const Duration(minutes: 3);
     return Duration(milliseconds: ms);
   }
+
+  /// iTunes reports `trackExplicitness` as "explicit", "cleaned" or
+  /// "notExplicit". Only "explicit" blocks playback.
+  static bool _isExplicitRating(Object? value) =>
+      value?.toString().toLowerCase().trim() == 'explicit';
+
+  static bool _boolFlag(Object? value) =>
+      value == true ||
+      value == 1 ||
+      value?.toString().toLowerCase().trim() == 'true';
 
   String _fallbackTrackId(String title, String artist) {
     final source = '$title|$artist'.toLowerCase();
@@ -867,6 +882,8 @@ class SpotifyImportService {
       album: album.isEmpty ? fallbackAlbum : album,
       duration: _durationFromMs(durationMs),
       artworkUrl: artwork,
+      isExplicit:
+          _boolFlag(entity['isExplicit']) || _boolFlag(entity['explicit']),
     );
   }
 
@@ -900,6 +917,8 @@ class SpotifyImportService {
       album: album.isEmpty ? fallbackAlbum : album,
       duration: _durationFromMs(durationMs),
       artworkUrl: artwork,
+      isExplicit:
+          _boolFlag(entry['isExplicit']) || _boolFlag(entry['explicit']),
     );
   }
 

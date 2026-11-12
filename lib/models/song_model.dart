@@ -25,6 +25,10 @@ class Song {
   String youtubeVideoId;
   bool isEnrichingLyrics;
 
+  /// True when the catalog rates this track as explicit (or its metadata
+  /// carries an explicit marker). Used by the Explicit Content Filter.
+  bool isExplicit;
+
   Song({
     required this.id,
     required this.title,
@@ -43,7 +47,26 @@ class Song {
     this.isYouTubeAudio = false,
     this.youtubeVideoId = '',
     this.isEnrichingLyrics = false,
-  });
+    bool? isExplicit,
+  }) : isExplicit = isExplicit ?? looksExplicit(title, album);
+
+  /// Heuristic fallback for sources that do not publish a content rating
+  /// (notably YouTube). Catalog ratings (iTunes `trackExplicitness` and
+  /// Spotify `isExplicit`) always take precedence when available.
+  static bool looksExplicit(String title, [String album = '']) {
+    final text = '$title $album';
+    final bracketMarker = RegExp(
+      r'(\(|\[)\s*(explicit|dirty)\s*(\)|\])',
+      caseSensitive: false,
+    );
+    if (bracketMarker.hasMatch(text)) return true;
+    final phraseMarker = RegExp(
+      r'\bexplicit\s+(version|content|lyrics)\b',
+      caseSensitive: false,
+    );
+    if (phraseMarker.hasMatch(text)) return true;
+    return text.toLowerCase().contains('parental advisory');
+  }
 
   /// True when this song can actually produce sound (local asset or URL).
   bool get hasAudio => audioUrl.isNotEmpty;

@@ -31,6 +31,7 @@ class PlaylistPersistenceService {
         'is_preview': s.isPreview ? 1 : 0,
         'is_youtube_audio': s.isYouTubeAudio ? 1 : 0,
         'youtube_video_id': s.youtubeVideoId,
+        'is_explicit': s.isExplicit ? 1 : 0,
       }).toList();
 
       final gradientColors = playlist.gradient.map((c) => c.toARGB32()).toList();

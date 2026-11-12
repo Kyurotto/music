@@ -247,6 +247,87 @@ class MusicPlayerController extends ChangeNotifier {
       .instance
       .saveSetting(_equalizerBandsSetting, bands.join(','));
 
+  static const String allowExplicitSettingKey = 'allow_explicit';
+  static const String visualizerSettingKey = 'canvas_animation';
+
+  bool _allowExplicit = true;
+  bool _visualizerEnabled = true;
+
+  /// False when the user enabled the Explicit Content Filter (i.e. the
+  /// "Allow playback of explicit-rated content" switch is off).
+  bool get allowExplicit => _allowExplicit;
+
+  /// Whether the animated audio wave visualizer should be rendered.
+  bool get visualizerEnabled => _visualizerEnabled;
+
+  void setAllowExplicit(bool allow, {bool save = true}) {
+    if (_allowExplicit != allow) {
+      _allowExplicit = allow;
+      if (!allow && (currentSong?.isExplicit ?? false)) {
+        pause();
+        _notifyExplicitBlocked(currentSong!);
+      }
+      notifyListeners();
+    }
+    if (save) {
+      unawaited(
+        LocalDatabase.instance.saveSetting(
+          allowExplicitSettingKey,
+          allow.toString(),
+        ),
+      );
+    }
+  }
+
+  void setVisualizerEnabled(bool enabled, {bool save = true}) {
+    if (_visualizerEnabled != enabled) {
+      _visualizerEnabled = enabled;
+      notifyListeners();
+    }
+    if (save) {
+      unawaited(
+        LocalDatabase.instance.saveSetting(
+          visualizerSettingKey,
+          enabled.toString(),
+        ),
+      );
+    }
+  }
+
+  bool _isExplicitBlocked(Song? song) =>
+      !_allowExplicit && (song?.isExplicit ?? false);
+
+  String? _explicitBlockNotice;
+  int _explicitBlockNoticeVersion = 0;
+
+  String? get explicitBlockNotice => _explicitBlockNotice;
+  int get explicitBlockNoticeVersion => _explicitBlockNoticeVersion;
+
+  void clearExplicitBlockNotice() {
+    _explicitBlockNotice = null;
+  }
+
+  void _notifyExplicitBlocked(Song song) {
+    if (_disposed) return;
+    _explicitBlockNotice =
+        '“${song.title}” is marked explicit. Turn off “Explicit Content '
+        'Filter” in Settings to allow it.';
+    _explicitBlockNoticeVersion++;
+    notifyListeners();
+  }
+
+  /// First index at or after [start] whose track is not blocked by the
+  /// explicit-content filter (wraps around the list).
+  int? _firstAllowedIndex(List<Song> songs, int start) {
+    if (songs.isEmpty) return null;
+    final normalized = start.clamp(0, songs.length - 1);
+    for (var offset = 0; offset < songs.length; offset++) {
+      final index = (normalized + offset) % songs.length;
+      if (!_isExplicitBlocked(songs[index])) return index;
+    }
+    return null;
+  }
+
   /// Effective volume to push to the native player.
   ///
   /// Equalization happens on the audio session via [AudioEqualizerService], so
@@ -1074,6 +1155,7 @@ class MusicPlayerController extends ChangeNotifier {
             'is_preview': s.isPreview ? 1 : 0,
             'is_youtube_audio': s.isYouTubeAudio ? 1 : 0,
             'youtube_video_id': s.youtubeVideoId,
+            'is_explicit': s.isExplicit ? 1 : 0,
           },
         )
         .toList();
@@ -1099,6 +1181,9 @@ class MusicPlayerController extends ChangeNotifier {
 
       // Purge any playlists or songs that were explicitly marked deleted by ID from in-memory state
       final allSettings = await LocalDatabase.instance.getAllSettings();
+      _autoCachePlayedSongs = allSettings[_autoCachePlayedSongsKey] != 'false';
+      _allowExplicit = allSettings[allowExplicitSettingKey] != 'false';
+      _visualizerEnabled = allSettings[visualizerSettingKey] != 'false';
       _playlists.removeWhere((p) {
         if (allSettings['deleted_playlist_${p.id}'] == 'true') return true;
         final cleanId = p.id.replaceAll(RegExp(r'-[356]$'), '');
@@ -1243,6 +1328,12 @@ class MusicPlayerController extends ChangeNotifier {
               isPreview: isPreview,
               isYouTubeAudio: isYouTubeAudio,
               youtubeVideoId: youtubeVideoId,
+              isExplicit:
+                  (s['is_explicit'] == 1 ||
+                      s['is_explicit'] == true ||
+                      s['is_explicit'] == 'true')
+                  ? true
+                  : null,
             );
             _ensureOfflineLyrics(song);
             if (song.imageUrl.isEmpty) {
@@ -1255,6 +1346,14 @@ class MusicPlayerController extends ChangeNotifier {
             hasChanges = true;
           } else {
             final existing = _allSongs[existingIdx];
+            final storedExplicit =
+                s['is_explicit'] == 1 ||
+                s['is_explicit'] == true ||
+                s['is_explicit'] == 'true';
+            if (storedExplicit && !existing.isExplicit) {
+              existing.isExplicit = true;
+              hasChanges = true;
+            }
             final incomingImage = (s['image_url'] as String? ?? '').trim();
             if (existing.imageUrl.isEmpty && incomingImage.isNotEmpty) {
               existing.imageUrl = incomingImage;
@@ -1677,9 +1776,6 @@ class MusicPlayerController extends ChangeNotifier {
       if (toEnrich.isNotEmpty) {
         _enrichImportedSongs(toEnrich);
       }
-
-      // Automatically cache all songs that have remote HTTP URLs to local storage
-      _cacheAllPendingOfflineAudio();
 
       // Resolve every still-silent track across all accounts, one by one,
       // in the background (results are saved permanently).
@@ -2162,6 +2258,7 @@ class MusicPlayerController extends ChangeNotifier {
       audioUrl:
           '', // Do NOT default to assets/audio! Stored dynamically in local audio cache.
       isPreview: false,
+      isExplicit: imported.isExplicit,
     );
     _ensureOfflineLyrics(song);
     if (song.imageUrl.isEmpty) {
@@ -2281,10 +2378,30 @@ class MusicPlayerController extends ChangeNotifier {
 
   Timer? _connectivityTimer;
   bool _watchedOnline = true;
-  bool _onMobileData = false;
 
   /// app_settings key written by the "Download on mobile data" switch.
   static const String _downloadOnMobileKey = 'download_on_mobile_data';
+
+  /// app_settings key written by the "Cache played songs" switch.
+  static const String _autoCachePlayedSongsKey = 'auto_cache_played_songs';
+
+  /// When true, playing a remote track still writes a local copy. Importing
+  /// playlists no longer downloads anything: only playback and explicit
+  /// downloads touch the offline cache.
+  bool _autoCachePlayedSongs = true;
+
+  bool get autoCachePlayedSongs => _autoCachePlayedSongs;
+
+  void setAutoCachePlayedSongs(bool enabled) {
+    if (_autoCachePlayedSongs == enabled) return;
+    _autoCachePlayedSongs = enabled;
+    unawaited(
+      LocalDatabase.instance
+          .saveSetting(_autoCachePlayedSongsKey, enabled.toString())
+          .catchError((_) {}),
+    );
+    notifyListeners();
+  }
 
   /// Songs the player gave up on (no cache, no stream, no bundled asset).
   /// Drives the "can't play" message and Retry in the player bar.
@@ -2358,13 +2475,8 @@ class MusicPlayerController extends ChangeNotifier {
       } catch (_) {
         return;
       }
-      // Back on Wi-Fi after mobile data: save the songs we skipped caching.
-      final metered = await _isOnMeteredConnection();
-      final wasMetered = _onMobileData;
-      _onMobileData = metered;
-      if (!_disposed && online && wasMetered && !metered) {
-        _cacheAllPendingOfflineAudio();
-      }
+      // Back on Wi-Fi after mobile data: playback-triggered caching will retry
+      // naturally on the next play. Do not bulk-download the whole library.
       if (_disposed || online == _watchedOnline) return;
       _watchedOnline = online;
       _logDiag('connectivity changed: online=$online');
@@ -2495,6 +2607,9 @@ class MusicPlayerController extends ChangeNotifier {
               isPreview: ((row['is_preview'] as int?) ?? 0) == 1,
               isYouTubeAudio: ((row['is_youtube_audio'] as int?) ?? 0) == 1,
               youtubeVideoId: row['youtube_video_id']?.toString() ?? '',
+              isExplicit: ((row['is_explicit'] as int?) ?? 0) == 1
+                  ? true
+                  : null,
             );
         if (song.title.isEmpty) continue;
         try {
@@ -2837,9 +2952,6 @@ class MusicPlayerController extends ChangeNotifier {
             final changed = _applyEnrichment(song, ytEnrichment);
             song.isEnrichingLyrics = false;
             if (changed) notifyListeners();
-            if (changed && song.audioUrl.startsWith('http')) {
-              unawaited(_cacheAudioOffline(song));
-            }
             return;
           }
         } catch (_) {}
@@ -2860,9 +2972,6 @@ class MusicPlayerController extends ChangeNotifier {
               final changed = _applyEnrichment(song, ytEnrichment);
               song.isEnrichingLyrics = false;
               if (changed) notifyListeners();
-              if (changed && song.audioUrl.startsWith('http')) {
-                unawaited(_cacheAudioOffline(song));
-              }
               return;
             }
           } catch (_) {}
@@ -2920,10 +3029,6 @@ class MusicPlayerController extends ChangeNotifier {
       final changed = _applyEnrichment(song, enrichment);
       song.isEnrichingLyrics = false;
       if (changed) notifyListeners();
-      // Cache resolved audio so imported tracks are available offline right away.
-      if (changed && song.audioUrl.startsWith('http')) {
-        unawaited(_cacheAudioOffline(song));
-      }
     } catch (_) {
       _logDiag(
         'enrichment FAILED after ${DateTime.now().difference(enrichStart).inMilliseconds}ms',
@@ -3082,11 +3187,6 @@ class MusicPlayerController extends ChangeNotifier {
               }),
         );
       } catch (_) {}
-
-      // Attempt to cache audio offline
-      if (song.audioUrl.startsWith('http')) {
-        unawaited(_cacheAudioOffline(song));
-      }
     }
 
     if (changed) {
@@ -3100,7 +3200,12 @@ class MusicPlayerController extends ChangeNotifier {
 
   /// Synchronously checks if a song is downloaded and available offline.
   bool isSongDownloaded(String songId) {
-    if (_downloadedSongIds.contains(songId)) return true;
+    if (_downloadedSongIds.contains(songId)) {
+      if (findCachedAudioFileSync(songId) != null) return true;
+      // The file was deleted outside the app (e.g. cache clear); drop the
+      // stale in-memory flag so the download button becomes actionable again.
+      _downloadedSongIds.remove(songId);
+    }
     final memo = _audioLookupMemo[songId];
     if (memo != null && memo.existsSync() && memo.lengthSync() > 1024) {
       _downloadedSongIds.add(songId);
@@ -3111,8 +3216,13 @@ class MusicPlayerController extends ChangeNotifier {
         if ((s.audioUrl.contains('offline_audio') ||
                 s.audioUrl.contains('pulse_music_offline')) &&
             !s.audioUrl.startsWith('assets/')) {
-          _downloadedSongIds.add(songId);
-          return true;
+          try {
+            final file = File(s.audioUrl);
+            if (file.existsSync() && file.lengthSync() > 1024) {
+              _downloadedSongIds.add(songId);
+              return true;
+            }
+          } catch (_) {}
         }
         break;
       }
@@ -3727,6 +3837,11 @@ class MusicPlayerController extends ChangeNotifier {
   void handleSongCompleteForTesting() => _onSongComplete();
 
   Future<void> _cacheAudioOffline(Song song) async {
+    // Automatic caching is playback-only. Imports and background enrichment
+    // never write audio unless the user explicitly downloads it.
+    if (!_autoCachePlayedSongs) return;
+    if (song.isPreview) return;
+
     // 1. Check if a valid local offline file already exists
     final cached = await _findCachedAudioFile(song.id);
     if (cached != null) {
@@ -3830,6 +3945,7 @@ class MusicPlayerController extends ChangeNotifier {
             await tempFile.rename(targetFile.path);
             _invalidateOfflineLookup(song.id);
             _downloadedSongIds.add(song.id);
+            LocalDatabase.notifyAudioCacheChanged();
 
             song.audioUrl = targetFile.path;
             song.isPreview = false;
@@ -3877,6 +3993,7 @@ class MusicPlayerController extends ChangeNotifier {
                       flush: true,
                     );
                     _invalidateOfflineLookup(song.id, artwork: true);
+                    LocalDatabase.notifyAudioCacheChanged();
                   }
                 }
               } catch (_) {}
@@ -3960,32 +4077,6 @@ class MusicPlayerController extends ChangeNotifier {
         );
       } catch (_) {}
     }
-  }
-
-  void _cacheAllPendingOfflineAudio() {
-    final pending = _allSongs
-        .where(
-          (s) =>
-              (!s.audioUrl.contains('offline_audio') || s.isPreview) &&
-              !s.audioUrl.startsWith('assets/') &&
-              !s.audioUrl.startsWith('asset:/') &&
-              !_cachingIds.contains(s.id),
-        )
-        .toList();
-    if (pending.isEmpty) return;
-
-    Future.microtask(() async {
-      for (final song in pending) {
-        if (_disposed) return;
-        await _cacheAudioOffline(song);
-        await Future.delayed(const Duration(milliseconds: 200));
-      }
-    });
-  }
-
-  /// Caches all currently displayed dashboard songs into the local offline audio cache directory.
-  void cacheDisplayedDashboardAudio() {
-    _cacheAllPendingOfflineAudio();
   }
 
   /// Downloads a song to the local offline directory for permanent offline playback.
@@ -4098,6 +4189,7 @@ class MusicPlayerController extends ChangeNotifier {
             await tempFile.rename(targetFile.path);
             _invalidateOfflineLookup(song.id);
             _downloadedSongIds.add(song.id);
+            LocalDatabase.notifyAudioCacheChanged();
 
             song.audioUrl = targetFile.path;
             song.isPreview = downloadedBytes < 1600000 && song.isPreview;
@@ -4145,6 +4237,7 @@ class MusicPlayerController extends ChangeNotifier {
                       flush: true,
                     );
                     _invalidateOfflineLookup(song.id, artwork: true);
+                    LocalDatabase.notifyAudioCacheChanged();
                   }
                 }
               } catch (_) {}
@@ -4219,6 +4312,7 @@ class MusicPlayerController extends ChangeNotifier {
         } catch (_) {}
       }
       _invalidateOfflineLookup(song.id, artwork: true);
+      LocalDatabase.notifyAudioCacheChanged();
 
       song.audioUrl = '';
       _syncSongPathToQueueAndDb(song);
@@ -4373,8 +4467,13 @@ class MusicPlayerController extends ChangeNotifier {
   void playPlaylist(String playlistId) {
     final songs = songsForPlaylist(playlistId);
     if (songs.isEmpty) return;
+    final firstAllowed = _firstAllowedIndex(songs, 0);
+    if (firstAllowed == null) {
+      _notifyExplicitBlocked(songs.first);
+      return;
+    }
     _queue = List<Song>.from(songs);
-    _currentIndex = 0;
+    _currentIndex = firstAllowed;
     _completionHandled = false;
     _currentPosition = Duration.zero;
     _audioDuration = Duration.zero;
@@ -4398,6 +4497,12 @@ class MusicPlayerController extends ChangeNotifier {
     var start = startIndex;
     if (start < 0) start = 0;
     if (start > songs.length - 1) start = songs.length - 1;
+    final firstAllowed = _firstAllowedIndex(songs, start);
+    if (firstAllowed == null) {
+      _notifyExplicitBlocked(songs[start]);
+      return;
+    }
+    start = firstAllowed;
     _queue = List<Song>.from(songs);
     _currentIndex = start;
     _completionHandled = false;
@@ -4426,6 +4531,7 @@ class MusicPlayerController extends ChangeNotifier {
         _queue,
         _currentIndex - 1,
         true,
+        isBlocked: _isExplicitBlocked,
       );
       if (playableIndex != null) {
         final skipped = <Song>[];
@@ -4586,6 +4692,10 @@ class MusicPlayerController extends ChangeNotifier {
   }
 
   void playSong(Song song) {
+    if (_isExplicitBlocked(song)) {
+      _notifyExplicitBlocked(song);
+      return;
+    }
     final existingIndex = _queue.indexWhere((s) => s.id == song.id);
     if (existingIndex != -1) {
       _currentIndex = existingIndex;
@@ -4615,6 +4725,10 @@ class MusicPlayerController extends ChangeNotifier {
 
   void togglePlayPause() {
     if (currentSong == null) return;
+    if (!_isPlaying && _isExplicitBlocked(currentSong)) {
+      _notifyExplicitBlocked(currentSong!);
+      return;
+    }
     _isPlaying = !_isPlaying;
     if (_isPlaying) {
       _completionHandled = false;
@@ -4651,6 +4765,10 @@ class MusicPlayerController extends ChangeNotifier {
 
   void play() {
     if (currentSong == null) return;
+    if (_isExplicitBlocked(currentSong)) {
+      _notifyExplicitBlocked(currentSong!);
+      return;
+    }
     if (!_isPlaying) {
       _completionHandled = false;
       _unmuteOnPlay();
@@ -4794,16 +4912,19 @@ class MusicPlayerController extends ChangeNotifier {
   static int? nextPlayableTrackIndex(
     List<Song> queue,
     int fromIndex,
-    bool wrap,
-  ) {
+    bool wrap, {
+    bool Function(Song)? isBlocked,
+  }) {
     if (queue.isEmpty) return null;
+    bool playable(Song song) =>
+        !isLocatingStatus(song) && !(isBlocked?.call(song) ?? false);
     final start = fromIndex.clamp(-1, queue.length - 1);
     for (var i = start + 1; i < queue.length; i++) {
-      if (!isLocatingStatus(queue[i])) return i;
+      if (playable(queue[i])) return i;
     }
     if (wrap) {
       for (var i = 0; i <= start && i < queue.length; i++) {
-        if (!isLocatingStatus(queue[i])) return i;
+        if (playable(queue[i])) return i;
       }
     }
     return null;
@@ -4814,16 +4935,19 @@ class MusicPlayerController extends ChangeNotifier {
   static int? previousPlayableTrackIndex(
     List<Song> queue,
     int fromIndex,
-    bool wrap,
-  ) {
+    bool wrap, {
+    bool Function(Song)? isBlocked,
+  }) {
     if (queue.isEmpty) return null;
+    bool playable(Song song) =>
+        !isLocatingStatus(song) && !(isBlocked?.call(song) ?? false);
     final start = fromIndex.clamp(0, queue.length);
     for (var i = start - 1; i >= 0; i--) {
-      if (!isLocatingStatus(queue[i])) return i;
+      if (playable(queue[i])) return i;
     }
     if (wrap) {
       for (var i = queue.length - 1; i >= start && i >= 0; i--) {
-        if (!isLocatingStatus(queue[i])) return i;
+        if (playable(queue[i])) return i;
       }
     }
     return null;
@@ -4853,7 +4977,8 @@ class MusicPlayerController extends ChangeNotifier {
       }
     }
 
-    if (_repeatMode == PlaybackRepeatMode.one) {
+    if (_repeatMode == PlaybackRepeatMode.one &&
+        !_isExplicitBlocked(currentSong)) {
       _currentPosition = Duration.zero;
       _audioDuration = Duration.zero;
       _playCurrentSongAudio();
@@ -4868,7 +4993,7 @@ class MusicPlayerController extends ChangeNotifier {
       final random = Random();
       final playableIndices = <int>[];
       for (var i = 0; i < _queue.length; i++) {
-        if (!isLocatingStatus(_queue[i])) {
+        if (!isLocatingStatus(_queue[i]) && !_isExplicitBlocked(_queue[i])) {
           playableIndices.add(i);
         }
       }
@@ -4880,6 +5005,7 @@ class MusicPlayerController extends ChangeNotifier {
         _queue,
         _currentIndex,
         _repeatMode == PlaybackRepeatMode.all,
+        isBlocked: _isExplicitBlocked,
       );
     }
 
@@ -4955,7 +5081,7 @@ class MusicPlayerController extends ChangeNotifier {
     if (_queue.isEmpty) return;
     _completionHandled = false;
 
-    if (_currentPosition.inSeconds > 3) {
+    if (_currentPosition.inSeconds > 3 && !_isExplicitBlocked(currentSong)) {
       _currentPosition = Duration.zero;
       _audioDuration = Duration.zero;
       _pendingHotSwapReload = false;
@@ -4989,6 +5115,7 @@ class MusicPlayerController extends ChangeNotifier {
       _queue,
       _currentIndex,
       _repeatMode == PlaybackRepeatMode.all || _isShuffle,
+      isBlocked: _isExplicitBlocked,
     );
 
     if (prevIndex != null) {
@@ -5317,6 +5444,11 @@ class MusicPlayerController extends ChangeNotifier {
   Future<void> _playCurrentSongAudio() async {
     final song = currentSong;
     if (song == null) return;
+    if (_isExplicitBlocked(song)) {
+      _isPlaying = false;
+      _notifyExplicitBlocked(song);
+      return;
+    }
     if (_isPlayingAudioInProgress) {
       // A different song was requested (skip / previous / tap) while another
       // load is still running. Previously this returned silently, so the new

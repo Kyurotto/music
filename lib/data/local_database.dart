@@ -20,7 +20,7 @@ class LocalDatabase {
 
   static final LocalDatabase instance = LocalDatabase._();
   static const _databaseName = 'pulse_music.db';
-  static const _databaseVersion = 6;
+  static const _databaseVersion = 7;
 
   /// Sentinel user IDs that represent anonymous / guest ownership.
   /// Real user IDs must never collide with these values.
@@ -515,6 +515,14 @@ class LocalDatabase {
     if (oldVersion < 6) {
       await _createRememberedAccountsTable(database);
     }
+    if (oldVersion < 7) {
+      // Explicit-content rating captured from iTunes / Spotify metadata.
+      try {
+        await database.execute(
+          'ALTER TABLE imported_songs ADD COLUMN is_explicit INTEGER NOT NULL DEFAULT 0',
+        );
+      } catch (_) {}
+    }
   }
 
   Future<void> _createImportedPlaylistTables(Database database) async {
@@ -544,6 +552,11 @@ class LocalDatabase {
     try {
       await database.execute('ALTER TABLE imported_songs ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0');
     } catch (_) {}
+    try {
+      await database.execute(
+        'ALTER TABLE imported_songs ADD COLUMN is_explicit INTEGER NOT NULL DEFAULT 0',
+      );
+    } catch (_) {}
     await database.execute('''
       CREATE TABLE IF NOT EXISTS imported_songs (
         id TEXT PRIMARY KEY,
@@ -559,6 +572,7 @@ class LocalDatabase {
         is_youtube_audio INTEGER NOT NULL DEFAULT 0,
         youtube_video_id TEXT,
         is_deleted INTEGER NOT NULL DEFAULT 0,
+        is_explicit INTEGER NOT NULL DEFAULT 0,
         updated_at INTEGER NOT NULL
       )
     ''');
@@ -1732,6 +1746,8 @@ class LocalDatabase {
               : 0,
           if (song['youtube_video_id'] != null)
             'youtube_video_id': song['youtube_video_id'] as String,
+          'is_explicit':
+              (song['is_explicit'] == true || song['is_explicit'] == 1) ? 1 : 0,
           'updated_at': now,
         }, conflictAlgorithm: ConflictAlgorithm.replace);
 
@@ -1757,6 +1773,7 @@ class LocalDatabase {
     int? durationMs,
     String? imageUrl,
     List<String>? lyrics,
+    bool? isExplicit,
   }) async {
     final db = await database;
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -1772,6 +1789,7 @@ class LocalDatabase {
     if (durationMs != null) values['duration_ms'] = durationMs;
     if (imageUrl != null) values['image_url'] = imageUrl;
     if (lyrics != null) values['lyrics'] = jsonEncode(lyrics);
+    if (isExplicit != null) values['is_explicit'] = isExplicit ? 1 : 0;
 
     await db.update('imported_songs', values, where: 'id = ?', whereArgs: [id]);
   }
@@ -1792,6 +1810,7 @@ class LocalDatabase {
                s.audio_url AS audio_url, s.is_preview AS is_preview,
                s.is_youtube_audio AS is_youtube_audio,
                s.youtube_video_id AS youtube_video_id,
+               s.is_explicit AS is_explicit,
                s.lyrics AS lyrics
         FROM imported_songs s
         INNER JOIN imported_playlist_songs ps ON ps.song_id = s.id
@@ -2218,6 +2237,16 @@ class LocalDatabase {
     } catch (_) {}
   }
 
+  /// Bumped whenever files in the offline audio cache are added or removed.
+  ///
+  /// The Settings screen listens to this so its cache counter updates after an
+  /// import finishes or a track is downloaded for offline playback.
+  static final ValueNotifier<int> audioCacheRevision = ValueNotifier<int>(0);
+
+  static void notifyAudioCacheChanged() {
+    audioCacheRevision.value++;
+  }
+
   static List<Directory>? _offlineDirsMemo;
 
   static Future<List<Directory>> getOfflineCandidateDirs() async {
@@ -2248,6 +2277,117 @@ class LocalDatabase {
     } catch (_) {}
     _offlineDirsMemo = dirs;
     return dirs;
+  }
+
+  /// Directories that contain *only* cached audio/artwork files.
+  ///
+  /// [getOfflineCandidateDirs] also returns the parent app directories because
+  /// playback probes them for legacy downloads. Counting those parents would
+  /// include the SQLite database and unrelated files, so this narrows the list
+  /// to the dedicated `offline_audio` folders and de-duplicates aliases.
+  static Future<List<Directory>> getLocalAudioCacheDirs() async {
+    final dirs = await getOfflineCandidateDirs();
+    final byPath = <String, Directory>{};
+    for (final dir in dirs) {
+      final normalized = path.normalize(path.absolute(dir.path));
+      final name = path.basename(normalized);
+      if (name != 'offline_audio' && name != 'pulse_music_offline') continue;
+      var cacheKey = normalized;
+      try {
+        if (await dir.exists()) {
+          cacheKey = path.normalize(await dir.resolveSymbolicLinks());
+        }
+      } catch (_) {}
+      byPath.putIfAbsent(cacheKey, () => dir);
+    }
+    if (!kIsWeb) {
+      final legacy = Directory(
+        path.join(Directory.systemTemp.path, 'pulse_music_offline'),
+      );
+      var cacheKey = path.normalize(path.absolute(legacy.path));
+      try {
+        if (await legacy.exists()) {
+          cacheKey = path.normalize(await legacy.resolveSymbolicLinks());
+        }
+      } catch (_) {}
+      byPath.putIfAbsent(cacheKey, () => legacy);
+    }
+    return byPath.values.toList(growable: false);
+  }
+
+  /// Total bytes currently used by downloaded audio and cached artwork.
+  ///
+  /// [dirs] is injectable for tests; production callers use the resolved
+  /// offline cache directories.
+  static Future<int> getLocalAudioCacheSizeBytes({
+    List<Directory>? dirs,
+  }) async {
+    var total = 0;
+    final seen = <String>{};
+    for (final dir in dirs ?? await getLocalAudioCacheDirs()) {
+      try {
+        if (!await dir.exists()) continue;
+        await for (final entity in dir.list(
+          recursive: true,
+          followLinks: false,
+        )) {
+          if (entity is! File) continue;
+          final normalized = path.normalize(path.absolute(entity.path));
+          if (!seen.add(normalized)) continue;
+          try {
+            total += await entity.length();
+          } catch (_) {}
+        }
+      } catch (_) {}
+    }
+    return total;
+  }
+
+  /// Deletes every cached audio/artwork file and returns the freed byte count.
+  ///
+  /// Library rows and playlists are untouched: tracks keep their metadata and
+  /// are re-downloaded or re-streamed the next time they are played. [dirs] is
+  /// injectable for tests.
+  static Future<int> clearLocalAudioCache({List<Directory>? dirs}) async {
+    var freedBytes = 0;
+    final seen = <String>{};
+    final toDelete = <File>[];
+    for (final dir in dirs ?? await getLocalAudioCacheDirs()) {
+      try {
+        if (!await dir.exists()) continue;
+        await for (final entity in dir.list(
+          recursive: true,
+          followLinks: false,
+        )) {
+          if (entity is! File) continue;
+          final normalized = path.normalize(path.absolute(entity.path));
+          if (seen.add(normalized)) toDelete.add(entity);
+        }
+      } catch (_) {}
+    }
+    for (final file in toDelete) {
+      try {
+        final length = await file.length();
+        await file.delete();
+        freedBytes += length;
+      } catch (_) {}
+    }
+    if (dirs == null) {
+      // Keep the library rows, but forget local file paths that no longer
+      // exist. Otherwise every cleared song still looks "downloaded" and the
+      // UI keeps showing an offline badge for a missing file.
+      try {
+        final db = await LocalDatabase.instance.database;
+        await db.update(
+          'imported_songs',
+          {'audio_url': ''},
+          where: "audio_url LIKE ? OR audio_url LIKE ?",
+          whereArgs: ['%offline_audio%', '%pulse_music_offline%'],
+        );
+      } catch (_) {}
+    }
+    notifyAudioCacheChanged();
+    return freedBytes;
   }
 
   /// Automatically inspects unlinked imported songs and links any full-length
@@ -2297,6 +2437,7 @@ class LocalDatabase {
   }
 
   Future<void> _deleteCachedAudioFile(String songId) async {
+    var deleted = false;
     try {
       final supp = await getApplicationSupportDirectory();
       final offlineDir = Directory(path.join(supp.path, 'offline_audio'));
@@ -2306,11 +2447,13 @@ class LocalDatabase {
           if (await f.exists()) {
             try {
               await f.delete();
+              deleted = true;
             } catch (_) {}
           }
         }
       }
     } catch (_) {}
+    if (deleted) notifyAudioCacheChanged();
   }
 
   /// Reassigns anonymous playlists created during the *current* anonymous
