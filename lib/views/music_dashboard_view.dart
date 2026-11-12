@@ -30,9 +30,11 @@ class MusicDashboardView extends StatefulWidget {
 class _MusicDashboardViewState extends State<MusicDashboardView> {
   late final MusicPlayerController _controller;
   final TextEditingController _searchTextController = TextEditingController();
-  final TextEditingController _librarySearchController = TextEditingController();
+  final TextEditingController _librarySearchController =
+      TextEditingController();
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
-  final GlobalKey<DiscoverySectionsState> _discoveryKey = GlobalKey<DiscoverySectionsState>();
+  final GlobalKey<DiscoverySectionsState> _discoveryKey =
+      GlobalKey<DiscoverySectionsState>();
   bool _pullToRefreshActive = false;
   String? _selectedPlaylistId;
   StreamSubscription<Object?>? _authSub;
@@ -40,6 +42,8 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
   String _libraryFilter = 'All'; // 'All', 'Playlists', 'Artists', 'Albums'
   String _librarySearchQuery = '';
   bool _isLibraryGridView = false;
+  int _libraryVisibleCount = 40;
+  final ScrollController _pageScrollController = ScrollController();
   String _exploreCategory = 'All'; // 'All', 'Music', 'Podcasts', 'Audiobooks'
   List<RadioStation> _dynamicPopularRadios = [];
   bool _isLoadingDynamicRadios = false;
@@ -73,6 +77,7 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
     _lastIsMuted = _controller.isMuted;
     _lastExplicitNoticeVersion = _controller.explicitBlockNoticeVersion;
     _controller.addListener(_onStateChange);
+    _pageScrollController.addListener(_onPageScroll);
     DisplayRateService.instance.initialize();
     _authSub = AuthService.instance.authChanges.listen((_) {
       if (mounted) {
@@ -88,7 +93,8 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
     if (_isLoadingDynamicRadios) return;
     setState(() => _isLoadingDynamicRadios = true);
     try {
-      final stations = await RadioDiscoveryService.instance.fetchTrendingRadios();
+      final stations = await RadioDiscoveryService.instance
+          .fetchTrendingRadios();
       unawaited(RadioDiscoveryService.instance.fetchOpmRadios());
       unawaited(RadioDiscoveryService.instance.fetchGlobalRadios());
       if (mounted) {
@@ -110,7 +116,9 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('Successfully imported "${station.title}" (${station.songs.length} tracks) to your Library!'),
+        content: Text(
+          'Successfully imported "${station.title}" (${station.songs.length} tracks) to your Library!',
+        ),
         backgroundColor: AppTheme.accentGreen,
         action: SnackBarAction(
           label: 'View',
@@ -127,13 +135,16 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
     final trimmed = query.trim();
     if (trimmed.isEmpty) {
       setState(() {
-        _dynamicPopularRadios = RadioDiscoveryService.instance.getPopularRadios();
+        _dynamicPopularRadios = RadioDiscoveryService.instance
+            .getPopularRadios();
       });
       return;
     }
     setState(() => _isLoadingDynamicRadios = true);
     try {
-      final station = await RadioDiscoveryService.instance.searchSpotifyRadio(trimmed);
+      final station = await RadioDiscoveryService.instance.searchSpotifyRadio(
+        trimmed,
+      );
       if (mounted) {
         setState(() {
           final existing = List<RadioStation>.from(_dynamicPopularRadios);
@@ -153,6 +164,21 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
         );
       }
     }
+  }
+
+  /// Loads more library playlists as the page nears the bottom instead of
+  /// building every card/row at once.
+  void _onPageScroll() {
+    if (_controller.currentNavIndex != 2) return;
+    if (!_pageScrollController.hasClients) return;
+    final position = _pageScrollController.position;
+    if (!position.hasContentDimensions) return;
+    if (position.extentAfter > 600) return;
+    final total = _controller.playlists.length;
+    if (_libraryVisibleCount >= total) return;
+    setState(() {
+      _libraryVisibleCount += 40;
+    });
   }
 
   void _onStateChange() {
@@ -210,6 +236,9 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
   void dispose() {
     _authSub?.cancel();
     _controller.removeListener(_onStateChange);
+    _pageScrollController
+      ..removeListener(_onPageScroll)
+      ..dispose();
     _controller.dispose();
     _searchTextController.dispose();
     _librarySearchController.dispose();
@@ -224,12 +253,9 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
 
     final playlist = _controller.playlistById(playlistId);
     if (playlist != null) {
-      Navigator.of(context).push(
-        PlaylistScreen.route(
-          playlist: playlist,
-          controller: _controller,
-        ),
-      );
+      Navigator.of(
+        context,
+      ).push(PlaylistScreen.route(playlist: playlist, controller: _controller));
       return;
     }
 
@@ -257,12 +283,9 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
         imageUrl: '',
         songIds: [],
       );
-      Navigator.of(context).push(
-        PlaylistScreen.route(
-          playlist: p2000s,
-          controller: _controller,
-        ),
-      );
+      Navigator.of(
+        context,
+      ).push(PlaylistScreen.route(playlist: p2000s, controller: _controller));
       return;
     }
 
@@ -272,33 +295,21 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
 
   void _playSongWithLyrics(Song song) {
     _controller.playSong(song);
-    SpotifyLyricsSheet.show(
-      context,
-      song: song,
-      controller: _controller,
-    );
+    SpotifyLyricsSheet.show(context, song: song, controller: _controller);
   }
 
   void _playPlaylistWithLyrics(String playlistId) {
     _controller.playPlaylist(playlistId);
     final song = _controller.currentSong;
     if (song != null) {
-      SpotifyLyricsSheet.show(
-        context,
-        song: song,
-        controller: _controller,
-      );
+      SpotifyLyricsSheet.show(context, song: song, controller: _controller);
     }
   }
 
   void _showLyricsForCurrentSong() {
     final song = _controller.currentSong ?? _controller.allSongs.firstOrNull;
     if (song != null) {
-      SpotifyLyricsSheet.show(
-        context,
-        song: song,
-        controller: _controller,
-      );
+      SpotifyLyricsSheet.show(context, song: song, controller: _controller);
     }
   }
 
@@ -321,7 +332,10 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
   }
 
   Future<void> _importFromSpotify() async {
-    final playlistId = await SpotifyImportDialog.show(context, controller: _controller);
+    final playlistId = await SpotifyImportDialog.show(
+      context,
+      controller: _controller,
+    );
     if (playlistId == null || !mounted) return;
     setState(() {
       _controller.setNavIndex(2);
@@ -329,8 +343,10 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
     });
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-          content: Text(
-              'Spotify tracks imported. Full audio + lyrics load automatically.')),
+        content: Text(
+          'Spotify tracks imported. Full audio + lyrics load automatically.',
+        ),
+      ),
     );
   }
 
@@ -338,10 +354,7 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
   /// rows (Quick Picks, Covers & Remixes, Community Favorites, Trending For You)
   /// and immediately fast-locates their tracks.
   Future<void> _handleRefresh() async {
-    await Future.wait([
-      _controller.loadSavedPlaylists(),
-      _refreshDiscovery(),
-    ]);
+    await Future.wait([_controller.loadSavedPlaylists(), _refreshDiscovery()]);
     _controller.kickBackfill();
   }
 
@@ -350,7 +363,9 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
     if (discoveryState != null) {
       await discoveryState.refresh();
     } else {
-      final sections = await DiscoveryService.instance.loadAll(forceRefresh: true);
+      final sections = await DiscoveryService.instance.loadAll(
+        forceRefresh: true,
+      );
       final allSongs = sections.expand((s) => s.songs).toList();
       _controller.fastLocateDiscoverySongs(allSongs);
     }
@@ -366,8 +381,10 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('Add "${song.title}" to playlist',
-                  style: const TextStyle(fontWeight: FontWeight.bold)),
+              Text(
+                'Add "${song.title}" to playlist',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
               const SizedBox(height: 8),
               ..._controller.playlists.map(
                 (playlist) => ListTile(
@@ -378,13 +395,22 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                       borderRadius: BorderRadius.circular(8),
                       gradient: LinearGradient(colors: playlist.gradient),
                     ),
-                    child: const Icon(Icons.queue_music_rounded,
-                        color: Colors.white, size: 20),
+                    child: const Icon(
+                      Icons.queue_music_rounded,
+                      color: Colors.white,
+                      size: 20,
+                    ),
                   ),
                   title: Text(playlist.title),
                   subtitle: Text('${playlist.trackCount} songs'),
-                  trailing: (playlist.songIds.contains(song.id) ||
-                          _controller.songsForPlaylist(playlist.id).any((s) => MusicPlayerController.isSameSong(s, song)))
+                  trailing:
+                      (playlist.songIds.contains(song.id) ||
+                          _controller
+                              .songsForPlaylist(playlist.id)
+                              .any(
+                                (s) =>
+                                    MusicPlayerController.isSameSong(s, song),
+                              ))
                       ? const Icon(Icons.check_rounded, color: AppTheme.primary)
                       : const Icon(Icons.add_rounded),
                   onTap: () => Navigator.of(sheetContext).pop(playlist),
@@ -404,7 +430,11 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
         );
       } else if (!added && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('"${song.title}" is already in ${selectedPlaylist.title}.')),
+          SnackBar(
+            content: Text(
+              '"${song.title}" is already in ${selectedPlaylist.title}.',
+            ),
+          ),
         );
       }
     }
@@ -433,13 +463,18 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogCtx).pop(false),
-            child: const Text('Cancel', style: TextStyle(color: AppTheme.textMuted)),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: AppTheme.textMuted),
+            ),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
               backgroundColor: AppTheme.accentPink,
               foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
             ),
             onPressed: () => Navigator.of(dialogCtx).pop(true),
             child: const Text('Delete'),
@@ -488,13 +523,18 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogCtx).pop(false),
-            child: const Text('Cancel', style: TextStyle(color: AppTheme.textMuted)),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: AppTheme.textMuted),
+            ),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
               backgroundColor: AppTheme.accentPink,
               foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
             ),
             onPressed: () => Navigator.of(dialogCtx).pop(true),
             child: const Text('Delete'),
@@ -585,7 +625,8 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                                   // discovery carousels (depth > 0, pixels == 0) used to flip
                                   // the flag on, so scrolling up from below showed the circle.
                                   if (notification.depth != 0 ||
-                                      notification.metrics.axis != Axis.vertical) {
+                                      notification.metrics.axis !=
+                                          Axis.vertical) {
                                     return false;
                                   }
                                   if (notification is ScrollStartNotification) {
@@ -603,6 +644,7 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                                   return active;
                                 },
                                 child: SingleChildScrollView(
+                                  controller: _pageScrollController,
                                   physics:
                                       const AlwaysScrollableScrollPhysics(),
                                   padding: EdgeInsets.symmetric(
@@ -659,9 +701,7 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
       ),
       decoration: const BoxDecoration(
         color: AppTheme.surface,
-        border: Border(
-          bottom: BorderSide(color: AppTheme.border, width: 1),
-        ),
+        border: Border(bottom: BorderSide(color: AppTheme.border, width: 1)),
       ),
       child: Row(
         children: [
@@ -684,14 +724,28 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
               child: TextField(
                 controller: _searchTextController,
                 onChanged: (val) => _controller.setSearchQuery(val),
-                style: const TextStyle(fontSize: 14, color: AppTheme.textPrimary),
+                style: const TextStyle(
+                  fontSize: 14,
+                  color: AppTheme.textPrimary,
+                ),
                 decoration: InputDecoration(
                   hintText: 'Search songs, artists, albums...',
-                  hintStyle: const TextStyle(fontSize: 13, color: AppTheme.textMuted),
-                  prefixIcon: const Icon(Icons.search_rounded, size: 20, color: AppTheme.textSecondary),
+                  hintStyle: const TextStyle(
+                    fontSize: 13,
+                    color: AppTheme.textMuted,
+                  ),
+                  prefixIcon: const Icon(
+                    Icons.search_rounded,
+                    size: 20,
+                    color: AppTheme.textSecondary,
+                  ),
                   suffixIcon: _searchTextController.text.isNotEmpty
                       ? IconButton(
-                          icon: const Icon(Icons.clear_rounded, size: 16, color: AppTheme.textMuted),
+                          icon: const Icon(
+                            Icons.clear_rounded,
+                            size: 16,
+                            color: AppTheme.textMuted,
+                          ),
                           onPressed: () {
                             _searchTextController.clear();
                             _controller.setSearchQuery('');
@@ -710,15 +764,24 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
           // Notifications button
           IconButton(
             tooltip: 'Notifications',
-            icon: const Icon(Icons.notifications_none_rounded, size: 22, color: AppTheme.textSecondary),
+            icon: const Icon(
+              Icons.notifications_none_rounded,
+              size: 22,
+              color: AppTheme.textSecondary,
+            ),
             onPressed: () {},
           ),
 
           // Settings button
           IconButton(
             tooltip: 'Settings',
-            icon: const Icon(Icons.settings_outlined, size: 22, color: AppTheme.textSecondary),
-            onPressed: () => SettingsView.show(context, controller: _controller),
+            icon: const Icon(
+              Icons.settings_outlined,
+              size: 22,
+              color: AppTheme.textSecondary,
+            ),
+            onPressed: () =>
+                SettingsView.show(context, controller: _controller),
           ),
         ],
       ),
@@ -740,7 +803,8 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
   }
 
   Widget _buildHomeFeed(bool isMobile) {
-    final featuredSong = _controller.allSongs.where((s) => s.isFeatured).firstOrNull ??
+    final featuredSong =
+        _controller.allSongs.where((s) => s.isFeatured).firstOrNull ??
         _controller.allSongs.firstOrNull;
     final playlists = _controller.playlists;
     return Column(
@@ -790,16 +854,15 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
           const SizedBox(height: 32),
         ],
 
-        if (_controller.searchQuery.isEmpty && _controller.selectedGenre == 'All') ...[
-          DiscoverySections(
-            key: _discoveryKey,
-            controller: _controller,
-          ),
+        if (_controller.searchQuery.isEmpty &&
+            _controller.selectedGenre == 'All') ...[
+          DiscoverySections(key: _discoveryKey, controller: _controller),
           const SizedBox(height: 32),
         ],
 
         // Quick Jump In (Recently Played Grid)
-        if (_controller.searchQuery.isEmpty && _controller.selectedGenre == 'All') ...[
+        if (_controller.searchQuery.isEmpty &&
+            _controller.selectedGenre == 'All') ...[
           _buildSectionHeader('Jump Back In', 'Recent listening highlights'),
           const SizedBox(height: 14),
           _buildQuickGrid(),
@@ -808,7 +871,10 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
 
         // Featured Playlists Carousel
         if (_controller.searchQuery.isEmpty) ...[
-          _buildSectionHeader('Featured Playlists', 'Fresh playlists updated for you'),
+          _buildSectionHeader(
+            'Featured Playlists',
+            'Fresh playlists updated for you',
+          ),
           const SizedBox(height: 14),
           SizedBox(
             height: 230,
@@ -843,8 +909,8 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
           _controller.searchQuery.isNotEmpty
               ? 'Search Results'
               : _controller.selectedGenre == 'All'
-                  ? 'Trending English Songs'
-                  : '${_controller.selectedGenre} Tracks',
+              ? 'Trending English Songs'
+              : '${_controller.selectedGenre} Tracks',
           '${_controller.filteredSongs.length} tracks available',
         ),
         const SizedBox(height: 16),
@@ -899,20 +965,20 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                 child: Container(
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
-                    color: isCurrent ? AppTheme.primary.withValues(alpha: 0.15) : AppTheme.cardSurface,
+                    color: isCurrent
+                        ? AppTheme.primary.withValues(alpha: 0.15)
+                        : AppTheme.cardSurface,
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(
-                      color: isCurrent ? AppTheme.primary.withValues(alpha: 0.5) : AppTheme.border,
+                      color: isCurrent
+                          ? AppTheme.primary.withValues(alpha: 0.5)
+                          : AppTheme.border,
                       width: 1,
                     ),
                   ),
                   child: Row(
                     children: [
-                      SongArtworkWidget(
-                        song: song,
-                        size: 48,
-                        borderRadius: 8,
-                      ),
+                      SongArtworkWidget(song: song, size: 48, borderRadius: 8),
                       const SizedBox(width: 12),
                       Expanded(
                         child: Column(
@@ -924,14 +990,19 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                               style: TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.bold,
-                                color: isCurrent ? AppTheme.primary : AppTheme.textPrimary,
+                                color: isCurrent
+                                    ? AppTheme.primary
+                                    : AppTheme.textPrimary,
                               ),
                               overflow: TextOverflow.ellipsis,
                             ),
                             const SizedBox(height: 2),
                             Text(
                               song.artist,
-                              style: const TextStyle(fontSize: 11, color: AppTheme.textMuted),
+                              style: const TextStyle(
+                                fontSize: 11,
+                                color: AppTheme.textMuted,
+                              ),
                               overflow: TextOverflow.ellipsis,
                             ),
                           ],
@@ -945,7 +1016,10 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                         ),
                         tooltip: 'Delete song',
                         padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                        constraints: const BoxConstraints(
+                          minWidth: 28,
+                          minHeight: 28,
+                        ),
                         onPressed: () => _confirmDeleteSong(song),
                       ),
                       const SizedBox(width: 4),
@@ -954,7 +1028,9 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                         height: 32,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          color: isCurrent ? AppTheme.primary : Colors.white.withValues(alpha: 0.1),
+                          color: isCurrent
+                              ? AppTheme.primary
+                              : Colors.white.withValues(alpha: 0.1),
                         ),
                         child: Center(
                           child: Icon(
@@ -982,7 +1058,10 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
   /// Mirrors [SliverGridDelegateWithMaxCrossAxisExtent]'s own column math
   /// (count = ceil(width / (maxExtent + spacing))) so the fixed-height cell
   /// always clears the card's square artwork plus title and subtitle.
-  SliverGridDelegate _albumGridDelegate(double gridWidth, {double maxExtent = 210}) {
+  SliverGridDelegate _albumGridDelegate(
+    double gridWidth, {
+    double maxExtent = 210,
+  }) {
     const spacing = 16.0;
     var count = (gridWidth / (maxExtent + spacing)).ceil();
     if (count < 1) count = 1;
@@ -1050,16 +1129,27 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
           child: Row(
             children: [
               const SizedBox(width: 14),
-              const Icon(Icons.search_rounded, size: 20, color: AppTheme.textSecondary),
+              const Icon(
+                Icons.search_rounded,
+                size: 20,
+                color: AppTheme.textSecondary,
+              ),
               const SizedBox(width: 10),
               Expanded(
                 child: TextField(
                   controller: _radioSearchController,
                   onSubmitted: _searchRadioStation,
-                  style: const TextStyle(fontSize: 13, color: AppTheme.textPrimary),
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: AppTheme.textPrimary,
+                  ),
                   decoration: const InputDecoration(
-                    hintText: 'Search any Spotify radio or artist (e.g. Flow G, Air Supply, LANY, Ben&Ben)...',
-                    hintStyle: TextStyle(fontSize: 13, color: AppTheme.textMuted),
+                    hintText:
+                        'Search any Spotify radio or artist (e.g. Flow G, Air Supply, LANY, Ben&Ben)...',
+                    hintStyle: TextStyle(
+                      fontSize: 13,
+                      color: AppTheme.textMuted,
+                    ),
                     border: InputBorder.none,
                     isDense: true,
                     contentPadding: EdgeInsets.zero,
@@ -1072,12 +1162,19 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                   child: SizedBox(
                     width: 16,
                     height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.accentGreen),
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: AppTheme.accentGreen,
+                    ),
                   ),
                 )
               else if (_radioSearchController.text.isNotEmpty)
                 IconButton(
-                  icon: const Icon(Icons.clear_rounded, size: 16, color: AppTheme.textMuted),
+                  icon: const Icon(
+                    Icons.clear_rounded,
+                    size: 16,
+                    color: AppTheme.textMuted,
+                  ),
                   onPressed: () {
                     _radioSearchController.clear();
                     _searchRadioStation('');
@@ -1086,8 +1183,13 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
               else
                 IconButton(
                   tooltip: 'Search radio',
-                  icon: const Icon(Icons.arrow_forward_rounded, size: 16, color: AppTheme.accentGreen),
-                  onPressed: () => _searchRadioStation(_radioSearchController.text),
+                  icon: const Icon(
+                    Icons.arrow_forward_rounded,
+                    size: 16,
+                    color: AppTheme.accentGreen,
+                  ),
+                  onPressed: () =>
+                      _searchRadioStation(_radioSearchController.text),
                 ),
             ],
           ),
@@ -1113,7 +1215,10 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                   const SizedBox(
                     width: 14,
                     height: 14,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.accentGreen),
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: AppTheme.accentGreen,
+                    ),
                   ),
                   const SizedBox(width: 8),
                 ],
@@ -1181,7 +1286,11 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                     color: Color(0xFFFDE047),
                   ),
                   child: const Center(
-                    child: Icon(Icons.radio_rounded, size: 18, color: Colors.black87),
+                    child: Icon(
+                      Icons.radio_rounded,
+                      size: 18,
+                      color: Colors.black87,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -1270,7 +1379,11 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                     color: Color(0xFFF87171),
                   ),
                   child: const Center(
-                    child: Icon(Icons.music_note_rounded, size: 18, color: Colors.white),
+                    child: Icon(
+                      Icons.music_note_rounded,
+                      size: 18,
+                      color: Colors.white,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -1366,11 +1479,7 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
         if (narrow) {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              header,
-              const SizedBox(height: 12),
-              actionWrap,
-            ],
+            children: [header, const SizedBox(height: 12), actionWrap],
           );
         }
         return Row(
@@ -1401,6 +1510,12 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
       return true;
     }).toList();
 
+    // Only build the first page of cards. More load automatically as the
+    // page scrolls, keeping large libraries responsive.
+    final visiblePlaylists = filteredPlaylists.length <= _libraryVisibleCount
+        ? filteredPlaylists
+        : filteredPlaylists.sublist(0, _libraryVisibleCount);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1414,7 +1529,10 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppTheme.cardSurface,
                 foregroundColor: AppTheme.textPrimary,
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 12,
+                ),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                   side: const BorderSide(color: AppTheme.border),
@@ -1428,8 +1546,13 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppTheme.primary,
                 foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
               onPressed: _showCreatePlaylistDialog,
               icon: const Icon(Icons.add_rounded),
@@ -1451,7 +1574,10 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                 child: FilterChip(
                   label: Text(filter),
                   selected: isSelected,
-                  onSelected: (_) => setState(() => _libraryFilter = filter),
+                  onSelected: (_) => setState(() {
+                    _libraryFilter = filter;
+                    _libraryVisibleCount = 40;
+                  }),
                   backgroundColor: AppTheme.cardSurface,
                   selectedColor: AppTheme.primary,
                   checkmarkColor: Colors.white,
@@ -1487,18 +1613,38 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                 ),
                 child: TextField(
                   controller: _librarySearchController,
-                  onChanged: (val) => setState(() => _librarySearchQuery = val),
-                  style: const TextStyle(fontSize: 13, color: AppTheme.textPrimary),
+                  onChanged: (val) => setState(() {
+                    _librarySearchQuery = val;
+                    _libraryVisibleCount = 40;
+                  }),
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: AppTheme.textPrimary,
+                  ),
                   decoration: InputDecoration(
                     hintText: 'Search in Your Library...',
-                    hintStyle: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
-                    prefixIcon: const Icon(Icons.search, size: 18, color: AppTheme.textSecondary),
+                    hintStyle: const TextStyle(
+                      fontSize: 12,
+                      color: AppTheme.textMuted,
+                    ),
+                    prefixIcon: const Icon(
+                      Icons.search,
+                      size: 18,
+                      color: AppTheme.textSecondary,
+                    ),
                     suffixIcon: _librarySearchQuery.isNotEmpty
                         ? IconButton(
-                            icon: const Icon(Icons.clear, size: 14, color: AppTheme.textMuted),
+                            icon: const Icon(
+                              Icons.clear,
+                              size: 14,
+                              color: AppTheme.textMuted,
+                            ),
                             onPressed: () {
                               _librarySearchController.clear();
-                              setState(() => _librarySearchQuery = '');
+                              setState(() {
+                                _librarySearchQuery = '';
+                                _libraryVisibleCount = 40;
+                              });
                             },
                           )
                         : null,
@@ -1522,13 +1668,18 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                 ),
                 const SizedBox(width: 4),
                 IconButton(
-                  tooltip: _isLibraryGridView ? 'Switch to List view' : 'Switch to Grid view',
+                  tooltip: _isLibraryGridView
+                      ? 'Switch to List view'
+                      : 'Switch to Grid view',
                   icon: Icon(
-                    _isLibraryGridView ? Icons.list_rounded : Icons.grid_view_rounded,
+                    _isLibraryGridView
+                        ? Icons.list_rounded
+                        : Icons.grid_view_rounded,
                     size: 20,
                     color: AppTheme.textSecondary,
                   ),
-                  onPressed: () => setState(() => _isLibraryGridView = !_isLibraryGridView),
+                  onPressed: () =>
+                      setState(() => _isLibraryGridView = !_isLibraryGridView),
                 ),
               ],
             ),
@@ -1588,8 +1739,13 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                         style: ElevatedButton.styleFrom(
                           backgroundColor: AppTheme.primary,
                           foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 10,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
                         ),
                         onPressed: _importFromSpotify,
                         icon: const Icon(Icons.download_rounded, size: 16),
@@ -1599,8 +1755,13 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                         style: OutlinedButton.styleFrom(
                           foregroundColor: AppTheme.textPrimary,
                           side: const BorderSide(color: AppTheme.border),
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 10,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
                         ),
                         onPressed: _showCreatePlaylistDialog,
                         icon: const Icon(Icons.add_rounded, size: 16),
@@ -1618,10 +1779,10 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
             builder: (context, constraints) => GridView.builder(
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
-              itemCount: filteredPlaylists.length,
+              itemCount: visiblePlaylists.length,
               gridDelegate: _albumGridDelegate(constraints.maxWidth),
               itemBuilder: (context, index) {
-                final playlist = filteredPlaylists[index];
+                final playlist = visiblePlaylists[index];
                 return AlbumCard(
                   playlist: playlist,
                   isSelected: playlist.id == _selectedPlaylistId,
@@ -1643,14 +1804,14 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
             child: ListView.separated(
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
-              itemCount: filteredPlaylists.length,
+              itemCount: visiblePlaylists.length,
               separatorBuilder: (context, index) => Divider(
                 height: 1,
                 thickness: 0.5,
                 color: AppTheme.border.withValues(alpha: 0.5),
               ),
               itemBuilder: (context, index) {
-                final playlist = filteredPlaylists[index];
+                final playlist = visiblePlaylists[index];
                 return _LibraryPlaylistTile(
                   playlist: playlist,
                   onTap: () => _openPlaylist(playlist.id),
@@ -1659,6 +1820,18 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
               },
             ),
           ),
+        if (visiblePlaylists.length < filteredPlaylists.length) ...[
+          const SizedBox(height: 12),
+          Center(
+            child: TextButton.icon(
+              onPressed: () => setState(() => _libraryVisibleCount += 40),
+              icon: const Icon(Icons.expand_more_rounded, size: 18),
+              label: Text(
+                'Show more playlists (${filteredPlaylists.length - visiblePlaylists.length} remaining)',
+              ),
+            ),
+          ),
+        ],
       ],
     );
   }
@@ -1678,8 +1851,13 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppTheme.primary,
                   foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 18,
+                    vertical: 12,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                 ),
                 icon: const Icon(Icons.play_arrow_rounded),
                 label: const Text('Play All'),
@@ -1721,10 +1899,7 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
         const SizedBox(height: 2),
         Text(
           subtitle,
-          style: const TextStyle(
-            fontSize: 13,
-            color: AppTheme.textMuted,
-          ),
+          style: const TextStyle(fontSize: 13, color: AppTheme.textMuted),
         ),
       ],
     );
@@ -1784,10 +1959,7 @@ class _CreatePlaylistDialogState extends State<_CreatePlaylistDialog> {
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('Cancel'),
         ),
-        ElevatedButton(
-          onPressed: _submit,
-          child: const Text('Create'),
-        ),
+        ElevatedButton(onPressed: _submit, child: const Text('Create')),
       ],
     );
   }
@@ -1875,12 +2047,15 @@ class _PopularRadioCardState extends State<_PopularRadioCard> {
   @override
   Widget build(BuildContext context) {
     final station = widget.station;
-    final primaryAvatar =
-        station.avatarUrls.isNotEmpty ? station.avatarUrls[0] : null;
-    final leftAvatar =
-        station.avatarUrls.length > 1 ? station.avatarUrls[1] : null;
-    final rightAvatar =
-        station.avatarUrls.length > 2 ? station.avatarUrls[2] : null;
+    final primaryAvatar = station.avatarUrls.isNotEmpty
+        ? station.avatarUrls[0]
+        : null;
+    final leftAvatar = station.avatarUrls.length > 1
+        ? station.avatarUrls[1]
+        : null;
+    final rightAvatar = station.avatarUrls.length > 2
+        ? station.avatarUrls[2]
+        : null;
 
     final initialLetter = station.artistName.isNotEmpty
         ? station.artistName.substring(0, 1).toUpperCase()
@@ -1914,7 +2089,10 @@ class _PopularRadioCardState extends State<_PopularRadioCard> {
                 child: Stack(
                   children: [
                     Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 12,
+                      ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -1966,7 +2144,10 @@ class _PopularRadioCardState extends State<_PopularRadioCard> {
                                       url: leftAvatar,
                                       size: 50,
                                       fallbackText: '1',
-                                      gradientColors: const [Color(0xFF334155), Color(0xFF64748B)],
+                                      gradientColors: const [
+                                        Color(0xFF334155),
+                                        Color(0xFF64748B),
+                                      ],
                                     ),
                                   ),
                                   // Right collaborator avatar
@@ -1976,7 +2157,10 @@ class _PopularRadioCardState extends State<_PopularRadioCard> {
                                       url: rightAvatar,
                                       size: 50,
                                       fallbackText: '2',
-                                      gradientColors: const [Color(0xFF1E293B), Color(0xFF475569)],
+                                      gradientColors: const [
+                                        Color(0xFF1E293B),
+                                        Color(0xFF475569),
+                                      ],
                                     ),
                                   ),
                                   // Center primary artist avatar
@@ -2121,8 +2305,8 @@ class _LibraryPlaylistTile extends StatelessWidget {
     final cleanSubtitle = playlist.subtitle.isNotEmpty
         ? playlist.subtitle
         : (playlist.songIds.isNotEmpty
-            ? '${playlist.songIds.length} ${playlist.songIds.length == 1 ? 'song' : 'songs'}'
-            : '');
+              ? '${playlist.songIds.length} ${playlist.songIds.length == 1 ? 'song' : 'songs'}'
+              : '');
 
     return Material(
       color: Colors.transparent,
@@ -2192,7 +2376,11 @@ class _LibraryPlaylistTile extends StatelessWidget {
               if (onDelete != null)
                 IconButton(
                   tooltip: 'Delete playlist',
-                  icon: const Icon(Icons.delete_outline_rounded, size: 18, color: AppTheme.textMuted),
+                  icon: const Icon(
+                    Icons.delete_outline_rounded,
+                    size: 18,
+                    color: AppTheme.textMuted,
+                  ),
                   onPressed: onDelete,
                 ),
               const SizedBox(width: 4),
@@ -2277,10 +2465,15 @@ class _DailyMixCardState extends State<_DailyMixCard> {
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 3,
+                                  ),
                                   decoration: BoxDecoration(
                                     color: Colors.black.withValues(alpha: 0.6),
-                                    borderRadius: const BorderRadius.horizontal(left: Radius.circular(4)),
+                                    borderRadius: const BorderRadius.horizontal(
+                                      left: Radius.circular(4),
+                                    ),
                                   ),
                                   child: const Text(
                                     'Daily Mix',
@@ -2292,10 +2485,15 @@ class _DailyMixCardState extends State<_DailyMixCard> {
                                   ),
                                 ),
                                 Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 3,
+                                  ),
                                   decoration: const BoxDecoration(
                                     color: Colors.white,
-                                    borderRadius: BorderRadius.horizontal(right: Radius.circular(4)),
+                                    borderRadius: BorderRadius.horizontal(
+                                      right: Radius.circular(4),
+                                    ),
                                   ),
                                   child: Text(
                                     mix.number,

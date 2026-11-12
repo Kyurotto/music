@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -41,8 +42,24 @@ class SpotifyPlaylistImportResult {
 class MusicPlayerController extends ChangeNotifier {
   final List<Song> _allSongs = [];
   final List<MusicPlaylist> _playlists = [];
+  late final UnmodifiableListView<MusicPlaylist> _playlistsView =
+      UnmodifiableListView<MusicPlaylist>(_playlists);
   late List<Song> _queue;
   int _currentIndex = 0;
+
+  /// O(1) lookup for [_allSongs]. Rebuilt lazily only when the list structure
+  /// changes, instead of scanning the whole library for every row/playlist
+  /// check (which made large libraries quadratic).
+  final Map<String, Song> _songIndex = <String, Song>{};
+  int _songsRevision = 0;
+  int _indexedSongsRevision = -1;
+
+  /// Playback progress is published separately from [notifyListeners] so the
+  /// whole dashboard/library is not rebuilt 3x per second while a song plays.
+  /// Only the small widgets that display progress listen to this notifier.
+  final ValueNotifier<Duration> _positionNotifier = ValueNotifier<Duration>(
+    Duration.zero,
+  );
 
   bool _isPlaying = false;
   Duration _currentPosition = Duration.zero;
@@ -516,12 +533,13 @@ class MusicPlayerController extends ChangeNotifier {
               !song.audioUrl.contains('assets_audio_')) {
             _offlineFallbackIds.remove(song.id);
           }
-          // Throttle to ~3 rebuilds/sec — position ticks fire far more often
-          // and flooding notifyListeners causes parentDataDirty asserts.
+          // Throttle to ~3 updates/sec — position ticks fire far more often
+          // and rebuilding the whole app for each tick caused visible lag on
+          // large libraries. Only progress widgets listen to this notifier.
           final now = DateTime.now();
           if (now.difference(_lastPositionNotify) >= _positionNotifyInterval) {
             _lastPositionNotify = now;
-            notifyListeners();
+            _positionNotifier.value = _currentPosition;
           }
         }
       });
@@ -645,7 +663,7 @@ class MusicPlayerController extends ChangeNotifier {
         }
       }
     }
-    return List.unmodifiable(_playlists);
+    return _playlistsView;
   }
 
   List<Song> get queue => _queue;
@@ -656,6 +674,11 @@ class MusicPlayerController extends ChangeNotifier {
       : null;
   bool get isPlaying => _isPlaying;
   Duration get currentPosition => _currentPosition;
+
+  /// Lightweight listenable for playback progress. Widgets that render the
+  /// slider/lyrics subscribe here instead of rebuilding on every
+  /// [notifyListeners] call.
+  ValueListenable<Duration> get positionListenable => _positionNotifier;
   Duration get currentDuration {
     if (_audioDuration > Duration.zero) return _audioDuration;
     return currentSong?.duration ?? Duration.zero;
@@ -760,7 +783,7 @@ class MusicPlayerController extends ChangeNotifier {
     final result = <Song>[];
     for (final songId in playlist.songIds) {
       if (!seenIds.add(songId)) continue;
-      final song = _allSongs.where((song) => song.id == songId).firstOrNull;
+      final song = songById(songId);
       if (song == null) continue;
       final vTags = TrackEnrichmentService.versionTags(song.title).join(',');
       final key =
@@ -862,6 +885,7 @@ class MusicPlayerController extends ChangeNotifier {
 
     if (!_allSongs.any((existing) => existing.id == song.id)) {
       _allSongs.add(song);
+      _markSongsChanged();
     }
     playlist.songIds.add(song.id);
     _persistPlaylistToDb(playlist, null);
@@ -977,6 +1001,7 @@ class MusicPlayerController extends ChangeNotifier {
         song = _songForImportedTrack(imported);
         if (!_allSongs.any((existing) => existing.id == song.id)) {
           _allSongs.add(song);
+          _markSongsChanged();
           if (!_queue.any((existing) => existing.id == song.id)) {
             _queue.add(song);
           }
@@ -1088,6 +1113,7 @@ class MusicPlayerController extends ChangeNotifier {
     for (final song in station.songs) {
       if (!_allSongs.any((s) => s.id == song.id)) {
         _allSongs.add(song);
+        _markSongsChanged();
       }
       if (!playlist.songIds.contains(song.id)) {
         playlist.songIds.add(song.id);
@@ -1197,6 +1223,7 @@ class MusicPlayerController extends ChangeNotifier {
       _allSongs.removeWhere(
         (s) => allSettings['deleted_song_${s.id}'] == 'true',
       );
+      _markSongsChanged();
       _queue.removeWhere((s) => allSettings['deleted_song_${s.id}'] == 'true');
 
       final savedPlaylists = await LocalDatabase.instance
@@ -1340,6 +1367,7 @@ class MusicPlayerController extends ChangeNotifier {
               _resolveMissingSongArtwork(song);
             }
             _allSongs.add(song);
+            _markSongsChanged();
             if (!_queue.any((existing) => existing.id == songId)) {
               _queue.add(song);
             }
@@ -1811,6 +1839,7 @@ class MusicPlayerController extends ChangeNotifier {
     _allSongs.removeWhere(
       (s) => !sampleSongIds.contains(s.id) && !remainingSongIds.contains(s.id),
     );
+    _markSongsChanged();
 
     _queue.removeWhere(
       (s) => !sampleSongIds.contains(s.id) && !remainingSongIds.contains(s.id),
@@ -1864,6 +1893,7 @@ class MusicPlayerController extends ChangeNotifier {
     final remainingSongIds = _playlists.expand((p) => p.songIds).toSet();
     if (!sampleSongIds.contains(songId) && !remainingSongIds.contains(songId)) {
       _allSongs.removeWhere((s) => s.id == songId);
+      _markSongsChanged();
       _queue.removeWhere((s) => s.id == songId);
     }
 
@@ -1896,6 +1926,7 @@ class MusicPlayerController extends ChangeNotifier {
       p.songIds.remove(songId);
     }
     _allSongs.removeWhere((s) => s.id == songId);
+    _markSongsChanged();
     _queue.removeWhere((s) => s.id == songId);
 
     if (currentSong?.id == songId) {
@@ -3211,20 +3242,18 @@ class MusicPlayerController extends ChangeNotifier {
       _downloadedSongIds.add(songId);
       return true;
     }
-    for (final s in _allSongs) {
-      if (s.id == songId) {
-        if ((s.audioUrl.contains('offline_audio') ||
-                s.audioUrl.contains('pulse_music_offline')) &&
-            !s.audioUrl.startsWith('assets/')) {
-          try {
-            final file = File(s.audioUrl);
-            if (file.existsSync() && file.lengthSync() > 1024) {
-              _downloadedSongIds.add(songId);
-              return true;
-            }
-          } catch (_) {}
-        }
-        break;
+    final song = songById(songId);
+    if (song != null) {
+      if ((song.audioUrl.contains('offline_audio') ||
+              song.audioUrl.contains('pulse_music_offline')) &&
+          !song.audioUrl.startsWith('assets/')) {
+        try {
+          final file = File(song.audioUrl);
+          if (file.existsSync() && file.lengthSync() > 1024) {
+            _downloadedSongIds.add(songId);
+            return true;
+          }
+        } catch (_) {}
       }
     }
     return false;
@@ -3297,6 +3326,12 @@ class MusicPlayerController extends ChangeNotifier {
     if (memo != null && memo.existsSync() && memo.lengthSync() > 1024) {
       return memo;
     }
+    // A previous lookup already determined there is no cached file. Trust it
+    // until a download/extraction invalidates the memo; rescanning every
+    // directory for every row made large playlists crawl.
+    if (_staticAudioLookupMemo.containsKey(songId)) {
+      return null;
+    }
     final dirs = <Directory>[
       ...?_staticOfflineDirs,
       for (final pth in _knownFallbackDirs) Directory(pth),
@@ -3354,6 +3389,10 @@ class MusicPlayerController extends ChangeNotifier {
     } catch (_) {}
     _offlineDirCache = dirs;
     _staticOfflineDirs = dirs;
+    // Any lookup made before the candidate directories were known could not
+    // see real cache files. Forget those premature misses now that the search
+    // paths are final.
+    _staticAudioLookupMemo.clear();
     return dirs;
   }
 
@@ -3366,6 +3405,7 @@ class MusicPlayerController extends ChangeNotifier {
       _artworkLookupMemo.remove(songId);
     } else {
       _audioLookupMemo.remove(songId);
+      _staticAudioLookupMemo.remove(songId);
     }
   }
 
@@ -4637,6 +4677,7 @@ class MusicPlayerController extends ChangeNotifier {
 
   void addSong(Song song) {
     _allSongs.add(song);
+    _markSongsChanged();
     _queue.add(song);
     notifyListeners();
   }
@@ -4644,6 +4685,7 @@ class MusicPlayerController extends ChangeNotifier {
   void setSongs(List<Song> songs) {
     _allSongs.clear();
     _allSongs.addAll(songs);
+    _markSongsChanged();
     _queue = List<Song>.from(_allSongs);
     _currentIndex = 0;
     _completionHandled = false;
@@ -4661,6 +4703,7 @@ class MusicPlayerController extends ChangeNotifier {
 
   void clearSongs() {
     _allSongs.clear();
+    _markSongsChanged();
     _queue.clear();
     _currentIndex = 0;
     _completionHandled = false;
@@ -5208,11 +5251,22 @@ class MusicPlayerController extends ChangeNotifier {
     }
   }
 
+  /// Call whenever songs are added to or removed from [_allSongs].
+  void _markSongsChanged() {
+    _songsRevision++;
+  }
+
   Song? songById(String id) {
-    for (final s in _allSongs) {
-      if (s.id == id) return s;
+    if (_indexedSongsRevision != _songsRevision) {
+      _songIndex.clear();
+      // Keep the first occurrence for duplicate ids, matching the previous
+      // linear scan.
+      for (final song in _allSongs) {
+        _songIndex.putIfAbsent(song.id, () => song);
+      }
+      _indexedSongsRevision = _songsRevision;
     }
-    return null;
+    return _songIndex[id];
   }
 
   void addToQueue(Song song) {
@@ -6119,7 +6173,7 @@ class MusicPlayerController extends ChangeNotifier {
           if (_currentPosition > currentDuration) {
             _currentPosition = currentDuration;
           }
-          notifyListeners();
+          _positionNotifier.value = _currentPosition;
         } else {
           timer.cancel();
           _onSongComplete();
@@ -6241,11 +6295,21 @@ class MusicPlayerController extends ChangeNotifier {
     if (binding.buildOwner?.debugBuilding == true ||
         binding.schedulerPhase == SchedulerPhase.persistentCallbacks) {
       binding.addPostFrameCallback((_) {
-        if (!_disposed) super.notifyListeners();
+        if (!_disposed) {
+          _syncPositionNotifier();
+          super.notifyListeners();
+        }
       });
       return;
     }
+    _syncPositionNotifier();
     super.notifyListeners();
+  }
+
+  void _syncPositionNotifier() {
+    if (_positionNotifier.value != _currentPosition) {
+      _positionNotifier.value = _currentPosition;
+    }
   }
 
   @override
@@ -6265,6 +6329,7 @@ class MusicPlayerController extends ChangeNotifier {
     _audioSessionSub?.cancel();
     _equalizer.dispose();
     _enrichment.dispose();
+    _positionNotifier.dispose();
     // Only unbind if the notification still points at this controller; a
     // newer instance may already have replaced these handlers.
     if (identical(_notificationController, this)) {

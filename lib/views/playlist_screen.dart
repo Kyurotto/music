@@ -76,13 +76,19 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final songs = _resolveSongs();
-      final isRadio = widget.playlist?.id.startsWith('radio-') == true ||
+      // Only pre-locate the tracks the user can actually see first. Huge
+      // imported playlists used to queue hundreds of network lookups at once,
+      // which made the whole app stutter. Later tracks resolve when played or
+      // via the background retry loop.
+      final locateTargets = songs.take(20).toList(growable: false);
+      final isRadio =
+          widget.playlist?.id.startsWith('radio-') == true ||
           widget.playlist?.id.startsWith('dailymix-') == true ||
           songs.any((s) => s.id.startsWith('radio-') || s.id.startsWith('dm-'));
       if (isRadio) {
-        widget.controller.fastLocateRadioSongs(songs);
+        widget.controller.fastLocateRadioSongs(locateTargets);
       } else {
-        widget.controller.fastLocateDiscoverySongs(songs);
+        widget.controller.fastLocateDiscoverySongs(locateTargets);
       }
     });
   }
@@ -105,7 +111,8 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
     final deduplicated = <Song>[];
     for (final s in base) {
       if (!seenIds.add(s.id)) continue;
-      final key = '${s.title.toLowerCase().trim()}|${s.artist.toLowerCase().trim()}';
+      final key =
+          '${s.title.toLowerCase().trim()}|${s.artist.toLowerCase().trim()}';
       if (key != '|' && !seenKeys.add(key)) continue;
       deduplicated.add(s);
     }
@@ -208,7 +215,8 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
       builder: (context, _) {
         final songs = _resolveSongs();
         final currentSongId = widget.controller.currentSong?.id;
-        final isPlayingCurrent = widget.controller.isPlaying &&
+        final isPlayingCurrent =
+            widget.controller.isPlaying &&
             songs.any((s) => s.id == currentSongId);
 
         return Scaffold(
@@ -249,18 +257,24 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                 itemBuilder: (context) => [
                   const PopupMenuItem(
                     value: 'add_to_queue',
-                    child: Text('Add playlist to queue',
-                        style: TextStyle(color: Colors.white)),
+                    child: Text(
+                      'Add playlist to queue',
+                      style: TextStyle(color: Colors.white),
+                    ),
                   ),
                   const PopupMenuItem(
                     value: 'play_next',
-                    child: Text('Play next',
-                        style: TextStyle(color: Colors.white)),
+                    child: Text(
+                      'Play next',
+                      style: TextStyle(color: Colors.white),
+                    ),
                   ),
                   const PopupMenuItem(
                     value: 'share',
-                    child: Text('Share playlist',
-                        style: TextStyle(color: Colors.white)),
+                    child: Text(
+                      'Share playlist',
+                      style: TextStyle(color: Colors.white),
+                    ),
                   ),
                 ],
                 onSelected: (val) {
@@ -283,13 +297,17 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
             color: Colors.white,
             backgroundColor: const Color(0xFF222222),
             onRefresh: () async {
-              final isRadio = widget.playlist?.id.startsWith('radio-') == true ||
+              final isRadio =
+                  widget.playlist?.id.startsWith('radio-') == true ||
                   widget.playlist?.id.startsWith('dailymix-') == true ||
-                  songs.any((s) => s.id.startsWith('radio-') || s.id.startsWith('dm-'));
+                  songs.any(
+                    (s) => s.id.startsWith('radio-') || s.id.startsWith('dm-'),
+                  );
+              final locateTargets = songs.take(20).toList(growable: false);
               if (isRadio) {
-                widget.controller.fastLocateRadioSongs(songs);
+                widget.controller.fastLocateRadioSongs(locateTargets);
               } else {
-                widget.controller.fastLocateDiscoverySongs(songs);
+                widget.controller.fastLocateDiscoverySongs(locateTargets);
               }
               widget.controller.bumpLocatingVersion();
               await Future<void>.delayed(const Duration(milliseconds: 600));
@@ -308,7 +326,8 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                         // 1. 2x2 Grid widget for the 4-cover collage
                         _CoverCollage2x2(
                           songs: songs,
-                          fallbackGradient: widget.playlist?.gradient ??
+                          fallbackGradient:
+                              widget.playlist?.gradient ??
                               const [Color(0xFF212121), Color(0xFF0D0D0D)],
                         ),
                         const SizedBox(height: 24),
@@ -334,14 +353,19 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                             CircleAvatar(
                               radius: 12,
                               backgroundColor: Colors.white24,
-                              backgroundImage: widget.creatorAvatarUrl != null &&
+                              backgroundImage:
+                                  widget.creatorAvatarUrl != null &&
                                       widget.creatorAvatarUrl!.isNotEmpty
                                   ? NetworkImage(widget.creatorAvatarUrl!)
                                   : null,
-                              child: widget.creatorAvatarUrl == null ||
+                              child:
+                                  widget.creatorAvatarUrl == null ||
                                       widget.creatorAvatarUrl!.isEmpty
-                                  ? const Icon(Icons.person,
-                                      size: 14, color: Colors.white)
+                                  ? const Icon(
+                                      Icons.person,
+                                      size: 14,
+                                      color: Colors.white,
+                                    )
                                   : null,
                             ),
                             const SizedBox(width: 8),
@@ -402,45 +426,78 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
                               // Fast Import (available for Spotify Radio stations)
-                              if (widget.playlist != null && widget.playlist!.id.startsWith('radio-'))
+                              if (widget.playlist != null &&
+                                  widget.playlist!.id.startsWith('radio-'))
                                 Padding(
-                                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 4,
+                                  ),
                                   child: IconButton(
-                                    icon: const Icon(Icons.playlist_add_rounded,
-                                        color: AppTheme.accentGreen, size: 28),
+                                    icon: const Icon(
+                                      Icons.playlist_add_rounded,
+                                      color: AppTheme.accentGreen,
+                                      size: 28,
+                                    ),
                                     tooltip: 'Fast Import to Library',
                                     onPressed: () {
-                                      final isAlreadyImported = widget.controller.playlists
+                                      final isAlreadyImported = widget
+                                          .controller
+                                          .playlists
                                           .any((p) => p.title == _displayTitle);
                                       if (isAlreadyImported) {
-                                        ScaffoldMessenger.of(context).showSnackBar(
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
                                           SnackBar(
-                                            content: Text('"$_displayTitle" is already in your Library.'),
-                                            backgroundColor: const Color(0xFF222222),
+                                            content: Text(
+                                              '"$_displayTitle" is already in your Library.',
+                                            ),
+                                            backgroundColor: const Color(
+                                              0xFF222222,
+                                            ),
                                           ),
                                         );
                                         return;
                                       }
                                       final radioStation = RadioStation(
-                                        id: widget.playlist!.id.replaceFirst('radio-', ''),
+                                        id: widget.playlist!.id.replaceFirst(
+                                          'radio-',
+                                          '',
+                                        ),
                                         title: _displayTitle,
-                                        artistName: _displayTitle.replaceAll(' Radio', ''),
+                                        artistName: _displayTitle.replaceAll(
+                                          ' Radio',
+                                          '',
+                                        ),
                                         subtitle: widget.subtitle ?? '',
-                                        backgroundColor: widget.playlist!.gradient.firstOrNull ??
+                                        backgroundColor:
+                                            widget
+                                                .playlist!
+                                                .gradient
+                                                .firstOrNull ??
                                             AppTheme.cardSurface,
-                                        gradientColors: widget.playlist!.gradient,
+                                        gradientColors:
+                                            widget.playlist!.gradient,
                                         heroImageUrl: widget.playlist!.imageUrl,
                                         avatarUrls: [
-                                          if (widget.playlist!.imageUrl.isNotEmpty)
-                                            widget.playlist!.imageUrl
+                                          if (widget
+                                              .playlist!
+                                              .imageUrl
+                                              .isNotEmpty)
+                                            widget.playlist!.imageUrl,
                                         ],
                                         songs: songs,
                                       );
-                                      widget.controller.fastImportRadioStation(radioStation);
-                                      ScaffoldMessenger.of(context).showSnackBar(
+                                      widget.controller.fastImportRadioStation(
+                                        radioStation,
+                                      );
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
                                         SnackBar(
                                           content: Text(
-                                              'Successfully imported "$_displayTitle" (${songs.length} tracks) to your Library!'),
+                                            'Successfully imported "$_displayTitle" (${songs.length} tracks) to your Library!',
+                                          ),
                                           backgroundColor: AppTheme.accentGreen,
                                         ),
                                       );
@@ -451,10 +508,10 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                               // Download
                               Builder(
                                 builder: (ctx) {
-                                  final isDownloading =
-                                      widget.controller.isPlaylistDownloading(songs);
-                                  final isDownloaded =
-                                      widget.controller.isPlaylistFullyDownloaded(songs);
+                                  final isDownloading = widget.controller
+                                      .isPlaylistDownloading(songs);
+                                  final isDownloaded = widget.controller
+                                      .isPlaylistFullyDownloaded(songs);
 
                                   if (isDownloading) {
                                     return const Padding(
@@ -472,15 +529,23 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
 
                                   if (isDownloaded) {
                                     return IconButton(
-                                      icon: const Icon(Icons.download_done_rounded,
-                                          color: AppTheme.accentGreen, size: 26),
+                                      icon: const Icon(
+                                        Icons.download_done_rounded,
+                                        color: AppTheme.accentGreen,
+                                        size: 26,
+                                      ),
                                       tooltip: 'Downloaded for offline use',
                                       onPressed: () {
-                                        ScaffoldMessenger.of(context).hideCurrentSnackBar();
-                                        ScaffoldMessenger.of(context).showSnackBar(
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).hideCurrentSnackBar();
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
                                           const SnackBar(
                                             content: Text(
-                                                'All tracks in this playlist are downloaded for offline use.'),
+                                              'All tracks in this playlist are downloaded for offline use.',
+                                            ),
                                             backgroundColor: Color(0xFF222222),
                                             duration: Duration(seconds: 2),
                                           ),
@@ -490,39 +555,60 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                                   }
 
                                   return IconButton(
-                                    icon: const Icon(Icons.download_outlined,
-                                        color: Colors.white, size: 26),
+                                    icon: const Icon(
+                                      Icons.download_outlined,
+                                      color: Colors.white,
+                                      size: 26,
+                                    ),
                                     tooltip: 'Download all',
                                     onPressed: () {
                                       final pending = songs
-                                          .where((s) => !widget.controller.isSongDownloaded(s.id))
+                                          .where(
+                                            (s) => !widget.controller
+                                                .isSongDownloaded(s.id),
+                                          )
                                           .toList();
                                       if (pending.isEmpty) return;
-                                      ScaffoldMessenger.of(context).hideCurrentSnackBar();
-                                      ScaffoldMessenger.of(context).showSnackBar(
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).hideCurrentSnackBar();
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
                                         SnackBar(
                                           content: Text(
-                                              'Downloading ${pending.length} tracks for offline use...'),
-                                          backgroundColor: const Color(0xFF222222),
+                                            'Downloading ${pending.length} tracks for offline use...',
+                                          ),
+                                          backgroundColor: const Color(
+                                            0xFF222222,
+                                          ),
                                           duration: const Duration(seconds: 2),
                                         ),
                                       );
-                                      widget.controller.downloadPlaylistSongs(songs);
+                                      widget.controller.downloadPlaylistSongs(
+                                        songs,
+                                      );
                                     },
                                   );
                                 },
                               ),
 
                               // Bookmark / Library Add (for non-radio playlists)
-                              if (widget.playlist == null || !widget.playlist!.id.startsWith('radio-'))
+                              if (widget.playlist == null ||
+                                  !widget.playlist!.id.startsWith('radio-'))
                                 IconButton(
-                                  icon: const Icon(Icons.bookmark_border_rounded,
-                                      color: Colors.white, size: 26),
+                                  icon: const Icon(
+                                    Icons.bookmark_border_rounded,
+                                    color: Colors.white,
+                                    size: 26,
+                                  ),
                                   tooltip: 'Save to library',
                                   onPressed: () {
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       const SnackBar(
-                                        content: Text('Playlist saved to your library'),
+                                        content: Text(
+                                          'Playlist saved to your library',
+                                        ),
                                         backgroundColor: Color(0xFF222222),
                                       ),
                                     );
@@ -538,13 +624,17 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                                   color: Colors.white,
                                   boxShadow: [
                                     BoxShadow(
-                                      color: Colors.white.withValues(alpha: 0.3),
+                                      color: Colors.white.withValues(
+                                        alpha: 0.3,
+                                      ),
                                       blurRadius: 18,
                                       spreadRadius: 2,
                                       offset: const Offset(0, 4),
                                     ),
                                     BoxShadow(
-                                      color: Colors.black.withValues(alpha: 0.4),
+                                      color: Colors.black.withValues(
+                                        alpha: 0.4,
+                                      ),
                                       blurRadius: 12,
                                       offset: const Offset(0, 6),
                                     ),
@@ -570,8 +660,11 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
 
                               // Share
                               IconButton(
-                                icon: const Icon(Icons.share_outlined,
-                                    color: Colors.white, size: 24),
+                                icon: const Icon(
+                                  Icons.share_outlined,
+                                  color: Colors.white,
+                                  size: 24,
+                                ),
                                 tooltip: 'Share',
                                 onPressed: () {
                                   ScaffoldMessenger.of(context).showSnackBar(
@@ -599,10 +692,14 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                               ),
 
                               // Delete (only for user-created, non-radio playlists)
-                              if (widget.playlist != null && !widget.playlist!.id.startsWith('radio-'))
+                              if (widget.playlist != null &&
+                                  !widget.playlist!.id.startsWith('radio-'))
                                 IconButton(
-                                  icon: const Icon(Icons.delete_outline_rounded,
-                                      color: Colors.white, size: 24),
+                                  icon: const Icon(
+                                    Icons.delete_outline_rounded,
+                                    color: Colors.white,
+                                    size: 24,
+                                  ),
                                   tooltip: 'Delete playlist',
                                   onPressed: _confirmDeletePlaylist,
                                 ),
@@ -618,24 +715,21 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                 SliverPadding(
                   padding: const EdgeInsets.only(bottom: 120),
                   sliver: SliverList(
-                    delegate: SliverChildBuilderDelegate(
-                      (context, index) {
-                        if (index >= songs.length) return null;
-                        final song = songs[index];
-                        final isCurrent = song.id == currentSongId;
+                    delegate: SliverChildBuilderDelegate((context, index) {
+                      if (index >= songs.length) return null;
+                      final song = songs[index];
+                      final isCurrent = song.id == currentSongId;
 
-                        return _PlaylistSongTile(
-                          song: song,
-                          index: index,
-                          isCurrent: isCurrent,
-                          isPlaying: isCurrent && widget.controller.isPlaying,
-                          controller: widget.controller,
-                          onTap: () => _playSongAt(songs, index),
-                          onMoreTap: () => _showSongOptions(context, song),
-                        );
-                      },
-                      childCount: songs.length,
-                    ),
+                      return _PlaylistSongTile(
+                        song: song,
+                        index: index,
+                        isCurrent: isCurrent,
+                        isPlaying: isCurrent && widget.controller.isPlaying,
+                        controller: widget.controller,
+                        onTap: () => _playSongAt(songs, index),
+                        onMoreTap: () => _showSongOptions(context, song),
+                      );
+                    }, childCount: songs.length),
                   ),
                 ),
               ],
@@ -727,24 +821,42 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
           children: [
             ListTile(
               leading: SongArtworkWidget(song: song, size: 40, borderRadius: 6),
-              title: Text(song.title,
-                  style: const TextStyle(
-                      color: Colors.white, fontWeight: FontWeight.bold)),
-              subtitle: Text(song.artist,
-                  style: const TextStyle(color: Colors.grey, fontSize: 12)),
+              title: Text(
+                song.title,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              subtitle: Text(
+                song.artist,
+                style: const TextStyle(color: Colors.grey, fontSize: 12),
+              ),
             ),
             const Divider(color: Colors.white12),
             ListTile(
-              leading: const Icon(Icons.playlist_play_rounded, color: Colors.white),
-              title: const Text('Play next', style: TextStyle(color: Colors.white)),
+              leading: const Icon(
+                Icons.playlist_play_rounded,
+                color: Colors.white,
+              ),
+              title: const Text(
+                'Play next',
+                style: TextStyle(color: Colors.white),
+              ),
               onTap: () {
                 Navigator.pop(ctx);
                 widget.controller.enqueueNext(song);
               },
             ),
             ListTile(
-              leading: const Icon(Icons.queue_music_rounded, color: Colors.white),
-              title: const Text('Add to queue', style: TextStyle(color: Colors.white)),
+              leading: const Icon(
+                Icons.queue_music_rounded,
+                color: Colors.white,
+              ),
+              title: const Text(
+                'Add to queue',
+                style: TextStyle(color: Colors.white),
+              ),
               onTap: () {
                 Navigator.pop(ctx);
                 widget.controller.enqueue(song);
@@ -752,11 +864,17 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
             ),
             ListTile(
               leading: const Icon(Icons.lyrics_outlined, color: Colors.white),
-              title: const Text('View lyrics', style: TextStyle(color: Colors.white)),
+              title: const Text(
+                'View lyrics',
+                style: TextStyle(color: Colors.white),
+              ),
               onTap: () {
                 Navigator.pop(ctx);
-                SpotifyLyricsSheet.show(context,
-                    song: song, controller: widget.controller);
+                SpotifyLyricsSheet.show(
+                  context,
+                  song: song,
+                  controller: widget.controller,
+                );
               },
             ),
             ListTile(
@@ -768,14 +886,22 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
             ),
             if (!widget.controller.isSongDownloaded(song.id))
               ListTile(
-                leading: const Icon(Icons.download_rounded, color: Colors.white),
-                title: const Text('Download song', style: TextStyle(color: Colors.white)),
+                leading: const Icon(
+                  Icons.download_rounded,
+                  color: Colors.white,
+                ),
+                title: const Text(
+                  'Download song',
+                  style: TextStyle(color: Colors.white),
+                ),
                 onTap: () {
                   Navigator.pop(ctx);
                   ScaffoldMessenger.of(context).hideCurrentSnackBar();
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
-                      content: Text('Downloading "${song.title}" for offline use...'),
+                      content: Text(
+                        'Downloading "${song.title}" for offline use...',
+                      ),
                       backgroundColor: const Color(0xFF222222),
                       duration: const Duration(seconds: 2),
                     ),
@@ -785,14 +911,20 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
               )
             else
               ListTile(
-                leading: const Icon(Icons.delete_outline_rounded,
-                    color: AppTheme.accentPink),
-                title: const Text('Remove download',
-                    style: TextStyle(color: AppTheme.accentPink)),
+                leading: const Icon(
+                  Icons.delete_outline_rounded,
+                  color: AppTheme.accentPink,
+                ),
+                title: const Text(
+                  'Remove download',
+                  style: TextStyle(color: AppTheme.accentPink),
+                ),
                 onTap: () async {
                   final messenger = ScaffoldMessenger.of(context);
                   Navigator.pop(ctx);
-                  final removed = await widget.controller.removeDownloadedSong(song);
+                  final removed = await widget.controller.removeDownloadedSong(
+                    song,
+                  );
                   if (mounted && removed) {
                     messenger.showSnackBar(
                       SnackBar(
@@ -806,14 +938,20 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
               ),
             if (widget.playlist != null)
               ListTile(
-                leading: const Icon(Icons.delete_outline_rounded,
-                    color: AppTheme.accentPink),
-                title: const Text('Remove from playlist',
-                    style: TextStyle(color: AppTheme.accentPink)),
+                leading: const Icon(
+                  Icons.delete_outline_rounded,
+                  color: AppTheme.accentPink,
+                ),
+                title: const Text(
+                  'Remove from playlist',
+                  style: TextStyle(color: AppTheme.accentPink),
+                ),
                 onTap: () async {
                   Navigator.pop(ctx);
-                  await widget.controller
-                      .deleteSongFromPlaylist(widget.playlist!.id, song.id);
+                  await widget.controller.deleteSongFromPlaylist(
+                    widget.playlist!.id,
+                    song.id,
+                  );
                   if (mounted) setState(() {});
                 },
               ),
@@ -848,13 +986,18 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dCtx).pop(false),
-            child: const Text('Cancel', style: TextStyle(color: AppTheme.textMuted)),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: AppTheme.textMuted),
+            ),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
               backgroundColor: AppTheme.accentPink,
               foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
             ),
             onPressed: () => Navigator.of(dCtx).pop(true),
             child: const Text('Delete'),
@@ -874,10 +1017,7 @@ class _CoverCollage2x2 extends StatelessWidget {
   final List<Song> songs;
   final List<Color> fallbackGradient;
 
-  const _CoverCollage2x2({
-    required this.songs,
-    required this.fallbackGradient,
-  });
+  const _CoverCollage2x2({required this.songs, required this.fallbackGradient});
 
   @override
   Widget build(BuildContext context) {
@@ -929,11 +1069,7 @@ class _CoverCollage2x2 extends StatelessWidget {
   Widget _buildCoverCell(List<Song> covers, int index) {
     if (index < covers.length) {
       final song = covers[index];
-      return SongArtworkWidget(
-        song: song,
-        size: 110,
-        borderRadius: 0,
-      );
+      return SongArtworkWidget(song: song, size: 110, borderRadius: 0);
     }
     // Fallback decorative tile if fewer than 4 songs exist
     final grad = fallbackGradient.length >= 2
@@ -943,20 +1079,13 @@ class _CoverCollage2x2 extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: [
-            baseColor.withValues(alpha: 0.8),
-            const Color(0xFF141414),
-          ],
+          colors: [baseColor.withValues(alpha: 0.8), const Color(0xFF141414)],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
       ),
       child: const Center(
-        child: Icon(
-          Icons.music_note_rounded,
-          size: 28,
-          color: Colors.white24,
-        ),
+        child: Icon(Icons.music_note_rounded, size: 28, color: Colors.white24),
       ),
     );
   }
@@ -1001,11 +1130,7 @@ class _PlaylistSongTile extends StatelessWidget {
             Stack(
               alignment: Alignment.center,
               children: [
-                SongArtworkWidget(
-                  song: song,
-                  size: 46,
-                  borderRadius: 6,
-                ),
+                SongArtworkWidget(song: song, size: 46, borderRadius: 6),
                 if (isCurrent)
                   Container(
                     width: 46,
@@ -1041,8 +1166,7 @@ class _PlaylistSongTile extends StatelessWidget {
                     style: TextStyle(
                       color: isCurrent ? AppTheme.accentGreen : Colors.white,
                       fontSize: 14.5,
-                      fontWeight:
-                          isCurrent ? FontWeight.bold : FontWeight.w500,
+                      fontWeight: isCurrent ? FontWeight.bold : FontWeight.w500,
                     ),
                   ),
                   const SizedBox(height: 4),
@@ -1115,8 +1239,11 @@ class _PlaylistSongTile extends StatelessWidget {
 
     if (isDownloaded) {
       return IconButton(
-        icon: const Icon(Icons.download_done_rounded,
-            color: AppTheme.accentGreen, size: 20),
+        icon: const Icon(
+          Icons.download_done_rounded,
+          color: AppTheme.accentGreen,
+          size: 20,
+        ),
         tooltip: 'Downloaded for offline playback',
         splashRadius: 18,
         onPressed: () {
@@ -1124,7 +1251,8 @@ class _PlaylistSongTile extends StatelessWidget {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(
-                  '"${song.title}" is downloaded and ready for offline playback.'),
+                '"${song.title}" is downloaded and ready for offline playback.',
+              ),
               backgroundColor: const Color(0xFF222222),
               duration: const Duration(seconds: 2),
             ),
@@ -1151,7 +1279,8 @@ class _PlaylistSongTile extends StatelessWidget {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(
-                  'Could not download "${song.title}". Check your connection or settings.'),
+                'Could not download "${song.title}". Check your connection or settings.',
+              ),
               backgroundColor: const Color(0xFF331111),
             ),
           );

@@ -5,7 +5,7 @@ import '../controllers/music_player_controller.dart';
 import 'animated_visualizer.dart';
 import 'song_artwork_widget.dart';
 
-class TrackListView extends StatelessWidget {
+class TrackListView extends StatefulWidget {
   final List<Song> songs;
   final MusicPlayerController controller;
   final ValueChanged<Song>? onAddToPlaylist;
@@ -26,32 +26,124 @@ class TrackListView extends StatelessWidget {
   });
 
   @override
+  State<TrackListView> createState() => _TrackListViewState();
+}
+
+class _TrackListViewState extends State<TrackListView> {
+  /// Rows rendered per page. Large libraries used to build every row at once
+  /// (the list is shrink-wrapped inside the page scroll), which made the
+  /// dashboard janky. Rows are now added in pages as the user scrolls.
+  static const int _pageSize = 60;
+  static const double _loadMoreThreshold = 600;
+
+  int _visibleCount = _pageSize;
+  ScrollPosition? _scrollPosition;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _attachToPageScroll();
+  }
+
+  void _attachToPageScroll() {
+    final position = Scrollable.maybeOf(context)?.position;
+    if (identical(position, _scrollPosition)) return;
+    _scrollPosition?.removeListener(_onPageScroll);
+    _scrollPosition = position;
+    _scrollPosition?.addListener(_onPageScroll);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _onPageScroll();
+    });
+  }
+
+  void _onPageScroll() {
+    final position = _scrollPosition;
+    if (position == null ||
+        !position.hasContentDimensions ||
+        position.axis != Axis.vertical) {
+      return;
+    }
+    if (widget.songs.length <= _visibleCount) return;
+    if (position.extentAfter > _loadMoreThreshold) return;
+
+    setState(() {
+      _visibleCount += _pageSize;
+      if (_visibleCount > widget.songs.length) {
+        _visibleCount = widget.songs.length;
+      }
+    });
+
+    // If the viewport is still not filled, keep loading the next page.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _onPageScroll();
+    });
+  }
+
+  void _loadNextPage() {
+    if (widget.songs.length <= _visibleCount) return;
+    setState(() {
+      _visibleCount += _pageSize;
+      if (_visibleCount > widget.songs.length) {
+        _visibleCount = widget.songs.length;
+      }
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant TrackListView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.songs.length < _visibleCount) {
+      _visibleCount = widget.songs.length;
+    }
+  }
+
+  @override
+  void dispose() {
+    _scrollPosition?.removeListener(_onPageScroll);
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final songs = widget.songs;
     if (songs.isEmpty) {
       return Container(
         padding: const EdgeInsets.all(40),
         alignment: Alignment.center,
         child: Column(
           children: [
-            Icon(Icons.queue_music_rounded,
-                size: 48, color: AppTheme.textMuted.withValues(alpha: 0.5)),
+            Icon(
+              Icons.queue_music_rounded,
+              size: 48,
+              color: AppTheme.textMuted.withValues(alpha: 0.5),
+            ),
             const SizedBox(height: 12),
             Text(
-              emptyTitle ?? 'No tracks found',
+              widget.emptyTitle ?? 'No tracks found',
               style: const TextStyle(
-                  fontSize: 16,
-                  color: AppTheme.textSecondary,
-                  fontWeight: FontWeight.w600),
+                fontSize: 16,
+                color: AppTheme.textSecondary,
+                fontWeight: FontWeight.w600,
+              ),
             ),
             const SizedBox(height: 4),
             Text(
-              emptySubtitle ?? 'Try changing your search query or genre filter',
+              widget.emptySubtitle ??
+                  'Try changing your search query or genre filter',
               style: const TextStyle(fontSize: 13, color: AppTheme.textMuted),
             ),
           ],
         ),
       );
     }
+
+    final visibleCount = songs.length < _visibleCount
+        ? songs.length
+        : _visibleCount;
+    final controller = widget.controller;
+    final onAddToPlaylist = widget.onAddToPlaylist;
+    final onSongTap = widget.onSongTap;
+    final onDelete = widget.onDelete;
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -64,7 +156,10 @@ class TrackListView extends StatelessWidget {
             // Table Header (desktop / wide screens only)
             if (!isCompact) ...[
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
                 child: Row(
                   children: [
                     const SizedBox(
@@ -126,8 +221,11 @@ class TrackListView extends StatelessWidget {
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.end,
                         children: [
-                          Icon(Icons.access_time_rounded,
-                              size: 14, color: AppTheme.textMuted),
+                          Icon(
+                            Icons.access_time_rounded,
+                            size: 14,
+                            color: AppTheme.textMuted,
+                          ),
                         ],
                       ),
                     ),
@@ -143,7 +241,7 @@ class TrackListView extends StatelessWidget {
             ListView.builder(
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
-              itemCount: songs.length,
+              itemCount: visibleCount,
               itemBuilder: (context, index) {
                 final song = songs[index];
                 final isCurrent = controller.currentSong?.id == song.id;
@@ -159,7 +257,7 @@ class TrackListView extends StatelessWidget {
                   isCompact: isCompact,
                   onTap: () {
                     if (onSongTap != null) {
-                      onSongTap!(song);
+                      onSongTap(song);
                     } else {
                       if (isCurrent) {
                         controller.togglePlayPause();
@@ -170,12 +268,26 @@ class TrackListView extends StatelessWidget {
                   },
                   onLikeToggle: () => controller.toggleLike(song.id),
                   onAddToQueue: () => controller.addToQueue(song),
-                  onAddToPlaylist:
-                      onAddToPlaylist == null ? null : () => onAddToPlaylist!(song),
-                  onDelete: onDelete == null ? null : () => onDelete!(song),
+                  onAddToPlaylist: onAddToPlaylist == null
+                      ? null
+                      : () => onAddToPlaylist(song),
+                  onDelete: onDelete == null ? null : () => onDelete(song),
                 );
               },
             ),
+
+            if (visibleCount < songs.length)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: TextButton.icon(
+                  onPressed: _loadNextPage,
+                  icon: const Icon(Icons.expand_more_rounded, size: 18),
+                  label: Text(
+                    'Show more tracks (${songs.length - visibleCount} remaining)',
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                ),
+              ),
           ],
         );
       },
@@ -236,7 +348,9 @@ class _TrackRowState extends State<_TrackRow> {
             decoration: BoxDecoration(
               color: widget.isCurrent
                   ? AppTheme.primary.withValues(alpha: 0.12)
-                  : (_isHovered ? AppTheme.cardSurfaceHover : Colors.transparent),
+                  : (_isHovered
+                        ? AppTheme.cardSurfaceHover
+                        : Colors.transparent),
               borderRadius: BorderRadius.circular(10),
               border: Border.all(
                 color: widget.isCurrent
@@ -264,29 +378,28 @@ class _TrackRowState extends State<_TrackRow> {
                               ),
                             )
                           : (_isHovered
-                              ? const Icon(Icons.play_arrow_rounded,
-                                  size: 18, color: AppTheme.textPrimary)
-                              : Text(
-                                  '${widget.index}',
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w500,
-                                    color: widget.isCurrent
-                                        ? AppTheme.primary
-                                        : AppTheme.textMuted,
-                                  ),
-                                )),
+                                ? const Icon(
+                                    Icons.play_arrow_rounded,
+                                    size: 18,
+                                    color: AppTheme.textPrimary,
+                                  )
+                                : Text(
+                                    '${widget.index}',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w500,
+                                      color: widget.isCurrent
+                                          ? AppTheme.primary
+                                          : AppTheme.textMuted,
+                                    ),
+                                  )),
                     ),
                   ),
                   const SizedBox(width: 12),
                 ],
 
                 // Artwork Thumbnail
-                SongArtworkWidget(
-                  song: widget.song,
-                  size: 44,
-                  borderRadius: 8,
-                ),
+                SongArtworkWidget(song: widget.song, size: 44, borderRadius: 8),
                 const SizedBox(width: 14),
 
                 // Title & Artist with inline indicator
@@ -312,7 +425,9 @@ class _TrackRowState extends State<_TrackRow> {
                       Row(
                         children: [
                           if (_hasBadge(widget.song)) ...[
-                            ExcludeSemantics(child: _buildInlineBadge(widget.song)),
+                            ExcludeSemantics(
+                              child: _buildInlineBadge(widget.song),
+                            ),
                             const SizedBox(width: 6),
                           ],
                           Expanded(
@@ -326,8 +441,6 @@ class _TrackRowState extends State<_TrackRow> {
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
-
-
                         ],
                       ),
                     ],
@@ -440,7 +553,8 @@ class _TrackRowState extends State<_TrackRow> {
     );
   }
 
-  bool _hasBadge(Song song) => !song.hasAudio || song.isFullTrack || song.isPreview;
+  bool _hasBadge(Song song) =>
+      !song.hasAudio || song.isFullTrack || song.isPreview;
 
   Widget _buildInlineBadge(Song song) {
     if (!song.hasAudio) {

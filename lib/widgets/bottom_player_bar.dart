@@ -19,31 +19,39 @@ class BottomPlayerBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final song = controller.currentSong;
-    final isPlaying = controller.isPlaying;
+    // Progress ticks only rebuild this small bar, never the whole dashboard.
+    return ValueListenableBuilder<Duration>(
+      valueListenable: controller.positionListenable,
+      builder: (context, _, child) {
+        final song = controller.currentSong;
+        final isPlaying = controller.isPlaying;
 
-    return Container(
-      decoration: BoxDecoration(
-        color: const Color(0xFF0F131D),
-        border: const Border(top: BorderSide(color: AppTheme.border, width: 1)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.5),
-            blurRadius: 16,
-            offset: const Offset(0, -4),
+        return Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFF0F131D),
+            border: const Border(
+              top: BorderSide(color: AppTheme.border, width: 1),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.5),
+                blurRadius: 16,
+                offset: const Offset(0, -4),
+              ),
+            ],
           ),
-        ],
-      ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final isCompact = constraints.maxWidth < 700;
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final isCompact = constraints.maxWidth < 700;
 
-          if (isCompact) {
-            return _buildCompactPlayer(context, song, isPlaying);
-          }
-          return _buildDesktopPlayer(context, song, isPlaying);
-        },
-      ),
+              if (isCompact) {
+                return _buildCompactPlayer(context, song, isPlaying);
+              }
+              return _buildDesktopPlayer(context, song, isPlaying);
+            },
+          ),
+        );
+      },
     );
   }
 
@@ -71,11 +79,7 @@ class BottomPlayerBar extends StatelessWidget {
                   onTap: onOpenLyrics,
                   child: Row(
                     children: [
-                      SongArtworkWidget(
-                        song: song,
-                        size: 44,
-                        borderRadius: 8,
-                      ),
+                      SongArtworkWidget(song: song, size: 44, borderRadius: 8),
                       const SizedBox(width: 12),
                       Expanded(
                         child: Column(
@@ -101,7 +105,8 @@ class BottomPlayerBar extends StatelessWidget {
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                             ),
-                            if (song != null && controller.isUnavailable(song.id))
+                            if (song != null &&
+                                controller.isUnavailable(song.id))
                               Padding(
                                 padding: const EdgeInsets.only(top: 2),
                                 child: GestureDetector(
@@ -305,7 +310,8 @@ class BottomPlayerBar extends StatelessWidget {
                                     ),
                                   ),
                                 ),
-                              if (song != null && controller.isUnavailable(song.id))
+                              if (song != null &&
+                                  controller.isUnavailable(song.id))
                                 Padding(
                                   padding: const EdgeInsets.only(top: 2),
                                   child: GestureDetector(
@@ -335,9 +341,10 @@ class BottomPlayerBar extends StatelessWidget {
                                         height: 8,
                                         child: CircularProgressIndicator(
                                           strokeWidth: 1.5,
-                                          valueColor: AlwaysStoppedAnimation<Color>(
-                                            AppTheme.accentPink,
-                                          ),
+                                          valueColor:
+                                              AlwaysStoppedAnimation<Color>(
+                                                AppTheme.accentPink,
+                                              ),
                                         ),
                                       ),
                                       SizedBox(width: 5),
@@ -570,8 +577,8 @@ class BottomPlayerBar extends StatelessWidget {
                     controller.isMuted || controller.volume == 0
                         ? Icons.volume_off_rounded
                         : (controller.volume < 0.5
-                            ? Icons.volume_down_rounded
-                            : Icons.volume_up_rounded),
+                              ? Icons.volume_down_rounded
+                              : Icons.volume_up_rounded),
                     size: 20,
                     color: controller.isMuted
                         ? AppTheme.accentPink
