@@ -511,8 +511,12 @@ class MusicPlayerController extends ChangeNotifier {
 
     _initAudioPlayer();
     _bindNotificationControls();
+    primeStaticOfflineCache();
     unawaited(_equalizer.initialize());
     unawaited(_offlineCandidateDirs());
+    if (!Platform.environment.containsKey('FLUTTER_TEST')) {
+      unawaited(RadioDiscoveryService.instance.loadCachedRadios().catchError((_) {}));
+    }
     _startImportRetryLoop();
     _startConnectivityWatcher();
     // Load previously imported playlists for the active user
@@ -1076,6 +1080,15 @@ class MusicPlayerController extends ChangeNotifier {
       playlist.imageUrl = resolvedCover;
     }
 
+    if (playlist.imageUrl.isNotEmpty) {
+      unawaited(
+        LocalDatabase.instance.updateImportedPlaylistImageUrl(
+          playlist.id,
+          playlist.imageUrl,
+        ),
+      );
+    }
+
     if (playlist.imageUrl.isEmpty) {
       final targetPl = playlist;
       unawaited(() async {
@@ -1223,6 +1236,22 @@ class MusicPlayerController extends ChangeNotifier {
 
   /// Fast imports an entire RadioStation into the user's Library playlists.
   MusicPlaylist fastImportRadioStation(RadioStation station) {
+    String resolvedRadioCover = station.heroImageUrl.trim();
+    if (resolvedRadioCover.isEmpty && station.avatarUrls.isNotEmpty) {
+      resolvedRadioCover = station.avatarUrls.first.trim();
+    }
+    if (resolvedRadioCover.isEmpty) {
+      resolvedRadioCover = _curatedCoverForTitle(station.title);
+    }
+    if (resolvedRadioCover.isEmpty && station.songs.isNotEmpty) {
+      for (final s in station.songs) {
+        if (s.imageUrl.trim().isNotEmpty) {
+          resolvedRadioCover = s.imageUrl.trim();
+          break;
+        }
+      }
+    }
+
     var playlist = _playlistByTitle(station.title);
     if (playlist == null) {
       final newId = _newPlaylistId();
@@ -1231,22 +1260,31 @@ class MusicPlayerController extends ChangeNotifier {
         title: station.title,
         subtitle: station.subtitle,
         gradient: station.gradientColors,
-        imageUrl: station.heroImageUrl.isNotEmpty
-            ? station.heroImageUrl
-            : (station.avatarUrls.isNotEmpty ? station.avatarUrls.first : ''),
+        imageUrl: resolvedRadioCover,
         songIds: [],
       );
       _playlists.add(playlist);
     } else {
-      if (playlist.imageUrl.isEmpty && station.avatarUrls.isNotEmpty) {
-        playlist.imageUrl = station.avatarUrls.first;
+      if (playlist.imageUrl.isEmpty && resolvedRadioCover.isNotEmpty) {
+        playlist.imageUrl = resolvedRadioCover;
       }
     }
 
+    if (playlist.imageUrl.isNotEmpty) {
+      unawaited(
+        LocalDatabase.instance.updateImportedPlaylistImageUrl(
+          playlist.id,
+          playlist.imageUrl,
+        ),
+      );
+    }
+
+    final unmarkUserId = AuthService.instance.currentUserId;
     unawaited(
       LocalDatabase.instance.unmarkPlaylistDeleted(
         playlist.id,
         title: playlist.title,
+        userId: unmarkUserId.isEmpty ? 'default_user' : unmarkUserId,
       ),
     );
 
@@ -1378,11 +1416,10 @@ class MusicPlayerController extends ChangeNotifier {
         final isDel = (pData['is_deleted'] as int? ?? 0) == 1;
         if (isDel) continue;
 
-        if (await LocalDatabase.instance.isPlaylistDeleted(
-          playlistId,
-          title: title,
-          userId: uid,
-        )) {
+        if (allSettings['deleted_playlist_$playlistId'] == 'true') continue;
+        final cleanId = playlistId.replaceAll(RegExp(r'-[356]$'), '');
+        if (cleanId != playlistId &&
+            allSettings['deleted_playlist_$cleanId'] == 'true') {
           continue;
         }
 
@@ -1401,7 +1438,7 @@ class MusicPlayerController extends ChangeNotifier {
           final songId = s['id'] as String;
           final isSongDel = (s['is_deleted'] as int? ?? 0) == 1;
           if (isSongDel) continue;
-          if (await LocalDatabase.instance.isSongDeleted(songId)) continue;
+          if (allSettings['deleted_song_$songId'] == 'true') continue;
           songIds.add(songId);
 
           var resolvedAudio = s['audio_url'] as String? ?? '';
@@ -3324,17 +3361,6 @@ class MusicPlayerController extends ChangeNotifier {
       }
       if (enrichment.artworkUrl != null && enrichment.artworkUrl!.isNotEmpty) {
         song.imageUrl = enrichment.artworkUrl!;
-        for (final p in _playlists) {
-          if (p.songIds.contains(song.id) && p.imageUrl.isEmpty) {
-            p.imageUrl = song.imageUrl;
-            unawaited(
-              LocalDatabase.instance.updateImportedPlaylistImageUrl(
-                p.id,
-                p.imageUrl,
-              ),
-            );
-          }
-        }
       }
       changed = true;
       // Real audio replaces the offline fallback — clear the placeholder flag
@@ -3562,6 +3588,27 @@ class MusicPlayerController extends ChangeNotifier {
     _systemTempOfflineDir,
   ];
 
+  static void primeStaticOfflineCache() {
+    final dirs = <Directory>[
+      ...?_staticOfflineDirs,
+      for (final pth in _knownFallbackDirs) Directory(pth),
+    ];
+    for (final dir in dirs) {
+      try {
+        if (!dir.existsSync()) continue;
+        for (final entity in dir.listSync()) {
+          if (entity is File) {
+            final ext = p.extension(entity.path).toLowerCase();
+            if (_audioExtensions.contains(ext) && entity.lengthSync() > 1024) {
+              final id = p.basenameWithoutExtension(entity.path);
+              _staticAudioLookupMemo[id] = entity;
+            }
+          }
+        }
+      } catch (_) {}
+    }
+  }
+
   static File? findCachedAudioFileSync(String songId) {
     final memo = _staticAudioLookupMemo[songId];
     if (memo != null && memo.existsSync() && memo.lengthSync() > 1024) {
@@ -3589,6 +3636,7 @@ class MusicPlayerController extends ChangeNotifier {
         }
       } catch (_) {}
     }
+    _staticAudioLookupMemo[songId] = null;
     return null;
   }
 
@@ -3703,6 +3751,11 @@ class MusicPlayerController extends ChangeNotifier {
     final memo = _audioLookupMemo[songId];
     if (memo != null || _audioLookupMemo.containsKey(songId)) {
       return memo;
+    }
+    final staticMemo = _staticAudioLookupMemo[songId];
+    if (staticMemo != null || _staticAudioLookupMemo.containsKey(songId)) {
+      _audioLookupMemo[songId] = staticMemo;
+      return staticMemo;
     }
 
     final dirs = await _offlineCandidateDirs();

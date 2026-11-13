@@ -1,8 +1,9 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import '../data/local_database.dart';
 import '../models/song_model.dart';
-import '../theme/app_theme.dart';
 
 /// Represents a Spotify-style Radio Station with artist highlights,
 /// vibrant background styling, and a pre-curated or dynamic track list.
@@ -41,6 +42,79 @@ class RadioStation {
           ? heroImageUrl
           : (avatarUrls.isNotEmpty ? avatarUrls.first : ''),
       songIds: songs.map((s) => s.id).toList(),
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'title': title,
+      'artistName': artistName,
+      'subtitle': subtitle,
+      'backgroundColor': backgroundColor.toARGB32(),
+      'gradientColors': gradientColors.map((c) => c.toARGB32()).toList(),
+      'avatarUrls': avatarUrls,
+      'heroImageUrl': heroImageUrl,
+      'songs': songs.map((s) => {
+        'id': s.id,
+        'title': s.title,
+        'artist': s.artist,
+        'album': s.album,
+        'duration_ms': s.duration.inMilliseconds,
+        'genre': s.genre,
+        'imageUrl': s.imageUrl,
+        'gradientColors': s.gradientColors.map((c) => c.toARGB32()).toList(),
+        'plays': s.plays,
+        'lyrics': s.lyrics,
+        'audioUrl': s.audioUrl,
+        'isPreview': s.isPreview,
+        'isYouTubeAudio': s.isYouTubeAudio,
+        'youtubeVideoId': s.youtubeVideoId,
+        'isExplicit': s.isExplicit,
+      }).toList(),
+    };
+  }
+
+  factory RadioStation.fromMap(Map<String, dynamic> map) {
+    final rawColors = map['gradientColors'] as List<dynamic>? ?? [];
+    final colors = rawColors.map((c) => Color((c as num).toInt())).toList();
+    final rawAvatars = map['avatarUrls'] as List<dynamic>? ?? [];
+    final rawSongs = map['songs'] as List<dynamic>? ?? [];
+    final songs = rawSongs.map((sm) {
+      final m = sm as Map<String, dynamic>;
+      final rawSongColors = m['gradientColors'] as List<dynamic>? ?? [];
+      final songColors = rawSongColors.isNotEmpty
+          ? rawSongColors.map((c) => Color((c as num).toInt())).toList()
+          : (colors.isNotEmpty ? colors : const [Color(0xFF334155), Color(0xFF64748B)]);
+      return Song(
+        id: m['id'] as String? ?? '',
+        title: m['title'] as String? ?? '',
+        artist: m['artist'] as String? ?? '',
+        album: m['album'] as String? ?? '',
+        duration: Duration(milliseconds: m['duration_ms'] as int? ?? 180000),
+        genre: m['genre'] as String? ?? 'Pop',
+        imageUrl: m['imageUrl'] as String? ?? '',
+        gradientColors: songColors,
+        plays: m['plays'] as String? ?? '',
+        lyrics: (m['lyrics'] as List<dynamic>? ?? []).map((e) => e.toString()).toList(),
+        audioUrl: m['audioUrl'] as String? ?? '',
+        isPreview: m['isPreview'] as bool? ?? false,
+        isYouTubeAudio: m['isYouTubeAudio'] as bool? ?? false,
+        youtubeVideoId: m['youtubeVideoId'] as String? ?? '',
+        isExplicit: m['isExplicit'] as bool?,
+      );
+    }).toList();
+
+    return RadioStation(
+      id: map['id'] as String? ?? '',
+      title: map['title'] as String? ?? '',
+      artistName: map['artistName'] as String? ?? '',
+      subtitle: map['subtitle'] as String? ?? '',
+      backgroundColor: Color(map['backgroundColor'] as int? ?? 0xFF1E3A8A),
+      gradientColors: colors.isNotEmpty ? colors : const [Color(0xFF1E3A8A), Color(0xFF3B82F6)],
+      avatarUrls: rawAvatars.map((e) => e.toString()).toList(),
+      heroImageUrl: map['heroImageUrl'] as String? ?? '',
+      songs: songs,
     );
   }
 }
@@ -104,6 +178,37 @@ class RadioDiscoveryService {
 
   RadioDiscoveryService({http.Client? client}) : _client = client ?? http.Client();
   static final RadioDiscoveryService instance = RadioDiscoveryService();
+
+  /// Loads previously cached radio stations from persistent local SQLite storage.
+  /// This allows Explore and Popular Radio to display immediately on app startup.
+  Future<void> loadCachedRadios() async {
+    try {
+      final db = LocalDatabase.instance;
+      final trendingJson = await db.getSetting('cached_trending_radios');
+      if (trendingJson != null && trendingJson.isNotEmpty) {
+        final list = jsonDecode(trendingJson) as List<dynamic>;
+        _cachedTrendingRadios = list
+            .map((e) => RadioStation.fromMap(e as Map<String, dynamic>))
+            .toList();
+      }
+      final opmJson = await db.getSetting('cached_opm_radios');
+      if (opmJson != null && opmJson.isNotEmpty) {
+        final list = jsonDecode(opmJson) as List<dynamic>;
+        _cachedOpmRadios = list
+            .map((e) => RadioStation.fromMap(e as Map<String, dynamic>))
+            .toList();
+      }
+      final globalJson = await db.getSetting('cached_global_radios');
+      if (globalJson != null && globalJson.isNotEmpty) {
+        final list = jsonDecode(globalJson) as List<dynamic>;
+        _cachedGlobalRadios = list
+            .map((e) => RadioStation.fromMap(e as Map<String, dynamic>))
+            .toList();
+      }
+    } catch (e) {
+      debugPrint('[RadioDiscoveryService] loadCachedRadios failed: $e');
+    }
+  }
 
   /// Curated Spotify Daily Mixes matching Screenshot 1
   List<DailyMix> getDailyMixes() {
@@ -1149,6 +1254,12 @@ class RadioDiscoveryService {
 
     final results = await Future.wait(futures);
     _cachedTrendingRadios = results;
+    unawaited(
+      LocalDatabase.instance.setSetting(
+        'cached_trending_radios',
+        jsonEncode(results.map((r) => r.toMap()).toList()),
+      ),
+    );
     return results;
   }
 
@@ -1561,6 +1672,12 @@ class RadioDiscoveryService {
 
     final results = await Future.wait(futures);
     _cachedOpmRadios = results;
+    unawaited(
+      LocalDatabase.instance.setSetting(
+        'cached_opm_radios',
+        jsonEncode(results.map((r) => r.toMap()).toList()),
+      ),
+    );
     return results;
   }
 
@@ -1973,6 +2090,12 @@ class RadioDiscoveryService {
 
     final results = await Future.wait(futures);
     _cachedGlobalRadios = results;
+    unawaited(
+      LocalDatabase.instance.setSetting(
+        'cached_global_radios',
+        jsonEncode(results.map((r) => r.toMap()).toList()),
+      ),
+    );
     return results;
   }
 

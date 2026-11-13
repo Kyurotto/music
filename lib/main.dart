@@ -8,6 +8,7 @@ import 'package:just_audio_background/just_audio_background.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'data/local_database.dart';
 import 'services/display_rate_service.dart';
+import 'services/radio_discovery_service.dart';
 import 'theme/app_theme.dart';
 import 'views/auth_gate.dart';
 import 'views/music_dashboard_view.dart';
@@ -47,6 +48,9 @@ Future<void> main() async {
 
   await LocalDatabase.instance.initialize();
   DisplayRateService.instance.initialize();
+  try {
+    await RadioDiscoveryService.instance.loadCachedRadios();
+  } catch (_) {}
   // Initialize Firebase on every platform so Google OAuth can
   // return the real accurate profile. Guarded: local auth still works
   // when Firebase options are missing (e.g. desktop without config).

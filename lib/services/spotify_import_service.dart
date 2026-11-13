@@ -217,7 +217,22 @@ class SpotifyImportService {
     }
 
     final entity = await _fetchEmbedEntity(link);
-    return _resultFromEntity(link, entity);
+    var result = _resultFromEntity(link, entity);
+    if (result.imageUrl.isEmpty) {
+      try {
+        final thumb = await fetchSpotifyThumbnail(trimmed);
+        if (thumb != null && thumb.isNotEmpty) {
+          result = SpotifyImportResult(
+            type: result.type,
+            title: result.title,
+            subtitle: result.subtitle,
+            tracks: result.tracks,
+            imageUrl: thumb,
+          );
+        }
+      } catch (_) {}
+    }
+    return result;
   }
 
   /// True when the input is URL-shaped (so it can never be an artist name).
@@ -267,13 +282,24 @@ class SpotifyImportService {
     }
     final displayName =
         tracks.first.artist.isNotEmpty ? tracks.first.artist : name;
-    final firstArtwork = tracks.isNotEmpty ? tracks.first.artworkUrl : '';
+    var artistArtwork = '';
+    if (spotifyId != null && spotifyId.isNotEmpty) {
+      try {
+        final thumb = await fetchSpotifyThumbnail('https://open.spotify.com/artist/$spotifyId');
+        if (thumb != null && thumb.isNotEmpty) {
+          artistArtwork = thumb;
+        }
+      } catch (_) {}
+    }
+    if (artistArtwork.isEmpty && tracks.isNotEmpty) {
+      artistArtwork = tracks.first.artworkUrl;
+    }
     return SpotifyImportResult(
       type: SpotifyLinkType.artist,
       title: displayName,
       subtitle: 'Top songs · ${tracks.length} tracks',
       tracks: tracks,
-      imageUrl: firstArtwork,
+      imageUrl: artistArtwork,
     );
   }
 
@@ -723,9 +749,11 @@ class SpotifyImportService {
     if (coverArt is Map) {
       final sources = coverArt['sources'];
       if (sources is List && sources.isNotEmpty) {
-        final last = sources.last;
-        if (last is Map && last['url'] is String) {
-          imageUrl = (last['url'] as String).trim();
+        for (final src in sources) {
+          if (src is Map && src['url'] is String && (src['url'] as String).trim().isNotEmpty) {
+            imageUrl = (src['url'] as String).trim();
+            break;
+          }
         }
       }
     }
@@ -733,13 +761,16 @@ class SpotifyImportService {
       final visualIdentity = entity['visualIdentity'];
       if (visualIdentity is Map && visualIdentity['image'] is List) {
         final images = visualIdentity['image'] as List;
-        if (images.isNotEmpty) {
-          final last = images.last;
-          if (last is Map && last['url'] is String) {
-            imageUrl = (last['url'] as String).trim();
+        for (final img in images) {
+          if (img is Map && img['url'] is String && (img['url'] as String).trim().isNotEmpty) {
+            imageUrl = (img['url'] as String).trim();
+            break;
           }
         }
       }
+    }
+    if (imageUrl.isEmpty) {
+      imageUrl = _extractArtworkFromMap(entity);
     }
 
     switch (link.type) {

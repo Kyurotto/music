@@ -90,18 +90,24 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
     _controller.preLocateExploreRadios(_dynamicPopularRadios);
     final isTest = !kIsWeb && Platform.environment.containsKey('FLUTTER_TEST');
     if (!isTest) {
-      _controller.autoDownloadExploreRadios([
-        ..._dynamicPopularRadios,
-        ...RadioDiscoveryService.instance.getOpmRadios(),
-        ...RadioDiscoveryService.instance.getGlobalRadios(),
-      ]);
+      Future.delayed(const Duration(milliseconds: 600), () {
+        if (mounted) {
+          _controller.autoDownloadExploreRadios([
+            ..._dynamicPopularRadios,
+            ...RadioDiscoveryService.instance.getOpmRadios(),
+            ...RadioDiscoveryService.instance.getGlobalRadios(),
+          ]);
+        }
+      });
     }
     _loadDynamicRadios();
   }
 
   Future<void> _loadDynamicRadios() async {
     if (_isLoadingDynamicRadios) return;
-    setState(() => _isLoadingDynamicRadios = true);
+    if (_dynamicPopularRadios.isEmpty) {
+      setState(() => _isLoadingDynamicRadios = true);
+    }
     try {
       // Start all three fetches together, but wait for the OPM/Global rows
       // too. Previously they completed after the rebuild, so those carousels
@@ -124,11 +130,15 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
         _controller.preLocateExploreRadios(stations);
         final isTest = !kIsWeb && Platform.environment.containsKey('FLUTTER_TEST');
         if (!isTest) {
-          _controller.autoDownloadExploreRadios([
-            ...stations,
-            ...opmStations,
-            ...globalStations,
-          ]);
+          Future.delayed(const Duration(milliseconds: 600), () {
+            if (mounted) {
+              _controller.autoDownloadExploreRadios([
+                ...stations,
+                ...opmStations,
+                ...globalStations,
+              ]);
+            }
+          });
         }
       }
     } catch (_) {

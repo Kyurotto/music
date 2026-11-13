@@ -87,6 +87,75 @@ void main() {
     expect(retrievedSongs[1]['is_preview'], isTrue);
   });
 
+  test(
+    'stale title deletion marker does not hide a playlist that is active in the database',
+    () async {
+      // Reproduces the "playlist disappears from Library after reopening the
+      // app" bug: an old delete left a title tombstone for user 2 while a
+      // newer, active import of the same title exists in the database.
+      const userId = '2';
+      const playlistId = 'playlist-active-with-stale-marker';
+
+      await LocalDatabase.instance.saveImportedPlaylistOffline(
+        id: playlistId,
+        userId: userId,
+        title: 'Flow G Radio',
+        songs: [
+          {
+            'id': 'flow-g-track-1',
+            'title': 'Track One',
+            'artist': 'Flow G',
+            'duration_ms': 180000,
+          },
+        ],
+      );
+
+      // Simulate a tombstone left over from a previous deletion.
+      await LocalDatabase.instance.setSetting(
+        'deleted_playlist_flow g radio_2',
+        'true',
+      );
+
+      final playlists = await LocalDatabase.instance
+          .getImportedPlaylistsForUser(userId);
+
+      expect(
+        playlists.any((p) => p['id'] == playlistId),
+        isTrue,
+        reason:
+            'An active playlist row must not be hidden by a stale title marker',
+      );
+    },
+  );
+
+  test(
+    're-importing a playlist clears the deletion marker for its owner id',
+    () async {
+      const userId = '2';
+      const playlistId = 'playlist-owner-marker-cleared';
+
+      await LocalDatabase.instance.setSetting(
+        'deleted_playlist_rock hits_2',
+        'true',
+      );
+
+      await LocalDatabase.instance.saveImportedPlaylistOffline(
+        id: playlistId,
+        userId: userId,
+        title: 'Rock Hits',
+        songs: const [],
+      );
+
+      expect(
+        await LocalDatabase.instance.getSetting('deleted_playlist_rock hits_2'),
+        isNull,
+        reason:
+            'Deliberate re-import must clear the owner-specific tombstone, '
+            'not only the hard-coded default_user/3/5/6 keys',
+      );
+    },
+  );
+
   test('getUnresolvedImportedSongs returns silent and preview tracks of every user', () async {
     Map<String, Object?> song(
       String id,
