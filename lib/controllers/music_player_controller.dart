@@ -39,9 +39,100 @@ class SpotifyPlaylistImportResult {
   });
 }
 
+class _DownloadTask {
+  final Song song;
+  final List<Song> playlistSongs;
+  final MusicPlaylist? playlist;
+  final String? title;
+  final String? subtitle;
+  final List<Completer<bool>> completers;
+
+  _DownloadTask({
+    required this.song,
+    required this.playlistSongs,
+    this.playlist,
+    this.title,
+    this.subtitle,
+    required this.completers,
+  });
+}
+
 class MusicPlayerController extends ChangeNotifier {
+  /// Files below this are treated as truncated/incomplete audio.
+  static const int _minimumAudioFileBytes = 50000;
+
+  /// Legacy 30-second preview cutoff. Kept for preview detection, but full
+  /// downloads smaller than this are now trusted when the database marks
+  /// them as non-preview.
+  static const int _previewFileSizeThreshold = 1600000;
+
+  /// Containers the downloader can produce. YouTube resolves to WebM/Opus
+  /// more often than M4A, so downloads keep the real container instead of
+  /// being renamed to `.m4a` and relying on the player to sniff it.
+  static const List<String> _audioExtensions = [
+    '.m4a',
+    '.mp3',
+    '.mp4',
+    '.aac',
+    '.wav',
+    '.ogg',
+    '.webm',
+    '.opus',
+    '.flac',
+  ];
+
+  /// Picks the on-disk extension for a downloaded stream.
+  ///
+  /// The response [contentType] wins when the server sends one; otherwise the
+  /// URL (including a `mime=` query parameter) is inspected. Falling back to
+  /// `.m4a` keeps older downloads discoverable.
+  static String _audioExtensionForUrl(String url, {String? contentType}) {
+    final mime = (contentType ?? '').toLowerCase().trim();
+    if (mime.isNotEmpty) {
+      if (mime.contains('audio/mpeg') && !mime.contains('audio/mp4')) {
+        return '.mp3';
+      }
+      if (mime.contains('audio/mp4') ||
+          mime.contains('audio/x-m4a') ||
+          mime.contains('audio/m4a')) {
+        return '.m4a';
+      }
+      if (mime.contains('audio/aac')) return '.aac';
+      if (mime.contains('audio/wav') || mime.contains('audio/x-wav')) {
+        return '.wav';
+      }
+      if (mime.contains('audio/flac') || mime.contains('audio/x-flac')) {
+        return '.flac';
+      }
+      if (mime.contains('audio/opus') || mime.contains('audio/ogg')) {
+        return '.ogg';
+      }
+      if (mime.contains('audio/webm') || mime.contains('video/webm')) {
+        return '.webm';
+      }
+    }
+
+    final lower = url.toLowerCase();
+    final mimeParam = RegExp(
+      r'[?&](?:mime|mimetype|type)=([^&]+)',
+    ).firstMatch(lower)?.group(1);
+    if (mimeParam != null && mimeParam.isNotEmpty) {
+      final decoded = Uri.decodeComponent(mimeParam);
+      // Guard against `type=audio`-style values that carry no container.
+      if (decoded.contains('/')) {
+        return _audioExtensionForUrl('', contentType: decoded);
+      }
+    }
+    for (final ext in _audioExtensions) {
+      if (lower.contains(ext)) return ext;
+    }
+    return '.m4a';
+  }
+
   final List<Song> _allSongs = [];
   final List<MusicPlaylist> _playlists = [];
+  final List<MusicPlaylist> _exploreRadioPlaylists = [];
+  final Set<String> _deletedPlaylistIds = <String>{};
   late final UnmodifiableListView<MusicPlaylist> _playlistsView =
       UnmodifiableListView<MusicPlaylist>(_playlists);
   late List<Song> _queue;
@@ -269,6 +360,7 @@ class MusicPlayerController extends ChangeNotifier {
 
   bool _allowExplicit = true;
   bool _visualizerEnabled = true;
+  bool _autoDownloadOnImport = true;
 
   /// False when the user enabled the Explicit Content Filter (i.e. the
   /// "Allow playback of explicit-rated content" switch is off).
@@ -276,6 +368,15 @@ class MusicPlayerController extends ChangeNotifier {
 
   /// Whether the animated audio wave visualizer should be rendered.
   bool get visualizerEnabled => _visualizerEnabled;
+
+  /// Whether newly imported playlists automatically begin downloading
+  /// with 3 concurrent workers for offline mode.
+  bool get autoDownloadOnImport => _autoDownloadOnImport;
+
+  set autoDownloadOnImport(bool value) {
+    _autoDownloadOnImport = value;
+    notifyListeners();
+  }
 
   void setAllowExplicit(bool allow, {bool save = true}) {
     if (_allowExplicit != allow) {
@@ -666,6 +767,21 @@ class MusicPlayerController extends ChangeNotifier {
     return _playlistsView;
   }
 
+  /// Helper to check if a playlist ID belongs to an internal Explore radio station.
+  static bool isExploreRadioPlaylist(String id) {
+    return id.startsWith('radio-') ||
+        id.startsWith('dailymix-') ||
+        id.startsWith('artist-');
+  }
+
+  /// Returns only user library playlists, strictly excluding Explore radio stations.
+  List<MusicPlaylist> get libraryPlaylists =>
+      _playlists.where((p) => !isExploreRadioPlaylist(p.id)).toList();
+
+  /// Returns active Explore radio playlists (which stay solely in Explore).
+  List<MusicPlaylist> get exploreRadioPlaylists =>
+      List.unmodifiable(_exploreRadioPlaylists);
+
   List<Song> get queue => _queue;
   int get currentIndex => _currentIndex;
   Song? get currentSong =>
@@ -738,6 +854,11 @@ class MusicPlayerController extends ChangeNotifier {
             );
           }
         }
+        return playlist;
+      }
+    }
+    for (final playlist in _exploreRadioPlaylists) {
+      if (playlist.id == playlistId) {
         return playlist;
       }
     }
@@ -1051,6 +1172,25 @@ class MusicPlayerController extends ChangeNotifier {
     // Persist imported playlist & tracks to local database for current user
     unawaited(_persistPlaylistToDb(playlist, spotifyUrl));
 
+    // Automatically start downloading imported tracks with 3 concurrent workers
+    // so the playlist is rapidly saved to SQLite and ready for offline playback.
+    if (_autoDownloadOnImport) {
+      final songsToDownload = newlyAdded.isNotEmpty
+          ? newlyAdded
+          : _allSongs.where((s) => playlist!.songIds.contains(s.id)).toList();
+      if (songsToDownload.isNotEmpty) {
+        unawaited(
+          downloadPlaylistSongs(
+            songsToDownload,
+            playlist: playlist,
+            title: playlist.title,
+            subtitle: playlist.subtitle,
+            maxConcurrentWorkers: 3,
+          ),
+        );
+      }
+    }
+
     return SpotifyPlaylistImportResult(
       playlistId: playlist.id,
       addedCount: added,
@@ -1123,6 +1263,20 @@ class MusicPlayerController extends ChangeNotifier {
     unawaited(_persistPlaylistToDb(playlist, null));
     // Fast-locate all radio tracks strictly via YouTube into full tracks immediately
     fastLocateRadioSongs(station.songs);
+
+    // Automatically start downloading imported radio station tracks with 3 concurrent workers
+    if (_autoDownloadOnImport && station.songs.isNotEmpty) {
+      unawaited(
+        downloadPlaylistSongs(
+          station.songs,
+          playlist: playlist,
+          title: playlist.title,
+          subtitle: playlist.subtitle,
+          maxConcurrentWorkers: 3,
+        ),
+      );
+    }
+
     notifyListeners();
     return playlist;
   }
@@ -1167,23 +1321,7 @@ class MusicPlayerController extends ChangeNotifier {
     final effectiveUserId = rawId.isEmpty ? 'default_user' : rawId;
     final playlistSongs = _allSongs
         .where((s) => playlist.songIds.contains(s.id))
-        .map(
-          (s) => <String, dynamic>{
-            'id': s.id,
-            'title': s.title,
-            'artist': s.artist,
-            'album': s.album,
-            'duration_ms': s.duration.inMilliseconds,
-            'image_url': s.imageUrl,
-            'audio_url': s.audioUrl,
-            'lyrics': s.lyrics,
-            'genre': s.genre,
-            'is_preview': s.isPreview ? 1 : 0,
-            'is_youtube_audio': s.isYouTubeAudio ? 1 : 0,
-            'youtube_video_id': s.youtubeVideoId,
-            'is_explicit': s.isExplicit ? 1 : 0,
-          },
-        )
+        .map(_songToImportedMap)
         .toList();
     await LocalDatabase.instance.saveImportedPlaylistOffline(
       id: playlist.id,
@@ -1288,15 +1426,18 @@ class MusicPlayerController extends ChangeNotifier {
 
           final cachedFile = await _findCachedAudioFile(songId);
           if (cachedFile != null) {
-            if (cachedFile.lengthSync() >= 1600000) {
+            if (await _isCompleteOfflineFile(songId, cachedFile)) {
               resolvedAudio = cachedFile.path;
               isPreview = false;
               isYouTubeAudio = false;
+              _downloadedSongIds.add(songId);
             } else {
-              // Delete incomplete or 30s preview clips (<1.6MB)
+              // Delete incomplete or 30s preview clips so the full track can
+              // resolve on the live network.
               try {
                 cachedFile.deleteSync();
               } catch (_) {}
+              _invalidateOfflineLookup(songId);
               resolvedAudio = '';
               isPreview = false;
               isYouTubeAudio = true;
@@ -1307,13 +1448,20 @@ class MusicPlayerController extends ChangeNotifier {
               !resolvedAudio.startsWith('assets/') &&
               !resolvedAudio.startsWith('asset:/')) {
             final f = File(resolvedAudio);
-            if (!f.existsSync() || f.lengthSync() < 1600000) {
+            final length = f.existsSync() ? f.lengthSync() : 0;
+            final isPreviewFile =
+                isPreview && length < _previewFileSizeThreshold;
+            if (!f.existsSync() ||
+                length < _minimumAudioFileBytes ||
+                isPreviewFile) {
               try {
                 if (f.existsSync()) f.deleteSync();
               } catch (_) {}
               resolvedAudio = '';
               isPreview = false;
               isYouTubeAudio = true;
+            } else {
+              _downloadedSongIds.add(songId);
             }
           }
 
@@ -1455,61 +1603,90 @@ class MusicPlayerController extends ChangeNotifier {
           }
         }
 
-        final existingPlaylistIdx = _playlists.indexWhere(
-          (p) =>
-              p.id == playlistId ||
-              _normalizeKey(p.title) == _normalizeKey(title) ||
-              isSameArtistPlaylist(p.title, title),
-        );
-        if (existingPlaylistIdx >= 0) {
-          final existing = _playlists[existingPlaylistIdx];
-          final resolvedImage = rawImageUrl.isNotEmpty
-              ? rawImageUrl
-              : _curatedCoverForTitle(existing.title);
-          if (resolvedImage.isNotEmpty && existing.imageUrl.isEmpty) {
-            existing.imageUrl = resolvedImage;
-            hasChanges = true;
-          }
-          final existingSongs = songsForPlaylist(existing.id);
-          for (final sid in songIds) {
-            if (existing.songIds.contains(sid)) continue;
-            final incomingSong = _allSongs
-                .where((s) => s.id == sid)
-                .firstOrNull;
-            if (incomingSong != null &&
-                existingSongs.any((s) => isSameSong(s, incomingSong))) {
-              continue;
-            }
-            existing.songIds.add(sid);
-            hasChanges = true;
-          }
-        } else {
-          final cleanSongIds = <String>[];
-          final seenKeys = <String>{};
-          for (final sid in songIds) {
-            final s = _allSongs.where((song) => song.id == sid).firstOrNull;
-            if (s != null) {
-              final vTags = TrackEnrichmentService.versionTags(
-                s.title,
-              ).join(',');
-              final key =
-                  '${_normalizeKey(s.title)}|${_normalizeKey(s.artist)}|$vTags';
-              if (!seenKeys.add(key)) continue;
-            }
-            if (!cleanSongIds.contains(sid)) cleanSongIds.add(sid);
-          }
-          final newPlaylist = MusicPlaylist(
-            id: playlistId,
-            title: title,
-            subtitle: subtitle,
-            gradient: colors,
-            songIds: cleanSongIds,
-            imageUrl: rawImageUrl.isNotEmpty
-                ? rawImageUrl
-                : _curatedCoverForTitle(title),
+        final isRadio = isExploreRadioPlaylist(playlistId);
+        if (isRadio) {
+          final existingExploreIdx = _exploreRadioPlaylists.indexWhere(
+            (p) => p.id == playlistId,
           );
-          _playlists.add(newPlaylist);
-          hasChanges = true;
+          if (existingExploreIdx >= 0) {
+            final existing = _exploreRadioPlaylists[existingExploreIdx];
+            for (final sid in songIds) {
+              if (!existing.songIds.contains(sid)) {
+                existing.songIds.add(sid);
+              }
+            }
+          } else {
+            _exploreRadioPlaylists.add(
+              MusicPlaylist(
+                id: playlistId,
+                title: title,
+                subtitle: subtitle,
+                gradient: colors,
+                songIds: songIds,
+                imageUrl: rawImageUrl.isNotEmpty
+                    ? rawImageUrl
+                    : _curatedCoverForTitle(title),
+              ),
+            );
+          }
+          _playlists.removeWhere((p) => p.id == playlistId);
+        } else {
+          final existingPlaylistIdx = _playlists.indexWhere(
+            (p) =>
+                p.id == playlistId ||
+                _normalizeKey(p.title) == _normalizeKey(title) ||
+                isSameArtistPlaylist(p.title, title),
+          );
+          if (existingPlaylistIdx >= 0) {
+            final existing = _playlists[existingPlaylistIdx];
+            final resolvedImage = rawImageUrl.isNotEmpty
+                ? rawImageUrl
+                : _curatedCoverForTitle(existing.title);
+            if (resolvedImage.isNotEmpty && existing.imageUrl.isEmpty) {
+              existing.imageUrl = resolvedImage;
+              hasChanges = true;
+            }
+            final existingSongs = songsForPlaylist(existing.id);
+            for (final sid in songIds) {
+              if (existing.songIds.contains(sid)) continue;
+              final incomingSong = _allSongs
+                  .where((s) => s.id == sid)
+                  .firstOrNull;
+              if (incomingSong != null &&
+                  existingSongs.any((s) => isSameSong(s, incomingSong))) {
+                continue;
+              }
+              existing.songIds.add(sid);
+              hasChanges = true;
+            }
+          } else {
+            final cleanSongIds = <String>[];
+            final seenKeys = <String>{};
+            for (final sid in songIds) {
+              final s = _allSongs.where((song) => song.id == sid).firstOrNull;
+              if (s != null) {
+                final vTags = TrackEnrichmentService.versionTags(
+                  s.title,
+                ).join(',');
+                final key =
+                    '${_normalizeKey(s.title)}|${_normalizeKey(s.artist)}|$vTags';
+                if (!seenKeys.add(key)) continue;
+              }
+              if (!cleanSongIds.contains(sid)) cleanSongIds.add(sid);
+            }
+            final newPlaylist = MusicPlaylist(
+              id: playlistId,
+              title: title,
+              subtitle: subtitle,
+              gradient: colors,
+              songIds: cleanSongIds,
+              imageUrl: rawImageUrl.isNotEmpty
+                  ? rawImageUrl
+                  : _curatedCoverForTitle(title),
+            );
+            _playlists.add(newPlaylist);
+            hasChanges = true;
+          }
         }
 
         final targetPl = playlistById(playlistId);
@@ -1671,14 +1848,7 @@ class MusicPlayerController extends ChangeNotifier {
             // Delete any cached file for this song so a stale karaoke
             // download cannot be resurrected after the URL is wiped.
             for (final dir in cacheDirs) {
-              for (final ext in const [
-                '.mp3',
-                '.m4a',
-                '.mp4',
-                '.aac',
-                '.wav',
-                '.ogg',
-              ]) {
+              for (final ext in _audioExtensions) {
                 try {
                   final f = File(p.join(dir.path, '${s.id}$ext'));
                   if (await f.exists()) await f.delete();
@@ -1812,6 +1982,31 @@ class MusicPlayerController extends ChangeNotifier {
 
       // Backfill missing song artworks across the entire library from iTunes
       _backfillMissingSongArtworks();
+
+      // Ensure internal Explore radio stations are never in the user's Library
+      _playlists.removeWhere((p) => isExploreRadioPlaylist(p.id));
+
+      // Automatically download saved playlists with undownloaded tracks using 3 workers
+      final isTestEnv =
+          !kIsWeb && Platform.environment.containsKey('FLUTTER_TEST');
+      if (_autoDownloadOnImport && !isTestEnv) {
+        for (final pl in _playlists) {
+          final plSongs =
+              _allSongs.where((s) => pl.songIds.contains(s.id)).toList();
+          final hasUndownloaded = plSongs.any((s) => !isSongDownloaded(s.id));
+          if (hasUndownloaded) {
+            unawaited(
+              downloadPlaylistSongs(
+                plSongs,
+                playlist: pl,
+                title: pl.title,
+                subtitle: pl.subtitle,
+                maxConcurrentWorkers: 3,
+              ),
+            );
+          }
+        }
+      }
     } catch (e) {
       debugPrint('[MusicPlayerController] loadSavedPlaylists skipped: $e');
     }
@@ -1822,9 +2017,17 @@ class MusicPlayerController extends ChangeNotifier {
     if (index < 0) return false;
     final deletedPlaylist = _playlists.removeAt(index);
     final deletedTitle = deletedPlaylist.title;
+    _deletedPlaylistIds.add(playlistId);
+    _deletedPlaylistIds.add(_normalizeKey(deletedTitle));
 
     // Also remove any duplicate or same-artist playlist variations from memory
     _playlists.removeWhere(
+      (p) =>
+          p.id == playlistId ||
+          _normalizeKey(p.title) == _normalizeKey(deletedTitle) ||
+          isSameArtistPlaylist(p.title, deletedTitle),
+    );
+    _exploreRadioPlaylists.removeWhere(
       (p) =>
           p.id == playlistId ||
           _normalizeKey(p.title) == _normalizeKey(deletedTitle) ||
@@ -2764,16 +2967,16 @@ class MusicPlayerController extends ChangeNotifier {
             if (f is File) {
               final name = p.basename(f.path);
               final ext = p.extension(name).toLowerCase();
-              if (const [
-                    '.mp3',
-                    '.m4a',
-                    '.mp4',
-                    '.aac',
-                    '.wav',
-                    '.ogg',
-                  ].contains(ext) &&
-                  f.lengthSync() > 1024) {
-                _downloadedSongIds.add(p.basenameWithoutExtension(name));
+              if (!_audioExtensions.contains(ext)) continue;
+              final length = f.lengthSync();
+              if (length < _minimumAudioFileBytes) continue;
+              final songId = p.basenameWithoutExtension(name);
+              // Large files are trustworthy by size alone; smaller ones must
+              // be confirmed by the database so short full tracks survive a
+              // restart while 30s previews stay out of the downloaded set.
+              if (length >= _previewFileSizeThreshold ||
+                  await _isCompleteOfflineFile(songId, f)) {
+                _downloadedSongIds.add(songId);
               }
             }
           }
@@ -2782,7 +2985,7 @@ class MusicPlayerController extends ChangeNotifier {
 
       for (final s in _allSongs.where(
         (s) =>
-            (s.id.startsWith('spotify-') || s.id.startsWith('itunes-')) &&
+            _isDownloadableCatalogId(s.id) &&
             (!s.hasAudio ||
                 s.isPreview ||
                 !s.audioUrl.contains('offline_audio')),
@@ -2792,20 +2995,20 @@ class MusicPlayerController extends ChangeNotifier {
           final cached = await _findCachedAudioFile(s.id);
           if (cached != null &&
               cached.existsSync() &&
-              cached.lengthSync() > 1024) {
+              await _isCompleteOfflineFile(s.id, cached)) {
             _downloadedSongIds.add(s.id);
             final wasPreview = s.isPreview;
             s.audioUrl = cached.path;
-            s.isPreview = cached.lengthSync() < 1600000 && s.isPreview;
+            s.isPreview = false;
             s.isYouTubeAudio = false;
             _syncSongPathToQueueAndDb(s);
-            if (wasPreview != s.isPreview) {
+            if (wasPreview) {
               unawaited(
                 LocalDatabase.instance
                     .updateImportedSong(
                       id: s.id,
                       audioUrl: cached.path,
-                      isPreview: s.isPreview,
+                      isPreview: false,
                       isYouTubeAudio: false,
                       durationMs: s.duration.inMilliseconds,
                     )
@@ -2867,12 +3070,7 @@ class MusicPlayerController extends ChangeNotifier {
     String? failedUrl,
     String? failedVideoId,
   }) async {
-    final isImported =
-        song.id.startsWith('spotify-') ||
-        song.id.startsWith('itunes-') ||
-        song.id.startsWith('radio-') ||
-        song.id.startsWith('dm-') ||
-        song.id.startsWith('recent-');
+    final isImported = _isDownloadableCatalogId(song.id);
     if (!isImported) {
       // Local/bundled tracks have no full-track catalog to search.
       try {
@@ -2923,14 +3121,21 @@ class MusicPlayerController extends ChangeNotifier {
     }
   }
 
+  static bool _isDownloadableCatalogId(String id) {
+    return id.startsWith('spotify-') ||
+        id.startsWith('itunes-') ||
+        id.startsWith('radio-') ||
+        id.startsWith('artist-') ||
+        id.startsWith('dyn-') ||
+        id.startsWith('discovery-') ||
+        id.startsWith('dm-') ||
+        id.startsWith('recent-');
+  }
+
   /// Catalog tracks are resolved strictly via YouTube. Local/bundled tracks
   /// keep their own audio and must never be searched on YouTube.
   static bool _isYouTubeCatalogSong(Song song) {
-    return song.id.startsWith('spotify-') ||
-        song.id.startsWith('itunes-') ||
-        song.id.startsWith('radio-') ||
-        song.id.startsWith('dm-') ||
-        song.id.startsWith('recent-');
+    return _isDownloadableCatalogId(song.id);
   }
 
   Future<void> _enrichOneSong(
@@ -2957,7 +3162,8 @@ class MusicPlayerController extends ChangeNotifier {
       // attach it immediately with 0ms network latency.
       final cached = await _findCachedAudioFile(song.id);
       if (cached != null && cached.existsSync()) {
-        if (cached.lengthSync() >= 1600000) {
+        if (await _isCompleteOfflineFile(song.id, cached)) {
+          _downloadedSongIds.add(song.id);
           final changed = _applyEnrichment(
             song,
             TrackEnrichment(previewUrl: cached.path, isFullTrack: true),
@@ -2966,10 +3172,12 @@ class MusicPlayerController extends ChangeNotifier {
           if (changed) notifyListeners();
           return;
         } else {
-          // Purge 30s preview clip (<1.6MB)
+          // Purge 30s previews and truncated files so the full track can
+          // resolve from the network.
           try {
             cached.deleteSync();
           } catch (_) {}
+          _invalidateOfflineLookup(song.id);
         }
       }
 
@@ -3080,12 +3288,7 @@ class MusicPlayerController extends ChangeNotifier {
   bool _applyEnrichment(Song song, TrackEnrichment enrichment) {
     var changed = false;
 
-    final isImported =
-        song.id.startsWith('spotify-') ||
-        song.id.startsWith('itunes-') ||
-        song.id.startsWith('radio-') ||
-        song.id.startsWith('dm-') ||
-        song.id.startsWith('recent-');
+    final isImported = _isDownloadableCatalogId(song.id);
     final isFallbackAudio = _offlineFallbackIds.contains(song.id);
     final isM3u8 =
         enrichment.previewUrl?.toLowerCase().contains('.m3u8') ?? false;
@@ -3188,8 +3391,7 @@ class MusicPlayerController extends ChangeNotifier {
     }
 
     if (changed &&
-        (song.id.startsWith('spotify-') ||
-            song.id.startsWith('itunes-') ||
+        (_isDownloadableCatalogId(song.id) ||
             song.id.startsWith('discovery-'))) {
       try {
         final dbAudioUrl =
@@ -3226,6 +3428,10 @@ class MusicPlayerController extends ChangeNotifier {
     return changed;
   }
 
+  static const int _maxConcurrentDownloadWorkers = 3;
+  int _activeDownloadWorkers = 0;
+  final List<_DownloadTask> _downloadQueue = [];
+  final Map<String, List<Completer<bool>>> _inFlightCompleters = {};
   final Set<String> _cachingIds = {};
   final Set<String> _downloadedSongIds = {};
 
@@ -3259,8 +3465,10 @@ class MusicPlayerController extends ChangeNotifier {
     return false;
   }
 
-  /// Synchronously checks if a song is currently downloading.
-  bool isSongDownloading(String songId) => _cachingIds.contains(songId);
+  /// Synchronously checks if a song is currently downloading or waiting in the 3-worker queue.
+  bool isSongDownloading(String songId) =>
+      _cachingIds.contains(songId) ||
+      _downloadQueue.any((t) => t.song.id == songId);
 
   /// Synchronously checks if all songs in a playlist are downloaded.
   bool isPlaylistFullyDownloaded(List<Song> songs) {
@@ -3270,7 +3478,7 @@ class MusicPlayerController extends ChangeNotifier {
 
   /// Synchronously checks if any song in a playlist is currently downloading.
   bool isPlaylistDownloading(List<Song> songs) {
-    return songs.any((s) => _cachingIds.contains(s.id));
+    return songs.any((s) => isSongDownloading(s.id));
   }
 
   Future<Directory> _getPrimaryOfflineDirectory() async {
@@ -3309,6 +3517,11 @@ class MusicPlayerController extends ChangeNotifier {
   static List<Directory>? _staticOfflineDirs;
   static final Map<String, File?> _staticAudioLookupMemo = {};
 
+  static final String _systemTempOfflineDir = p.join(
+    Directory.systemTemp.path,
+    'pulse_music_offline',
+  );
+
   static final List<String> _knownFallbackDirs = [
     if (!kIsWeb && Platform.isAndroid) ...[
       '/data/user/0/com.example.music/files/offline_audio',
@@ -3319,6 +3532,7 @@ class MusicPlayerController extends ChangeNotifier {
       '/data/data/com.example.music/files',
     ],
     'offline_audio',
+    _systemTempOfflineDir,
   ];
 
   static File? findCachedAudioFileSync(String songId) {
@@ -3339,14 +3553,7 @@ class MusicPlayerController extends ChangeNotifier {
     for (final dir in dirs) {
       try {
         if (!dir.existsSync()) continue;
-        for (final ext in const [
-          '.m4a',
-          '.mp3',
-          '.mp4',
-          '.aac',
-          '.wav',
-          '.ogg',
-        ]) {
+        for (final ext in _audioExtensions) {
           final f = File(p.join(dir.path, '$songId$ext'));
           if (f.existsSync() && f.lengthSync() > 1024) {
             _staticAudioLookupMemo[songId] = f;
@@ -3387,6 +3594,7 @@ class MusicPlayerController extends ChangeNotifier {
       dirs.add(Directory(p.join(temp.path, 'offline_audio')));
       dirs.add(temp);
     } catch (_) {}
+    dirs.add(Directory(_systemTempOfflineDir));
     _offlineDirCache = dirs;
     _staticOfflineDirs = dirs;
     // Any lookup made before the candidate directories were known could not
@@ -3409,6 +3617,43 @@ class MusicPlayerController extends ChangeNotifier {
     }
   }
 
+  /// True when [file] is a complete offline download rather than a 30-second
+  /// preview or a truncated stream. Files at/above the legacy preview cutoff
+  /// are always trusted; smaller files are trusted only when the database
+  /// records this exact path as a non-preview download.
+  Future<bool> _isCompleteOfflineFile(String songId, File file) async {
+    try {
+      final length = await file.length();
+      if (length < _minimumAudioFileBytes) return false;
+      if (length >= _previewFileSizeThreshold) return true;
+      final row = await LocalDatabase.instance.getImportedSong(songId);
+      if (row == null) return false;
+      final isPreview = (row['is_preview'] as int? ?? 0) == 1;
+      if (isPreview) return false;
+      final audioUrl = (row['audio_url'] as String? ?? '').trim();
+      if (audioUrl.isEmpty) return true;
+      return p.equals(audioUrl, file.path) ||
+          p.basename(audioUrl).toLowerCase() ==
+              p.basename(file.path).toLowerCase();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// A fresh network resolve is needed when the stored URL is empty, expired,
+  /// an HLS playlist, a local path, or a known preview URL.
+  bool _needsFreshDownloadUrl(Song song, String url) {
+    if (url.isEmpty) return true;
+    final lower = url.toLowerCase();
+    if (lower.contains('.m3u8')) return true;
+    if (_isGoogleVideoExpired(url)) return true;
+    if (!url.startsWith('http://') && !url.startsWith('https://')) return true;
+    // A preview is never a permanent download, even when it is a live
+    // googlevideo URL: try to resolve the full track first.
+    if (song.isPreview) return true;
+    return false;
+  }
+
   Future<File?> _findCachedAudioFile(String songId) async {
     final memo = _audioLookupMemo[songId];
     if (memo != null || _audioLookupMemo.containsKey(songId)) {
@@ -3419,14 +3664,7 @@ class MusicPlayerController extends ChangeNotifier {
     for (final dir in dirs) {
       try {
         if (!await dir.exists()) continue;
-        for (final ext in const [
-          '.m4a',
-          '.mp3',
-          '.mp4',
-          '.aac',
-          '.wav',
-          '.ogg',
-        ]) {
+        for (final ext in _audioExtensions) {
           final f = File(p.join(dir.path, '$songId$ext'));
           if (await f.exists()) {
             final len = await f.length();
@@ -3885,15 +4123,22 @@ class MusicPlayerController extends ChangeNotifier {
     // 1. Check if a valid local offline file already exists
     final cached = await _findCachedAudioFile(song.id);
     if (cached != null) {
-      _downloadedSongIds.add(song.id);
-      if (song.audioUrl != cached.path) {
-        song.audioUrl = cached.path;
-        song.isPreview = cached.lengthSync() < 1600000 && song.isPreview;
-        song.isYouTubeAudio = false;
-        _syncSongPathToQueueAndDb(song);
-        notifyListeners();
+      if (!await _isCompleteOfflineFile(song.id, cached)) {
+        try {
+          await cached.delete();
+        } catch (_) {}
+        _invalidateOfflineLookup(song.id);
+      } else {
+        _downloadedSongIds.add(song.id);
+        if (song.audioUrl != cached.path) {
+          song.audioUrl = cached.path;
+          song.isPreview = false;
+          song.isYouTubeAudio = false;
+          _syncSongPathToQueueAndDb(song);
+          notifyListeners();
+        }
+        return;
       }
-      return;
     }
 
     // Don't download over mobile data unless the user allowed it.
@@ -3948,12 +4193,6 @@ class MusicPlayerController extends ChangeNotifier {
           : TrackEnrichmentService.browserUserAgent;
 
       final uri = Uri.parse(urlToDownload);
-      final ext =
-          (urlToDownload.toLowerCase().contains('.mp3') ||
-              urlToDownload.contains('audio/mpeg'))
-          ? '.mp3'
-          : '.m4a';
-      final targetFile = File(p.join(offlineDir.path, '${song.id}$ext'));
       final tempFile = File(p.join(offlineDir.path, '${song.id}.tmp'));
 
       final request = http.Request('GET', uri);
@@ -3976,7 +4215,12 @@ class MusicPlayerController extends ChangeNotifier {
           await sink.close();
 
           final downloadedBytes = await tempFile.length();
-          if (downloadedBytes >= 1600000) {
+          if (downloadedBytes >= _minimumAudioFileBytes) {
+            final ext = _audioExtensionForUrl(
+              urlToDownload,
+              contentType: streamedResponse.headers['content-type'],
+            );
+            final targetFile = File(p.join(offlineDir.path, '${song.id}$ext'));
             if (await targetFile.exists()) {
               try {
                 await targetFile.delete();
@@ -4095,7 +4339,8 @@ class MusicPlayerController extends ChangeNotifier {
         s.duration = song.duration;
       }
     }
-    if (song.id.startsWith('spotify-') || song.id.startsWith('itunes-')) {
+    if (_isDownloadableCatalogId(song.id) ||
+        song.id.startsWith('discovery-')) {
       try {
         final dbAudioUrl =
             (song.audioUrl.contains('googlevideo.com') ||
@@ -4121,22 +4366,33 @@ class MusicPlayerController extends ChangeNotifier {
 
   /// Downloads a song to the local offline directory for permanent offline playback.
   /// Resolves the stream if needed, saves audio and artwork, and updates local database.
+  ///
+  /// Full tracks only by default: preview clips are not stored as permanent
+  /// downloads. Set [allowPreviewFallback] only when a caller explicitly
+  /// accepts a 30-second clip.
   Future<bool> downloadSong(
     Song song, {
-    bool allowPreviewFallback = true,
+    bool allowPreviewFallback = false,
   }) async {
-    // 1. Check if a valid local offline file already exists
+    // 1. Check if a valid local offline file already exists. A stale preview
+    //    or truncated file is removed so the full track can be fetched below.
     final cached = await _findCachedAudioFile(song.id);
-    if (cached != null && cached.existsSync() && cached.lengthSync() > 1024) {
-      _downloadedSongIds.add(song.id);
-      if (song.audioUrl != cached.path) {
-        song.audioUrl = cached.path;
-        song.isPreview = cached.lengthSync() < 1600000 && song.isPreview;
-        song.isYouTubeAudio = false;
-        _syncSongPathToQueueAndDb(song);
-        notifyListeners();
+    if (cached != null && cached.existsSync()) {
+      if (await _isCompleteOfflineFile(song.id, cached)) {
+        _downloadedSongIds.add(song.id);
+        if (song.audioUrl != cached.path) {
+          song.audioUrl = cached.path;
+          song.isPreview = false;
+          song.isYouTubeAudio = false;
+          _syncSongPathToQueueAndDb(song);
+          notifyListeners();
+        }
+        return true;
       }
-      return true;
+      try {
+        await cached.delete();
+      } catch (_) {}
+      _invalidateOfflineLookup(song.id);
     }
 
     // Don't download over mobile data unless the user allowed it.
@@ -4151,21 +4407,33 @@ class MusicPlayerController extends ChangeNotifier {
 
     try {
       final offlineDir = await _getPrimaryOfflineDirectory();
-      String urlToDownload = song.audioUrl;
+      var urlToDownload = song.audioUrl;
+      var previewOnly = song.isPreview;
 
-      // If the URL is empty or expired, resolve fresh full or preview stream
-      if (urlToDownload.isEmpty ||
-          urlToDownload.toLowerCase().contains('.m3u8') ||
-          _isGoogleVideoExpired(urlToDownload) ||
-          (song.isPreview && !urlToDownload.contains('googlevideo.com'))) {
+      // Reuse the controller's shared enrichment pass so a download and a
+      // concurrent playback/radio lookup never resolve the same track twice
+      // (duplicate searches were a major source of YouTube throttling).
+      if (_needsFreshDownloadUrl(song, urlToDownload)) {
+        try {
+          await _ensureEnrichment(song, fastImport: true)
+              .timeout(const Duration(seconds: 45));
+        } catch (_) {}
+        urlToDownload = song.audioUrl;
+        previewOnly = song.isPreview;
+      }
+
+      // Preview fallback is opt-in only. Catalog downloads stay full-track so
+      // a 30s clip is never stored as if it were a permanent download.
+      if (_needsFreshDownloadUrl(song, urlToDownload) &&
+          allowPreviewFallback) {
         try {
           final enrichment = await _enrichment.enrichTrack(
             title: song.title,
             artist: song.artist,
             album: song.album,
             duration: song.duration,
-            previewFallbackOnly: false,
-            allowPreviewFallback: allowPreviewFallback,
+            previewFallbackOnly: true,
+            allowPreviewFallback: true,
             prioritizeYouTube: true,
             youtubeOnly: _isYouTubeCatalogSong(song),
           );
@@ -4174,9 +4442,20 @@ class MusicPlayerController extends ChangeNotifier {
               !enrichment.previewUrl!.toLowerCase().contains('.m3u8') &&
               enrichment.previewUrl!.startsWith('http')) {
             urlToDownload = enrichment.previewUrl!;
-            _applyEnrichment(song, enrichment);
+            previewOnly = !enrichment.isFullTrack;
           }
         } catch (_) {}
+      }
+
+      // Never persist a 30-second clip as a permanent download unless the
+      // caller explicitly opted in. This also covers previews that were
+      // already attached with a live googlevideo URL before the download.
+      if (previewOnly && !allowPreviewFallback) {
+        _logDiag(
+          'downloadSong skipped: only a preview stream is available',
+          song: song,
+        );
+        return false;
       }
 
       if (urlToDownload.isEmpty ||
@@ -4192,12 +4471,6 @@ class MusicPlayerController extends ChangeNotifier {
           : TrackEnrichmentService.browserUserAgent;
 
       final uri = Uri.parse(urlToDownload);
-      final ext =
-          (urlToDownload.toLowerCase().contains('.mp3') ||
-              urlToDownload.contains('audio/mpeg'))
-          ? '.mp3'
-          : '.m4a';
-      final targetFile = File(p.join(offlineDir.path, '${song.id}$ext'));
       final tempFile = File(p.join(offlineDir.path, '${song.id}.tmp'));
 
       final request = http.Request('GET', uri);
@@ -4220,7 +4493,12 @@ class MusicPlayerController extends ChangeNotifier {
           await sink.close();
 
           final downloadedBytes = await tempFile.length();
-          if (downloadedBytes >= 50000) {
+          if (downloadedBytes >= _minimumAudioFileBytes) {
+            final ext = _audioExtensionForUrl(
+              urlToDownload,
+              contentType: streamedResponse.headers['content-type'],
+            );
+            final targetFile = File(p.join(offlineDir.path, '${song.id}$ext'));
             if (await targetFile.exists()) {
               try {
                 await targetFile.delete();
@@ -4232,7 +4510,7 @@ class MusicPlayerController extends ChangeNotifier {
             LocalDatabase.notifyAudioCacheChanged();
 
             song.audioUrl = targetFile.path;
-            song.isPreview = downloadedBytes < 1600000 && song.isPreview;
+            song.isPreview = previewOnly;
             song.isYouTubeAudio = false;
             _syncSongPathToQueueAndDb(song);
             _locatingStatusVersion++;
@@ -4241,24 +4519,42 @@ class MusicPlayerController extends ChangeNotifier {
               '[MusicPlayerController] Successfully downloaded ${song.title} ($downloadedBytes bytes) to: ${targetFile.path}',
             );
 
-            // Persist to local SQLite database so offline playback works permanently
-            unawaited(
-              LocalDatabase.instance
-                  .updateImportedSong(
-                    id: song.id,
-                    audioUrl: targetFile.path,
-                    isPreview: song.isPreview,
-                    isYouTubeAudio: false,
-                    durationMs: song.duration.inMilliseconds,
-                    imageUrl: song.imageUrl,
-                    lyrics: song.lyrics,
-                  )
-                  .catchError((e) {
-                    debugPrint(
-                      '[MusicPlayerController] updateImportedSong error: $e',
-                    );
-                  }),
-            );
+            // Persist to local SQLite before reporting success. Radio and
+            // discovery tracks may not have a row yet, so insert first and
+            // then point that row at the downloaded file.
+            try {
+              final db = LocalDatabase.instance;
+              await db.ensureImportedSong(
+                id: song.id,
+                title: song.title,
+                artist: song.artist,
+                album: song.album,
+                durationMs: song.duration.inMilliseconds,
+                imageUrl: song.imageUrl,
+                lyrics: song.lyrics,
+                genre: song.genre,
+                isPreview: song.isPreview,
+                isYouTubeAudio: false,
+                youtubeVideoId: song.youtubeVideoId,
+                isExplicit: song.isExplicit,
+              );
+              await db.updateImportedSong(
+                id: song.id,
+                audioUrl: targetFile.path,
+                isPreview: song.isPreview,
+                isYouTubeAudio: false,
+                youtubeVideoId: song.youtubeVideoId.isNotEmpty
+                    ? song.youtubeVideoId
+                    : null,
+                durationMs: song.duration.inMilliseconds,
+                imageUrl: song.imageUrl,
+                lyrics: song.lyrics,
+              );
+            } catch (e) {
+              debugPrint(
+                '[MusicPlayerController] persist download error: $e',
+              );
+            }
 
             // Also cache artwork locally if available
             if (song.imageUrl.startsWith('http')) {
@@ -4318,18 +4614,438 @@ class MusicPlayerController extends ChangeNotifier {
     }
   }
 
-  /// Downloads all pending songs in a playlist sequentially with responsive updates.
-  Future<void> downloadPlaylistSongs(List<Song> songs) async {
-    final toDownload = songs
-        .where((s) => !isSongDownloaded(s.id) && !_cachingIds.contains(s.id))
-        .toList();
-    if (toDownload.isEmpty) return;
+  Completer<void>? _persistDownloadLock;
 
-    for (final song in toDownload) {
-      if (_disposed) return;
-      await downloadSong(song);
-      await Future.delayed(const Duration(milliseconds: 150));
+  Future<void> _safePersistDownloadTarget(
+    List<Song> songs, {
+    MusicPlaylist? playlist,
+    String? title,
+    String? subtitle,
+  }) async {
+    while (_persistDownloadLock != null) {
+      try {
+        await _persistDownloadLock!.future;
+      } catch (_) {}
     }
+    final lock = Completer<void>();
+    _persistDownloadLock = lock;
+    try {
+      await _persistDownloadTarget(
+        songs,
+        playlist: playlist,
+        title: title,
+        subtitle: subtitle,
+      );
+    } finally {
+      if (_persistDownloadLock == lock) {
+        _persistDownloadLock = null;
+      }
+      if (!lock.isCompleted) {
+        lock.complete();
+      }
+    }
+  }
+
+  /// Downloads all pending songs in a playlist concurrently using [maxConcurrentWorkers]
+  /// parallel download workers (defaults to 3), progressively persisting completed tracks
+  /// directly to the local SQLite database so offline playback is immediately available.
+  ///
+  /// The playlist is persisted before the first download so radio, artist,
+  /// and discovery playlists (which normally live only in memory) are restored
+  /// with their downloaded files after a restart.
+  ///
+  /// Returns how many tracks are available offline when the pass finishes.
+  Future<int> downloadPlaylistSongs(
+    List<Song> songs, {
+    MusicPlaylist? playlist,
+    String? title,
+    String? subtitle,
+    int maxConcurrentWorkers = 3,
+  }) async {
+    final distinct = <Song>[];
+    final seen = <String>{};
+    for (final song in songs) {
+      if (seen.add(song.id)) distinct.add(song);
+    }
+    if (distinct.isEmpty) return 0;
+
+    await _safePersistDownloadTarget(
+      distinct,
+      playlist: playlist,
+      title: title,
+      subtitle: subtitle,
+    );
+
+    var available = 0;
+    final completers = <Completer<bool>>[];
+
+    for (final song in distinct) {
+      if (isSongDownloaded(song.id)) {
+        available++;
+        continue;
+      }
+
+      final completer = Completer<bool>();
+      completers.add(completer);
+
+      if (_cachingIds.contains(song.id)) {
+        _inFlightCompleters.putIfAbsent(song.id, () => []).add(completer);
+        continue;
+      }
+
+      final existingTask =
+          _downloadQueue.where((t) => t.song.id == song.id).firstOrNull;
+      if (existingTask != null) {
+        existingTask.completers.add(completer);
+      } else {
+        _downloadQueue.add(
+          _DownloadTask(
+            song: song,
+            playlistSongs: distinct,
+            playlist: playlist,
+            title: title,
+            subtitle: subtitle,
+            completers: [completer],
+          ),
+        );
+      }
+    }
+
+    _processDownloadQueue();
+
+    if (completers.isNotEmpty) {
+      final results = await Future.wait(completers.map((c) => c.future));
+      available += results.where((ok) => ok).length;
+    }
+
+    await _safePersistDownloadTarget(
+      distinct,
+      playlist: playlist,
+      title: title,
+      subtitle: subtitle,
+    );
+    return available;
+  }
+
+  void _processDownloadQueue() {
+    if (_disposed) return;
+    while (_activeDownloadWorkers < _maxConcurrentDownloadWorkers &&
+        _downloadQueue.isNotEmpty) {
+      _activeDownloadWorkers++;
+      final task = _downloadQueue.removeAt(0);
+      _runDownloadWorker(task);
+    }
+  }
+
+  Future<void> _runDownloadWorker(_DownloadTask task) async {
+    final song = task.song;
+    var success = false;
+    try {
+      if (isSongDownloaded(song.id)) {
+        success = true;
+      } else {
+        success = await downloadSong(song);
+      }
+    } catch (e) {
+      debugPrint(
+        '[MusicPlayerController] worker download error for ${song.title}: $e',
+      );
+      success = false;
+    } finally {
+      for (final c in task.completers) {
+        if (!c.isCompleted) c.complete(success);
+      }
+      final inFlight = _inFlightCompleters.remove(song.id);
+      if (inFlight != null) {
+        for (final c in inFlight) {
+          if (!c.isCompleted) c.complete(success);
+        }
+      }
+
+      if (success && !_disposed) {
+        await _safePersistDownloadTarget(
+          task.playlistSongs,
+          playlist: task.playlist,
+          title: task.title,
+          subtitle: task.subtitle,
+        );
+      }
+
+      _activeDownloadWorkers--;
+      _processDownloadQueue();
+    }
+  }
+
+  /// Automatically downloads and persists the songs in Explore radio playlists
+  /// using 3 parallel workers so they are available offline and saved in the SQLite database.
+  void autoDownloadExploreRadios(List<RadioStation> stations) {
+    if (stations.isEmpty || _disposed || !_autoDownloadOnImport) return;
+    for (final st in stations) {
+      if (st.songs.isEmpty) continue;
+      unawaited(
+        downloadPlaylistSongs(
+          st.songs,
+          playlist: st.toPlaylist(),
+          title: st.title,
+          subtitle: st.subtitle,
+          maxConcurrentWorkers: 3,
+        ),
+      );
+    }
+  }
+
+  /// Moves the given songs to the front of the download queue so the screen the user
+  /// is currently viewing downloads first with the 3 workers.
+  void prioritizePlaylistDownloads(List<Song> songs) {
+    if (songs.isEmpty || _downloadQueue.isEmpty) return;
+    final ids = songs.map((s) => s.id).toSet();
+    final prioritized = <_DownloadTask>[];
+    final remaining = <_DownloadTask>[];
+    for (final task in _downloadQueue) {
+      if (ids.contains(task.song.id)) {
+        prioritized.add(task);
+      } else {
+        remaining.add(task);
+      }
+    }
+    if (prioritized.isNotEmpty) {
+      _downloadQueue
+        ..clear()
+        ..addAll(prioritized)
+        ..addAll(remaining);
+    }
+  }
+
+  /// Downloads playlist songs using [workerCount] concurrent workers (defaults to 3)
+  /// for high-speed offline caching and immediate SQLite database persistence.
+  Future<int> downloadPlaylistWithWorkers(
+    List<Song> songs, {
+    MusicPlaylist? playlist,
+    String? title,
+    String? subtitle,
+    int workerCount = 3,
+  }) {
+    return downloadPlaylistSongs(
+      songs,
+      playlist: playlist,
+      title: title,
+      subtitle: subtitle,
+      maxConcurrentWorkers: workerCount,
+    );
+  }
+
+  /// Downloads all songs for a specific playlist ID using 3 parallel workers.
+  Future<int> downloadPlaylistById(
+    String playlistId, {
+    int workerCount = 3,
+  }) async {
+    final playlist = playlistById(playlistId);
+    if (playlist == null) return 0;
+    final songs =
+        _allSongs.where((s) => playlist.songIds.contains(s.id)).toList();
+    return downloadPlaylistSongs(
+      songs,
+      playlist: playlist,
+      title: playlist.title,
+      subtitle: playlist.subtitle,
+      maxConcurrentWorkers: workerCount,
+    );
+  }
+
+  /// Persists a playlist from a download action and returns whether the track
+  /// is available offline afterwards. Used by the per-song download buttons so
+  /// a single radio/discovery download is still reachable after a restart.
+  Future<bool> downloadPlaylistSong(
+    Song song, {
+    MusicPlaylist? playlist,
+    List<Song>? songs,
+    String? title,
+    String? subtitle,
+  }) async {
+    final context = <Song>[...?songs, song];
+    await _safePersistDownloadTarget(
+      context,
+      playlist: playlist,
+      title: title,
+      subtitle: subtitle,
+    );
+    final success = await downloadSong(song);
+    if (success) {
+      await _safePersistDownloadTarget(
+        context,
+        playlist: playlist,
+        title: title,
+        subtitle: subtitle,
+      );
+    }
+    return success;
+  }
+
+  /// Saves the playlist + its songs to local SQLite before downloading.
+  ///
+  /// [playlist] is used for radio/artist/daily-mix screens. Discovery sections
+  /// pass only [title]/[subtitle], in which case a stable `download-*` playlist
+  /// is created (or an existing same-title playlist is reused).
+  Future<void> _persistDownloadTarget(
+    List<Song> songs, {
+    MusicPlaylist? playlist,
+    String? title,
+    String? subtitle,
+  }) async {
+    if (songs.isEmpty) return;
+    try {
+      final rawUserId = (_loadedUserId != null && _loadedUserId!.isNotEmpty)
+          ? _loadedUserId!
+          : (AuthService.instance.currentUserId.isNotEmpty
+              ? AuthService.instance.currentUserId
+              : 'default_user');
+      final userId = rawUserId;
+
+      MusicPlaylist target;
+      if (playlist != null) {
+        target =
+            playlistById(playlist.id) ??
+            _playlistByTitle(playlist.title) ??
+            playlist;
+        if (_deletedPlaylistIds.contains(target.id) ||
+            _deletedPlaylistIds.contains(_normalizeKey(target.title)) ||
+            await LocalDatabase.instance.isPlaylistDeleted(
+              target.id,
+              title: target.title,
+              userId: userId,
+            )) {
+          return;
+        }
+        if (isExploreRadioPlaylist(target.id)) {
+          if (!_exploreRadioPlaylists.any((p) => p.id == target.id)) {
+            _exploreRadioPlaylists.add(target);
+          }
+          _playlists.removeWhere((p) => p.id == target.id);
+        } else if (!_playlists.any((p) => p.id == target.id)) {
+          _playlists.add(target);
+        }
+      } else {
+        final cleanTitle = (title ?? '').trim();
+        if (cleanTitle.isEmpty) return;
+        if (_deletedPlaylistIds.contains(_normalizeKey(cleanTitle))) return;
+        final existing = _playlistByTitle(cleanTitle);
+        if (existing != null) {
+          target = existing;
+        } else {
+          final pId = _downloadPlaylistId(cleanTitle);
+          target = MusicPlaylist(
+            id: pId,
+            title: cleanTitle,
+            subtitle: (subtitle ?? '').trim().isEmpty
+                ? 'Downloaded for offline'
+                : subtitle!.trim(),
+            gradient: _gradientFor(cleanTitle).colors,
+          );
+          if (_deletedPlaylistIds.contains(target.id) ||
+              _deletedPlaylistIds.contains(_normalizeKey(target.title)) ||
+              await LocalDatabase.instance.isPlaylistDeleted(
+                target.id,
+                title: target.title,
+                userId: userId,
+              )) {
+            return;
+          }
+          if (isExploreRadioPlaylist(target.id)) {
+            if (!_exploreRadioPlaylists.any((p) => p.id == target.id)) {
+              _exploreRadioPlaylists.add(target);
+            }
+          } else {
+            _playlists.add(target);
+          }
+        }
+      }
+
+      final seen = <String>{};
+      var addedSong = false;
+      for (final song in songs) {
+        if (!seen.add(song.id)) continue;
+        if (!_allSongs.any((s) => s.id == song.id)) {
+          _allSongs.add(song);
+          addedSong = true;
+        }
+        if (!target.songIds.contains(song.id)) {
+          target.songIds.add(song.id);
+        }
+      }
+      if (addedSong) _markSongsChanged();
+
+      final playlistSongs = _allSongs
+          .where((s) => target.songIds.contains(s.id))
+          .toList();
+      final songRows = <Map<String, dynamic>>[];
+      for (final s in playlistSongs) {
+        final row = _songToImportedMap(s);
+        // saveImportedPlaylistOffline rewrites whole rows with INSERT OR
+        // REPLACE. Inject the on-disk file for tracks that are already
+        // downloaded so re-saving a playlist never resets them to a network
+        // URL (which also made startup cleanup delete the file).
+        final cached = await _findCachedAudioFile(s.id);
+        if (cached != null &&
+            await cached.exists() &&
+            await _isCompleteOfflineFile(s.id, cached)) {
+          row['audio_url'] = cached.path;
+          row['is_preview'] = 0;
+          row['is_youtube_audio'] = 0;
+          _downloadedSongIds.add(s.id);
+        } else {
+          final audioUrl = row['audio_url'] as String? ?? '';
+          // Expiring stream URLs are dead after a restart; leave the row
+          // empty so enrichment resolves a fresh one instead.
+          if (audioUrl.contains('googlevideo.com') ||
+              audioUrl.toLowerCase().contains('.m3u8')) {
+            row['audio_url'] = '';
+          }
+        }
+        songRows.add(row);
+      }
+      await LocalDatabase.instance.saveImportedPlaylistOffline(
+        id: target.id,
+        userId: userId,
+        title: target.title,
+        subtitle: target.subtitle,
+        imageUrl: target.imageUrl,
+        gradientColors: target.gradient.map((c) => c.toARGB32()).toList(),
+        songs: songRows,
+      );
+      notifyListeners();
+    } catch (e) {
+      debugPrint(
+        '[MusicPlayerController] persist download playlist skipped: $e',
+      );
+    }
+  }
+
+  static String _downloadPlaylistId(String title) {
+    final slug = _normalizeKey(
+      title,
+    ).replaceAll(RegExp(r'[^a-z0-9]+'), '-').replaceAll(
+      RegExp(r'^-+|-+$'),
+      '',
+    );
+    return 'download-${slug.isEmpty ? DateTime.now().microsecondsSinceEpoch : slug}';
+  }
+
+  static Map<String, dynamic> _songToImportedMap(Song s) {
+    return <String, dynamic>{
+      'id': s.id,
+      'title': s.title,
+      'artist': s.artist,
+      'album': s.album,
+      'duration_ms': s.duration.inMilliseconds,
+      'image_url': s.imageUrl,
+      'audio_url': s.audioUrl,
+      'lyrics': s.lyrics,
+      'genre': s.genre,
+      'is_preview': s.isPreview ? 1 : 0,
+      'is_youtube_audio': s.isYouTubeAudio ? 1 : 0,
+      'youtube_video_id': s.youtubeVideoId,
+      'is_explicit': s.isExplicit ? 1 : 0,
+    };
   }
 
   /// Removes a downloaded song and artwork from offline storage,
@@ -5350,7 +6066,8 @@ class MusicPlayerController extends ChangeNotifier {
       final cached = await _findCachedAudioFile(song.id);
       if (cached != null && cached.existsSync() && cached.lengthSync() > 1024) {
         song.audioUrl = cached.path;
-        song.isPreview = cached.lengthSync() < 1600000 && song.isPreview;
+        final isComplete = await _isCompleteOfflineFile(song.id, cached);
+        song.isPreview = !isComplete;
         song.isYouTubeAudio = false;
         _offlineFallbackIds.remove(song.id);
         _syncSongPathToQueueAndDb(song);
@@ -5374,8 +6091,9 @@ class MusicPlayerController extends ChangeNotifier {
             cachedOnDevice.existsSync() &&
             cachedOnDevice.lengthSync() > 1024) {
           song.audioUrl = cachedOnDevice.path;
-          song.isPreview =
-              cachedOnDevice.lengthSync() < 1600000 && song.isPreview;
+          final isComplete =
+              await _isCompleteOfflineFile(song.id, cachedOnDevice);
+          song.isPreview = !isComplete;
           song.isYouTubeAudio = false;
           _syncSongPathToQueueAndDb(song);
           return AudioSource.file(cachedOnDevice.path, tag: mediaItem);
@@ -5538,7 +6256,7 @@ class MusicPlayerController extends ChangeNotifier {
       // its position kept feeding the new song's progress slider and lyrics
       // tracker (stuck / wrong) and its volume state leaked into the new track.
       // Drop it first. Bundled songs resolve instantly and are left as they are.
-      if (song.id.startsWith('spotify-') || song.id.startsWith('itunes-')) {
+      if (_isDownloadableCatalogId(song.id)) {
         _audioPlayerHasSource = false;
         try {
           await _audioPlayer.stop().timeout(const Duration(seconds: 1));
@@ -6315,6 +7033,18 @@ class MusicPlayerController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    for (final task in _downloadQueue) {
+      for (final c in task.completers) {
+        if (!c.isCompleted) c.complete(false);
+      }
+    }
+    _downloadQueue.clear();
+    for (final completers in _inFlightCompleters.values) {
+      for (final c in completers) {
+        if (!c.isCompleted) c.complete(false);
+      }
+    }
+    _inFlightCompleters.clear();
     _playbackTimer?.cancel();
     _silentRetryTimer?.cancel();
     _importRetryTimer?.cancel();

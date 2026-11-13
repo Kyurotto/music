@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../auth/auth_service.dart';
 import '../models/song_model.dart';
@@ -71,7 +73,7 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
     _lastGenre = _controller.selectedGenre;
     _lastQuery = _controller.searchQuery;
     _lastSongCount = _controller.allSongs.length;
-    _lastPlaylistCount = _controller.playlists.length;
+    _lastPlaylistCount = _controller.libraryPlaylists.length;
     _lastRepeatMode = _controller.repeatMode;
     _lastShuffle = _controller.isShuffle;
     _lastIsMuted = _controller.isMuted;
@@ -86,6 +88,14 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
     });
     _dynamicPopularRadios = RadioDiscoveryService.instance.getPopularRadios();
     _controller.preLocateExploreRadios(_dynamicPopularRadios);
+    final isTest = !kIsWeb && Platform.environment.containsKey('FLUTTER_TEST');
+    if (!isTest) {
+      _controller.autoDownloadExploreRadios([
+        ..._dynamicPopularRadios,
+        ...RadioDiscoveryService.instance.getOpmRadios(),
+        ...RadioDiscoveryService.instance.getGlobalRadios(),
+      ]);
+    }
     _loadDynamicRadios();
   }
 
@@ -93,16 +103,33 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
     if (_isLoadingDynamicRadios) return;
     setState(() => _isLoadingDynamicRadios = true);
     try {
-      final stations = await RadioDiscoveryService.instance
+      // Start all three fetches together, but wait for the OPM/Global rows
+      // too. Previously they completed after the rebuild, so those carousels
+      // kept rendering fallback stations with zero songs — and Download All
+      // silently did nothing until the next rebuild.
+      final trendingFuture = RadioDiscoveryService.instance
           .fetchTrendingRadios();
-      unawaited(RadioDiscoveryService.instance.fetchOpmRadios());
-      unawaited(RadioDiscoveryService.instance.fetchGlobalRadios());
+      final opmFuture = RadioDiscoveryService.instance.fetchOpmRadios();
+      final globalFuture = RadioDiscoveryService.instance.fetchGlobalRadios();
+
+      final stations = await trendingFuture;
+      final opmStations = await opmFuture;
+      final globalStations = await globalFuture;
+
       if (mounted) {
         setState(() {
           _dynamicPopularRadios = stations;
           _isLoadingDynamicRadios = false;
         });
         _controller.preLocateExploreRadios(stations);
+        final isTest = !kIsWeb && Platform.environment.containsKey('FLUTTER_TEST');
+        if (!isTest) {
+          _controller.autoDownloadExploreRadios([
+            ...stations,
+            ...opmStations,
+            ...globalStations,
+          ]);
+        }
       }
     } catch (_) {
       if (mounted) {
@@ -174,7 +201,7 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
     final position = _pageScrollController.position;
     if (!position.hasContentDimensions) return;
     if (position.extentAfter > 600) return;
-    final total = _controller.playlists.length;
+    final total = _controller.libraryPlaylists.length;
     if (_libraryVisibleCount >= total) return;
     setState(() {
       _libraryVisibleCount += 40;
@@ -203,7 +230,7 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
     final genre = _controller.selectedGenre;
     final query = _controller.searchQuery;
     final songCount = _controller.allSongs.length;
-    final playlistCount = _controller.playlists.length;
+    final playlistCount = _controller.libraryPlaylists.length;
     final repeatMode = _controller.repeatMode;
     final shuffle = _controller.isShuffle;
     final isMuted = _controller.isMuted;
@@ -344,7 +371,7 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text(
-          'Spotify tracks imported. Full audio + lyrics load automatically.',
+          'Spotify tracks imported. Downloading with 3 workers for offline playback...',
         ),
       ),
     );
@@ -386,7 +413,7 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 8),
-              ..._controller.playlists.map(
+              ..._controller.libraryPlaylists.map(
                 (playlist) => ListTile(
                   leading: Container(
                     width: 36,
@@ -806,7 +833,7 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
     final featuredSong =
         _controller.allSongs.where((s) => s.isFeatured).firstOrNull ??
         _controller.allSongs.firstOrNull;
-    final playlists = _controller.playlists;
+    final playlists = _controller.libraryPlaylists;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1496,7 +1523,7 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
   }
 
   Widget _buildLibraryTab() {
-    final allPlaylists = _controller.playlists;
+    final allPlaylists = _controller.libraryPlaylists;
 
     final q = _librarySearchQuery.trim().toLowerCase();
 
@@ -1749,7 +1776,7 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                         ),
                         onPressed: _importFromSpotify,
                         icon: const Icon(Icons.download_rounded, size: 16),
-                        label: const Text('Import Spotify link'),
+                        label: const Text('Import from Spotify'),
                       ),
                       OutlinedButton.icon(
                         style: OutlinedButton.styleFrom(
@@ -1765,7 +1792,7 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                         ),
                         onPressed: _showCreatePlaylistDialog,
                         icon: const Icon(Icons.add_rounded, size: 16),
-                        label: const Text('Create playlist'),
+                        label: const Text('New playlist'),
                       ),
                     ],
                   ),

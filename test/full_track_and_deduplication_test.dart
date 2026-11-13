@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:music/controllers/music_player_controller.dart';
 import 'package:music/models/song_model.dart';
 import 'package:music/services/discovery_service.dart';
@@ -29,7 +31,9 @@ void main() {
     });
 
     test('TrackEnrichmentService defaults allowPreviewFallback to false', () async {
-      final service = TrackEnrichmentService();
+      final service = TrackEnrichmentService(
+        client: MockClient((_) async => http.Response('Not found', 404)),
+      );
       // Test signature defaults allowPreviewFallback to false
       final enrichment = await service.enrichTrack(
         title: 'Nonexistent Track Title 12345XYZ',

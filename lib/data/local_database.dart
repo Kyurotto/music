@@ -173,15 +173,25 @@ class LocalDatabase {
       }
 
       final offlineRows = await db.rawQuery(
-        "SELECT id, audio_url, duration_ms FROM imported_songs WHERE audio_url LIKE '%offline_audio%'",
+        "SELECT id, audio_url, is_preview FROM imported_songs "
+        "WHERE audio_url LIKE '%offline_audio%' "
+        "OR audio_url LIKE '%pulse_music_offline%'",
       );
       for (final row in offlineRows) {
         final sid = row['id'] as String;
         final aurl = row['audio_url'] as String;
+        final isPreview = (row['is_preview'] as int? ?? 0) == 1;
         final f = File(aurl);
-        if (!f.existsSync() || f.lengthSync() < 1600000) {
+        final exists = f.existsSync();
+        final length = exists ? f.lengthSync() : 0;
+        // Only purge preview clips. A full download may legitimately be
+        // smaller than the old 1.6MB preview cutoff (short or low-bitrate
+        // tracks), and deleting it here made those downloads vanish offline.
+        final shouldPurge =
+            !exists || length <= 1024 || (isPreview && length < 1600000);
+        if (shouldPurge) {
           try {
-            if (f.existsSync()) f.deleteSync();
+            if (exists) f.deleteSync();
           } catch (_) {}
           await db.rawUpdate(
             "UPDATE imported_songs SET audio_url = '', is_preview = 0, is_youtube_audio = 1 WHERE id = ?",
@@ -458,7 +468,7 @@ class LocalDatabase {
 
   Future<void> _createDatabase(Database database, int version) async {
     await database.execute('''
-      CREATE TABLE tracks (
+      CREATE TABLE IF NOT EXISTS tracks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         title TEXT NOT NULL,
         artist TEXT,
@@ -470,14 +480,14 @@ class LocalDatabase {
       )
     ''');
     await database.execute('''
-      CREATE TABLE playlists (
+      CREATE TABLE IF NOT EXISTS playlists (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL UNIQUE,
         created_at INTEGER NOT NULL
       )
     ''');
     await database.execute('''
-      CREATE TABLE playlist_tracks (
+      CREATE TABLE IF NOT EXISTS playlist_tracks (
         playlist_id INTEGER NOT NULL,
         track_id INTEGER NOT NULL,
         position INTEGER NOT NULL,
@@ -1681,18 +1691,24 @@ class LocalDatabase {
     // Verify existing playlist ownership before modifying
     final existingPlaylists = await db.query(
       'imported_playlists',
-      columns: ['id', 'user_id'],
+      columns: ['id', 'user_id', 'spotify_url'],
       where: 'id = ?',
       whereArgs: [id],
       limit: 1,
     );
+    String? existingSpotifyUrl;
     if (existingPlaylists.isNotEmpty) {
       final existingOwner = existingPlaylists.first['user_id'] as String;
       final isGuestOwner = guestUserIds.contains(existingOwner);
       if (!isGuestOwner && existingOwner != userId) {
         throw StateError('Cannot modify playlist owned by another user');
       }
+      existingSpotifyUrl = existingPlaylists.first['spotify_url'] as String?;
     }
+
+    final effectiveSpotifyUrl = (spotifyUrl != null && spotifyUrl.isNotEmpty)
+        ? spotifyUrl
+        : existingSpotifyUrl;
 
     // Clear any deletion markers so the newly saved/imported playlist is active and displays across restarts
     await unmarkPlaylistDeleted(id, title: title);
@@ -1703,7 +1719,7 @@ class LocalDatabase {
         'user_id': userId,
         'title': title,
         'subtitle': subtitle ?? 'Imported from Spotify',
-        'spotify_url': spotifyUrl,
+        'spotify_url': effectiveSpotifyUrl,
         'image_url': imageUrl ?? '',
         'gradient_colors': gradientColors != null
             ? jsonEncode(gradientColors)
@@ -1761,6 +1777,48 @@ class LocalDatabase {
 
     // End of the shared local write. Firestore sync (online only) is done
     // by saveImportedPlaylist; the offline variant stops here.
+  }
+
+  /// Inserts a song row if [id] does not exist yet, without overwriting any
+  /// metadata or enrichment already stored. Explicit downloads use this so
+  /// radio/discovery tracks get a persistent row before their audio is saved,
+  /// which makes the later [updateImportedSong] call reliable.
+  Future<void> ensureImportedSong({
+    required String id,
+    required String title,
+    required String artist,
+    String album = '',
+    int durationMs = 180000,
+    String imageUrl = '',
+    String audioUrl = '',
+    List<String>? lyrics,
+    String genre = 'Radio',
+    bool isPreview = false,
+    bool isYouTubeAudio = false,
+    String youtubeVideoId = '',
+    bool isExplicit = false,
+  }) async {
+    final db = await database;
+    await db.insert(
+      'imported_songs',
+      {
+        'id': id,
+        'title': title,
+        'artist': artist,
+        'album': album,
+        'duration_ms': durationMs,
+        'image_url': imageUrl,
+        'audio_url': audioUrl,
+        'lyrics': jsonEncode(lyrics ?? const <String>[]),
+        'genre': genre,
+        'is_preview': isPreview ? 1 : 0,
+        'is_youtube_audio': isYouTubeAudio ? 1 : 0,
+        'youtube_video_id': youtubeVideoId,
+        'is_explicit': isExplicit ? 1 : 0,
+        'updated_at': DateTime.now().millisecondsSinceEpoch,
+      },
+      conflictAlgorithm: ConflictAlgorithm.ignore,
+    );
   }
 
   /// Updates an imported song when audio or lyrics enrichment finishes.

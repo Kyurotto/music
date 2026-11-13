@@ -1,5 +1,7 @@
 // lib/views/playlist_screen.dart
 
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../controllers/music_player_controller.dart';
@@ -83,12 +85,26 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
       final locateTargets = songs.take(20).toList(growable: false);
       final isRadio =
           widget.playlist?.id.startsWith('radio-') == true ||
+          widget.playlist?.id.startsWith('artist-') == true ||
           widget.playlist?.id.startsWith('dailymix-') == true ||
-          songs.any((s) => s.id.startsWith('radio-') || s.id.startsWith('dm-'));
+          songs.any((s) =>
+              s.id.startsWith('radio-') ||
+              s.id.startsWith('artist-') ||
+              s.id.startsWith('dm-'));
       if (isRadio) {
         widget.controller.fastLocateRadioSongs(locateTargets);
       } else {
         widget.controller.fastLocateDiscoverySongs(locateTargets);
+      }
+      if (widget.controller.autoDownloadOnImport && songs.isNotEmpty) {
+        widget.controller.downloadPlaylistSongs(
+          songs,
+          playlist: widget.playlist,
+          title: _displayTitle,
+          subtitle: widget.subtitle ?? widget.playlist?.subtitle,
+          maxConcurrentWorkers: 3,
+        );
+        widget.controller.prioritizePlaylistDownloads(songs);
       }
     });
   }
@@ -114,7 +130,23 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
       final key =
           '${s.title.toLowerCase().trim()}|${s.artist.toLowerCase().trim()}';
       if (key != '|' && !seenKeys.add(key)) continue;
-      deduplicated.add(s);
+
+      final liveSong = widget.controller.songById(s.id) ?? s;
+      if (liveSong.audioUrl.isEmpty ||
+          (!liveSong.audioUrl.startsWith('http') &&
+              !liveSong.audioUrl.startsWith('asset') &&
+              !File(liveSong.audioUrl).existsSync())) {
+        final cached =
+            MusicPlayerController.findCachedAudioFileSync(liveSong.id);
+        if (cached != null &&
+            cached.existsSync() &&
+            cached.lengthSync() > 1024) {
+          liveSong.audioUrl = cached.path;
+          liveSong.isPreview = false;
+          liveSong.isYouTubeAudio = false;
+        }
+      }
+      deduplicated.add(liveSong);
     }
     return deduplicated;
   }
@@ -587,6 +619,10 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                                       );
                                       widget.controller.downloadPlaylistSongs(
                                         songs,
+                                        playlist: widget.playlist,
+                                        title: _displayTitle,
+                                        subtitle: widget.subtitle ??
+                                            widget.playlist?.subtitle,
                                       );
                                     },
                                   );
@@ -726,6 +762,11 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                         isCurrent: isCurrent,
                         isPlaying: isCurrent && widget.controller.isPlaying,
                         controller: widget.controller,
+                        playlist: widget.playlist,
+                        playlistSongs: songs,
+                        playlistTitle: _displayTitle,
+                        playlistSubtitle:
+                            widget.subtitle ?? widget.playlist?.subtitle,
                         onTap: () => _playSongAt(songs, index),
                         onMoreTap: () => _showSongOptions(context, song),
                       );
@@ -906,7 +947,13 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                       duration: const Duration(seconds: 2),
                     ),
                   );
-                  widget.controller.downloadSong(song);
+                  widget.controller.downloadPlaylistSong(
+                    song,
+                    playlist: widget.playlist,
+                    songs: _resolveSongs(),
+                    title: _displayTitle,
+                    subtitle: widget.subtitle ?? widget.playlist?.subtitle,
+                  );
                 },
               )
             else
@@ -1098,6 +1145,10 @@ class _PlaylistSongTile extends StatelessWidget {
   final bool isCurrent;
   final bool isPlaying;
   final MusicPlayerController controller;
+  final MusicPlaylist? playlist;
+  final List<Song>? playlistSongs;
+  final String? playlistTitle;
+  final String? playlistSubtitle;
   final VoidCallback onTap;
   final VoidCallback onMoreTap;
 
@@ -1107,6 +1158,10 @@ class _PlaylistSongTile extends StatelessWidget {
     required this.isCurrent,
     required this.isPlaying,
     required this.controller,
+    this.playlist,
+    this.playlistSongs,
+    this.playlistTitle,
+    this.playlistSubtitle,
     required this.onTap,
     required this.onMoreTap,
   });
@@ -1274,7 +1329,13 @@ class _PlaylistSongTile extends StatelessWidget {
             duration: const Duration(seconds: 2),
           ),
         );
-        final success = await controller.downloadSong(song);
+        final success = await controller.downloadPlaylistSong(
+          song,
+          playlist: playlist,
+          songs: playlistSongs,
+          title: playlistTitle,
+          subtitle: playlistSubtitle,
+        );
         if (context.mounted && !success) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(

@@ -87,8 +87,11 @@ class SongArtworkWidget extends StatelessWidget {
     final rawUrl = _effectiveImageUrl;
     final colors = _effectiveColors;
     final dpr = MediaQuery.devicePixelRatioOf(context);
-    final cacheWidth = (w * dpr).round().clamp(1, 2048);
-    final cacheHeight = (h * dpr).round().clamp(1, 2048);
+    final safeW = (w.isFinite && !w.isNaN && w > 0) ? w : 44.0;
+    final safeH = (h.isFinite && !h.isNaN && h > 0) ? h : 44.0;
+    final safeDpr = (dpr.isFinite && !dpr.isNaN && dpr > 0) ? dpr : 1.0;
+    final cacheWidth = (safeW * safeDpr).round().clamp(1, 2048);
+    final cacheHeight = (safeH * safeDpr).round().clamp(1, 2048);
 
     Widget content;
     if (rawUrl.isNotEmpty) {
