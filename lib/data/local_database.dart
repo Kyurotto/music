@@ -2311,45 +2311,75 @@ class LocalDatabase {
     if (_offlineDirsMemo != null) return _offlineDirsMemo!;
     final dirs = <Directory>[];
     if (!kIsWeb && Platform.isAndroid) {
+      dirs.add(
+        Directory('/data/user/0/com.example.music/app_flutter/offline_downloads'),
+      );
+      dirs.add(
+        Directory('/data/user/0/com.example.music/files/offline_downloads'),
+      );
+      dirs.add(
+        Directory('/data/data/com.example.music/files/offline_downloads'),
+      );
+      dirs.add(
+        Directory('/data/user/0/com.example.music/cache/streaming_cache'),
+      );
       dirs.add(Directory('/data/user/0/com.example.music/files/offline_audio'));
       dirs.add(Directory('/data/user/0/com.example.music/files'));
-      dirs.add(Directory('/data/user/0/com.example.music/app_flutter/offline_audio'));
+      dirs.add(
+        Directory('/data/user/0/com.example.music/app_flutter/offline_audio'),
+      );
       dirs.add(Directory('/data/user/0/com.example.music/app_flutter'));
       dirs.add(Directory('/data/data/com.example.music/files/offline_audio'));
       dirs.add(Directory('/data/data/com.example.music/files'));
     }
     try {
-      final supp = await getApplicationSupportDirectory();
-      dirs.add(Directory(path.join(supp.path, 'offline_audio')));
-      dirs.add(supp);
-    } catch (_) {}
-    try {
       final docs = await getApplicationDocumentsDirectory();
+      dirs.add(Directory(path.join(docs.path, 'offline_downloads')));
       dirs.add(Directory(path.join(docs.path, 'offline_audio')));
       dirs.add(docs);
     } catch (_) {}
     try {
+      final supp = await getApplicationSupportDirectory();
+      dirs.add(Directory(path.join(supp.path, 'offline_downloads')));
+      dirs.add(Directory(path.join(supp.path, 'offline_audio')));
+      dirs.add(supp);
+    } catch (_) {}
+    try {
       final temp = await getTemporaryDirectory();
+      dirs.add(Directory(path.join(temp.path, 'streaming_cache')));
       dirs.add(Directory(path.join(temp.path, 'offline_audio')));
       dirs.add(temp);
     } catch (_) {}
+    dirs.add(
+      Directory(path.join(Directory.systemTemp.path, 'pulse_streaming_cache')),
+    );
+    dirs.add(
+      Directory(path.join(Directory.systemTemp.path, 'pulse_music_offline')),
+    );
     _offlineDirsMemo = dirs;
     return dirs;
   }
 
-  /// Directories that contain *only* cached audio/artwork files.
+  /// Directories that contain *only* temporary cached streaming audio/artwork files.
   ///
-  /// [getOfflineCandidateDirs] also returns the parent app directories because
-  /// playback probes them for legacy downloads. Counting those parents would
-  /// include the SQLite database and unrelated files, so this narrows the list
-  /// to the dedicated `offline_audio` folders and de-duplicates aliases.
+  /// Permanent offline downloads (`offline_downloads`) are intentionally excluded
+  /// so that clearing cache will NEVER delete songs the user downloaded for offline use.
   static Future<List<Directory>> getLocalAudioCacheDirs() async {
     final dirs = await getOfflineCandidateDirs();
     final byPath = <String, Directory>{};
     for (final dir in dirs) {
       final normalized = path.normalize(path.absolute(dir.path));
       final name = path.basename(normalized);
-      if (name != 'offline_audio' && name != 'pulse_music_offline') continue;
+      final isTempOrCache =
+          normalized.contains('${path.separator}cache${path.separator}') ||
+          normalized.contains('${path.separator}temp${path.separator}') ||
+          normalized.toLowerCase().contains('temp');
+      if (name != 'streaming_cache' &&
+          name != 'pulse_streaming_cache' &&
+          name != 'pulse_music_offline' &&
+          !(name == 'offline_audio' && isTempOrCache)) {
+        continue;
+      }
       var cacheKey = normalized;
       try {
         if (await dir.exists()) {
@@ -2360,7 +2390,7 @@ class LocalDatabase {
     }
     if (!kIsWeb) {
       final legacy = Directory(
-        path.join(Directory.systemTemp.path, 'pulse_music_offline'),
+        path.join(Directory.systemTemp.path, 'pulse_streaming_cache'),
       );
       var cacheKey = path.normalize(path.absolute(legacy.path));
       try {
@@ -2403,9 +2433,8 @@ class LocalDatabase {
 
   /// Deletes every cached audio/artwork file and returns the freed byte count.
   ///
-  /// Library rows and playlists are untouched: tracks keep their metadata and
-  /// are re-downloaded or re-streamed the next time they are played. [dirs] is
-  /// injectable for tests.
+  /// Permanent offline downloads (`offline_downloads`) are untouched: only temporary
+  /// streaming cache is removed. [dirs] is injectable for tests.
   static Future<int> clearLocalAudioCache({List<Directory>? dirs}) async {
     var freedBytes = 0;
     final seen = <String>{};
@@ -2431,16 +2460,15 @@ class LocalDatabase {
       } catch (_) {}
     }
     if (dirs == null) {
-      // Keep the library rows, but forget local file paths that no longer
-      // exist. Otherwise every cleared song still looks "downloaded" and the
-      // UI keeps showing an offline badge for a missing file.
+      // Keep permanent offline downloads intact, only reset references that
+      // pointed to deleted temporary streaming cache files.
       try {
         final db = await LocalDatabase.instance.database;
         await db.update(
           'imported_songs',
           {'audio_url': ''},
           where: "audio_url LIKE ? OR audio_url LIKE ?",
-          whereArgs: ['%offline_audio%', '%pulse_music_offline%'],
+          whereArgs: ['%streaming_cache%', '%pulse_streaming_cache%'],
         );
       } catch (_) {}
     }
@@ -2480,7 +2508,17 @@ class LocalDatabase {
     for (final dir in dirs) {
       try {
         if (!await dir.exists()) continue;
-        for (final ext in const ['.m4a', '.mp3', '.mp4', '.aac', '.wav', '.ogg']) {
+        for (final ext in const [
+          '.m4a',
+          '.mp3',
+          '.mp4',
+          '.aac',
+          '.wav',
+          '.ogg',
+          '.webm',
+          '.opus',
+          '.flac',
+        ]) {
           final f = File(path.join(dir.path, '$songId$ext'));
           if (await f.exists()) {
             final len = await f.length();
@@ -2497,16 +2535,28 @@ class LocalDatabase {
   Future<void> _deleteCachedAudioFile(String songId) async {
     var deleted = false;
     try {
-      final supp = await getApplicationSupportDirectory();
-      final offlineDir = Directory(path.join(supp.path, 'offline_audio'));
-      if (await offlineDir.exists()) {
-        for (final ext in const ['.mp3', '.m4a', '.mp4', '.aac', '.wav', '.ogg', '']) {
-          final f = File(path.join(offlineDir.path, '$songId$ext'));
-          if (await f.exists()) {
-            try {
-              await f.delete();
-              deleted = true;
-            } catch (_) {}
+      final dirs = await getOfflineCandidateDirs();
+      for (final dir in dirs) {
+        if (await dir.exists()) {
+          for (final ext in const [
+            '.mp3',
+            '.m4a',
+            '.mp4',
+            '.aac',
+            '.wav',
+            '.ogg',
+            '.webm',
+            '.opus',
+            '.flac',
+            '',
+          ]) {
+            final f = File(path.join(dir.path, '$songId$ext'));
+            if (await f.exists()) {
+              try {
+                await f.delete();
+                deleted = true;
+              } catch (_) {}
+            }
           }
         }
       }

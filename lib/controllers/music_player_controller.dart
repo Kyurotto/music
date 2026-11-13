@@ -3450,7 +3450,9 @@ class MusicPlayerController extends ChangeNotifier {
     }
     final song = songById(songId);
     if (song != null) {
-      if ((song.audioUrl.contains('offline_audio') ||
+      if ((song.audioUrl.contains('offline_downloads') ||
+              song.audioUrl.contains('offline_audio') ||
+              song.audioUrl.contains('streaming_cache') ||
               song.audioUrl.contains('pulse_music_offline')) &&
           !song.audioUrl.startsWith('assets/')) {
         try {
@@ -3481,22 +3483,19 @@ class MusicPlayerController extends ChangeNotifier {
     return songs.any((s) => isSongDownloading(s.id));
   }
 
-  Future<Directory> _getPrimaryOfflineDirectory() async {
+  /// Directory for permanent user-initiated offline downloads.
+  /// Lives in persistent app documents or support storage, NEVER cleared by
+  /// OS cache sweeps or the user "Clear Audio Cache" setting.
+  Future<Directory> _getPersistentOfflineDirectory() async {
     Directory? primary;
     try {
-      final supp = await getApplicationSupportDirectory();
-      primary = Directory(p.join(supp.path, 'offline_audio'));
+      final docs = await getApplicationDocumentsDirectory();
+      primary = Directory(p.join(docs.path, 'offline_downloads'));
     } catch (_) {}
     if (primary == null) {
       try {
-        final docs = await getApplicationDocumentsDirectory();
-        primary = Directory(p.join(docs.path, 'offline_audio'));
-      } catch (_) {}
-    }
-    if (primary == null) {
-      try {
-        final temp = await getTemporaryDirectory();
-        primary = Directory(p.join(temp.path, 'offline_audio'));
+        final supp = await getApplicationSupportDirectory();
+        primary = Directory(p.join(supp.path, 'offline_downloads'));
       } catch (_) {}
     }
     primary ??= Directory(
@@ -3507,6 +3506,28 @@ class MusicPlayerController extends ChangeNotifier {
     }
     return primary;
   }
+
+  /// Directory for temporary streaming playback cache.
+  /// Lives in the OS-managed temporary cache partition (`getTemporaryDirectory`).
+  /// Fast for replay during the session, and safely cleared by the OS when space
+  /// is low or when the user triggers "Clear Audio Cache".
+  Future<Directory> _getStreamingCacheDirectory() async {
+    Directory? cacheDir;
+    try {
+      final temp = await getTemporaryDirectory();
+      cacheDir = Directory(p.join(temp.path, 'streaming_cache'));
+    } catch (_) {}
+    cacheDir ??= Directory(
+      p.join(Directory.systemTemp.path, 'pulse_streaming_cache'),
+    );
+    if (!await cacheDir.exists()) {
+      await cacheDir.create(recursive: true);
+    }
+    return cacheDir;
+  }
+
+  Future<Directory> _getPrimaryOfflineDirectory() =>
+      _getPersistentOfflineDirectory();
 
   /// Offline cache directories, resolved once per session.
   ///
@@ -3524,6 +3545,10 @@ class MusicPlayerController extends ChangeNotifier {
 
   static final List<String> _knownFallbackDirs = [
     if (!kIsWeb && Platform.isAndroid) ...[
+      '/data/user/0/com.example.music/app_flutter/offline_downloads',
+      '/data/user/0/com.example.music/files/offline_downloads',
+      '/data/data/com.example.music/files/offline_downloads',
+      '/data/user/0/com.example.music/cache/streaming_cache',
       '/data/user/0/com.example.music/files/offline_audio',
       '/data/user/0/com.example.music/files',
       '/data/user/0/com.example.music/app_flutter/offline_audio',
@@ -3531,6 +3556,8 @@ class MusicPlayerController extends ChangeNotifier {
       '/data/data/com.example.music/files/offline_audio',
       '/data/data/com.example.music/files',
     ],
+    'offline_downloads',
+    'streaming_cache',
     'offline_audio',
     _systemTempOfflineDir,
   ];
@@ -3570,6 +3597,18 @@ class MusicPlayerController extends ChangeNotifier {
     if (cached != null) return cached;
     final dirs = <Directory>[];
     if (!kIsWeb && Platform.isAndroid) {
+      dirs.add(
+        Directory('/data/user/0/com.example.music/app_flutter/offline_downloads'),
+      );
+      dirs.add(
+        Directory('/data/user/0/com.example.music/files/offline_downloads'),
+      );
+      dirs.add(
+        Directory('/data/data/com.example.music/files/offline_downloads'),
+      );
+      dirs.add(
+        Directory('/data/user/0/com.example.music/cache/streaming_cache'),
+      );
       dirs.add(Directory('/data/user/0/com.example.music/files/offline_audio'));
       dirs.add(Directory('/data/user/0/com.example.music/files'));
       dirs.add(
@@ -3580,21 +3619,27 @@ class MusicPlayerController extends ChangeNotifier {
       dirs.add(Directory('/data/data/com.example.music/files'));
     }
     try {
-      final supp = await getApplicationSupportDirectory();
-      dirs.add(Directory(p.join(supp.path, 'offline_audio')));
-      dirs.add(supp);
-    } catch (_) {}
-    try {
       final docs = await getApplicationDocumentsDirectory();
+      dirs.add(Directory(p.join(docs.path, 'offline_downloads')));
       dirs.add(Directory(p.join(docs.path, 'offline_audio')));
       dirs.add(docs);
     } catch (_) {}
     try {
+      final supp = await getApplicationSupportDirectory();
+      dirs.add(Directory(p.join(supp.path, 'offline_downloads')));
+      dirs.add(Directory(p.join(supp.path, 'offline_audio')));
+      dirs.add(supp);
+    } catch (_) {}
+    try {
       final temp = await getTemporaryDirectory();
+      dirs.add(Directory(p.join(temp.path, 'streaming_cache')));
       dirs.add(Directory(p.join(temp.path, 'offline_audio')));
       dirs.add(temp);
     } catch (_) {}
     dirs.add(Directory(_systemTempOfflineDir));
+    dirs.add(
+      Directory(p.join(Directory.systemTemp.path, 'pulse_streaming_cache')),
+    );
     _offlineDirCache = dirs;
     _staticOfflineDirs = dirs;
     // Any lookup made before the candidate directories were known could not
@@ -4151,7 +4196,7 @@ class MusicPlayerController extends ChangeNotifier {
     _cachingIds.add(song.id);
 
     try {
-      final offlineDir = await _getPrimaryOfflineDirectory();
+      final cacheDir = await _getStreamingCacheDirectory();
       String urlToDownload = song.audioUrl;
 
       // If the URL is empty or expired, resolve fresh full or preview stream
@@ -4193,7 +4238,7 @@ class MusicPlayerController extends ChangeNotifier {
           : TrackEnrichmentService.browserUserAgent;
 
       final uri = Uri.parse(urlToDownload);
-      final tempFile = File(p.join(offlineDir.path, '${song.id}.tmp'));
+      final tempFile = File(p.join(cacheDir.path, '${song.id}.tmp'));
 
       final request = http.Request('GET', uri);
       request.headers['User-Agent'] = userAgent;
@@ -4220,7 +4265,7 @@ class MusicPlayerController extends ChangeNotifier {
               urlToDownload,
               contentType: streamedResponse.headers['content-type'],
             );
-            final targetFile = File(p.join(offlineDir.path, '${song.id}$ext'));
+            final targetFile = File(p.join(cacheDir.path, '${song.id}$ext'));
             if (await targetFile.exists()) {
               try {
                 await targetFile.delete();
@@ -4238,10 +4283,10 @@ class MusicPlayerController extends ChangeNotifier {
             _locatingStatusVersion++;
             notifyListeners();
             debugPrint(
-              '[MusicPlayerController] Successfully cached ${song.title} ($downloadedBytes bytes) to local file: ${targetFile.path}',
+              '[MusicPlayerController] Successfully cached ${song.title} ($downloadedBytes bytes) to streaming cache: ${targetFile.path}',
             );
 
-            // Persist to local SQLite database so offline playback works permanently
+            // Persist to local SQLite database so offline playback works
             unawaited(
               LocalDatabase.instance
                   .updateImportedSong(
@@ -4264,7 +4309,7 @@ class MusicPlayerController extends ChangeNotifier {
             if (song.imageUrl.startsWith('http')) {
               try {
                 final artTarget = File(
-                  p.join(offlineDir.path, '${song.id}.jpg'),
+                  p.join(cacheDir.path, '${song.id}.jpg'),
                 );
                 if (!artTarget.existsSync()) {
                   final artResp = await http
@@ -4374,11 +4419,43 @@ class MusicPlayerController extends ChangeNotifier {
     Song song, {
     bool allowPreviewFallback = false,
   }) async {
-    // 1. Check if a valid local offline file already exists. A stale preview
-    //    or truncated file is removed so the full track can be fetched below.
+    // 1. Check if a valid local offline file already exists.
     final cached = await _findCachedAudioFile(song.id);
     if (cached != null && cached.existsSync()) {
       if (await _isCompleteOfflineFile(song.id, cached)) {
+        // If file is only in temporary streaming cache, promote it to persistent offline downloads
+        if (cached.path.contains('streaming_cache')) {
+          try {
+            final persistentDir = await _getPersistentOfflineDirectory();
+            final ext = p.extension(cached.path);
+            final targetFile =
+                File(p.join(persistentDir.path, '${song.id}$ext'));
+            if (!targetFile.existsSync() || targetFile.lengthSync() < 1024) {
+              await cached.copy(targetFile.path);
+            }
+            _invalidateOfflineLookup(song.id);
+            _downloadedSongIds.add(song.id);
+            song.audioUrl = targetFile.path;
+            song.isPreview = false;
+            song.isYouTubeAudio = false;
+            _syncSongPathToQueueAndDb(song);
+            LocalDatabase.notifyAudioCacheChanged();
+            unawaited(
+              LocalDatabase.instance.updateImportedSong(
+                id: song.id,
+                audioUrl: targetFile.path,
+                isPreview: false,
+                isYouTubeAudio: false,
+                durationMs: song.duration.inMilliseconds,
+                imageUrl: song.imageUrl,
+                lyrics: song.lyrics,
+              ),
+            );
+            notifyListeners();
+            return true;
+          } catch (_) {}
+        }
+
         _downloadedSongIds.add(song.id);
         if (song.audioUrl != cached.path) {
           song.audioUrl = cached.path;
@@ -4406,7 +4483,7 @@ class MusicPlayerController extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final offlineDir = await _getPrimaryOfflineDirectory();
+      final offlineDir = await _getPersistentOfflineDirectory();
       var urlToDownload = song.audioUrl;
       var previewOnly = song.isPreview;
 

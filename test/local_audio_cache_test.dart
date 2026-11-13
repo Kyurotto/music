@@ -114,5 +114,36 @@ void main() {
         expect(await artworkDir.exists(), isTrue);
       },
     );
+
+    test(
+      'persistent offline_downloads are preserved while streaming_cache is cleared',
+      () async {
+        final persistentDir = Directory(p.join(root.path, 'offline_downloads'));
+        final streamingCacheDir = Directory(p.join(root.path, 'streaming_cache'));
+        await persistentDir.create(recursive: true);
+        await streamingCacheDir.create(recursive: true);
+
+        final persistentSong = await writeFile(
+          persistentDir,
+          'downloaded-track.m4a',
+          5000,
+        );
+        final streamedSong = await writeFile(
+          streamingCacheDir,
+          'streamed-track.m4a',
+          3000,
+        );
+
+        // When clearing streaming cache dirs only:
+        final freed = await LocalDatabase.clearLocalAudioCache(
+          dirs: [streamingCacheDir],
+        );
+
+        expect(freed, 3000);
+        expect(await streamedSong.exists(), isFalse);
+        expect(await persistentSong.exists(), isTrue);
+        expect(await persistentSong.length(), 5000);
+      },
+    );
   });
 }
