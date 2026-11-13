@@ -806,7 +806,6 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
     final featuredSong =
         _controller.allSongs.where((s) => s.isFeatured).firstOrNull ??
         _controller.allSongs.firstOrNull;
-    final playlists = _controller.playlists;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -860,196 +859,34 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
           const SizedBox(height: 32),
         ],
 
-        // Quick Jump In (Recently Played Grid)
-        if (_controller.searchQuery.isEmpty &&
-            _controller.selectedGenre == 'All') ...[
-          _buildSectionHeader('Jump Back In', 'Recent listening highlights'),
-          const SizedBox(height: 14),
-          _buildQuickGrid(),
-          const SizedBox(height: 32),
-        ],
-
-        // Featured Playlists Carousel
-        if (_controller.searchQuery.isEmpty) ...[
+        // Search Results or Genre Tracks (Trending English Songs, Jump Back In, and Featured Playlists removed to reduce scrolling lag)
+        if (_controller.searchQuery.isNotEmpty ||
+            _controller.selectedGenre != 'All') ...[
           _buildSectionHeader(
-            'Featured Playlists',
-            'Fresh playlists updated for you',
+            _controller.searchQuery.isNotEmpty
+                ? 'Search Results'
+                : '${_controller.selectedGenre} Tracks',
+            '${_controller.filteredSongs.length} tracks available',
           ),
-          const SizedBox(height: 14),
-          SizedBox(
-            height: 230,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: playlists.length,
-              separatorBuilder: (context, index) => const SizedBox(width: 16),
-              itemBuilder: (context, index) {
-                final playlist = playlists[index];
-                return AlbumCard(
-                  playlist: playlist,
-                  isSelected: playlist.id == _selectedPlaylistId,
-                  onTap: () {
-                    Navigator.of(context).push(
-                      PlaylistScreen.route(
-                        playlist: playlist,
-                        controller: _controller,
-                      ),
-                    );
-                  },
-                  onPlay: () => _playPlaylistWithLyrics(playlist.id),
-                  onDelete: () => _confirmDeletePlaylist(playlist),
-                );
-              },
+          const SizedBox(height: 16),
+
+          // Interactive Track Table
+          Container(
+            decoration: BoxDecoration(
+              color: AppTheme.cardSurface,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: AppTheme.border, width: 1),
+            ),
+            child: TrackListView(
+              songs: _controller.filteredSongs,
+              controller: _controller,
+              onSongTap: _playSongWithLyrics,
+              onAddToPlaylist: _showAddToPlaylistSheet,
+              onDelete: (song) => _confirmDeleteSong(song),
             ),
           ),
-          const SizedBox(height: 32),
         ],
-
-        // Main Songs Section Header
-        _buildSectionHeader(
-          _controller.searchQuery.isNotEmpty
-              ? 'Search Results'
-              : _controller.selectedGenre == 'All'
-              ? 'Trending English Songs'
-              : '${_controller.selectedGenre} Tracks',
-          '${_controller.filteredSongs.length} tracks available',
-        ),
-        const SizedBox(height: 16),
-
-        // Interactive Track Table
-        Container(
-          decoration: BoxDecoration(
-            color: AppTheme.cardSurface,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: AppTheme.border, width: 1),
-          ),
-          child: TrackListView(
-            songs: _controller.filteredSongs,
-            controller: _controller,
-            onSongTap: _playSongWithLyrics,
-            onAddToPlaylist: _showAddToPlaylistSheet,
-            onDelete: (song) => _confirmDeleteSong(song),
-          ),
-        ),
       ],
-    );
-  }
-
-  Widget _buildQuickGrid() {
-    final recentSongs = _controller.allSongs.take(6).toList();
-
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final crossAxisCount = constraints.maxWidth > 900
-            ? 3
-            : (constraints.maxWidth > 520 ? 2 : 1);
-
-        return GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          itemCount: recentSongs.length,
-          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: crossAxisCount,
-            mainAxisExtent: 64,
-            crossAxisSpacing: 12,
-            mainAxisSpacing: 12,
-          ),
-          itemBuilder: (context, index) {
-            final song = recentSongs[index];
-            final isCurrent = _controller.currentSong?.id == song.id;
-
-            return Material(
-              color: Colors.transparent,
-              child: InkWell(
-                borderRadius: BorderRadius.circular(12),
-                onTap: () => _playSongWithLyrics(song),
-                child: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: isCurrent
-                        ? AppTheme.primary.withValues(alpha: 0.15)
-                        : AppTheme.cardSurface,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: isCurrent
-                          ? AppTheme.primary.withValues(alpha: 0.5)
-                          : AppTheme.border,
-                      width: 1,
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      SongArtworkWidget(song: song, size: 48, borderRadius: 8),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              song.title,
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.bold,
-                                color: isCurrent
-                                    ? AppTheme.primary
-                                    : AppTheme.textPrimary,
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              song.artist,
-                              style: const TextStyle(
-                                fontSize: 11,
-                                color: AppTheme.textMuted,
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ],
-                        ),
-                      ),
-                      IconButton(
-                        icon: const Icon(
-                          Icons.delete_outline_rounded,
-                          size: 18,
-                          color: AppTheme.textMuted,
-                        ),
-                        tooltip: 'Delete song',
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(
-                          minWidth: 28,
-                          minHeight: 28,
-                        ),
-                        onPressed: () => _confirmDeleteSong(song),
-                      ),
-                      const SizedBox(width: 4),
-                      Container(
-                        width: 32,
-                        height: 32,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: isCurrent
-                              ? AppTheme.primary
-                              : Colors.white.withValues(alpha: 0.1),
-                        ),
-                        child: Center(
-                          child: Icon(
-                            isCurrent && _controller.isPlaying
-                                ? Icons.pause_rounded
-                                : Icons.play_arrow_rounded,
-                            color: Colors.white,
-                            size: 18,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            );
-          },
-        );
-      },
     );
   }
 
