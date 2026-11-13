@@ -54,6 +54,8 @@ dependencies:
   flutter_secure_storage: ^11.2.0
   just_audio_background:
     path: packages/just_audio_background
+  archive: ^4.7.1
+  file_picker: ^13.3.3
 
 dev_dependencies:
   flutter_test:
