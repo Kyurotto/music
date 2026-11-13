@@ -39,8 +39,10 @@ void main() {
     // Ensure hero banner renders without assertion errors
     expect(find.text('Welcome to Pulse Studio'), findsAtLeastNWidgets(1));
 
-    // Verify mobile hamburger menu icon is present
-    expect(find.byIcon(Icons.menu_rounded), findsOneWidget);
+    // Verify mobile bottom navigation bar is present
+    expect(find.byIcon(Icons.home_rounded), findsWidgets);
+    expect(find.byIcon(Icons.explore_rounded), findsWidgets);
+    expect(find.byIcon(Icons.library_music_rounded), findsWidgets);
   });
 
   testWidgets('Volume toggle in bottom player bar functions properly', (WidgetTester tester) async {

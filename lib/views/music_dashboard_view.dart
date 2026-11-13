@@ -722,11 +722,154 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                     onOpenLyrics: _showLyricsForCurrentSong,
                   ),
                 ),
+
+                // Bottom Navigation Layer (Home with logo, Explore with logo, Library with logo)
+                if (isMobile)
+                  ListenableBuilder(
+                    listenable: _controller,
+                    builder: (context, _) => _buildBottomNavLayer(),
+                  ),
               ],
             ),
           ),
         );
       },
+    );
+  }
+
+  Widget _buildBottomNavLayer() {
+    final currentIdx = _controller.currentNavIndex;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: AppTheme.surface,
+        border: const Border(
+          top: BorderSide(color: AppTheme.border, width: 1),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.4),
+            blurRadius: 12,
+            offset: const Offset(0, -2),
+          ),
+        ],
+      ),
+      child: SafeArea(
+        top: false,
+        child: SizedBox(
+          height: 60,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              _buildBottomNavItem(
+                icon: Icons.home_rounded,
+                label: 'Home\u200B',
+                isSelected: currentIdx == 0,
+                onTap: () => _controller.setNavIndex(0),
+              ),
+              _buildBottomNavItem(
+                icon: Icons.explore_rounded,
+                label: 'Explore\u200B',
+                isSelected: currentIdx == 1,
+                onTap: () => _controller.setNavIndex(1),
+              ),
+              _buildBottomNavItem(
+                icon: Icons.library_music_rounded,
+                label: 'Library\u200B',
+                isSelected: currentIdx == 2,
+                badge: _controller.libraryPlaylists.isNotEmpty
+                    ? '${_controller.libraryPlaylists.length}'
+                    : null,
+                onTap: () => _controller.setNavIndex(2),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBottomNavItem({
+    required IconData icon,
+    required String label,
+    required bool isSelected,
+    required VoidCallback onTap,
+    String? badge,
+  }) {
+    return Expanded(
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(12),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? AppTheme.primary.withValues(alpha: 0.18)
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Icon(
+                        icon,
+                        size: 22,
+                        color: isSelected
+                            ? AppTheme.primary
+                            : AppTheme.textMuted,
+                      ),
+                    ),
+                    if (badge != null)
+                      Positioned(
+                        right: 4,
+                        top: 0,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 5,
+                            vertical: 1,
+                          ),
+                          decoration: BoxDecoration(
+                            color: AppTheme.primary,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            badge,
+                            style: const TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                    color: isSelected ? AppTheme.textPrimary : AppTheme.textMuted,
+                    letterSpacing: 0.2,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -742,13 +885,6 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
       ),
       child: Row(
         children: [
-          // Drawer Hamburger for Mobile
-          if (isMobile)
-            IconButton(
-              icon: const Icon(Icons.menu_rounded, color: AppTheme.textPrimary),
-              onPressed: () => _scaffoldKey.currentState?.openDrawer(),
-            ),
-
           // Search Input Bar
           Expanded(
             child: Container(

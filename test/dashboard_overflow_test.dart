@@ -42,10 +42,13 @@ void main() {
     addTearDown(() => tester.view.resetPhysicalSize());
 
     await pumpDashboardWithoutPluginNoise(tester, () async {
-      await tester.tap(find.byIcon(Icons.menu_rounded));
+      await tester.tap(
+        find.byWidgetPredicate(
+          (w) => w is Icon && w.icon == Icons.library_music_rounded && w.size == 22.0,
+        ),
+      );
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
-      await tester.tap(find.text('Library'));
     });
 
     expect(find.text('Your Library'), findsOneWidget);
@@ -77,7 +80,7 @@ void main() {
     addTearDown(() => tester.view.resetPhysicalSize());
 
     await pumpDashboardWithoutPluginNoise(tester, () async {
-      await tester.tap(find.byIcon(Icons.menu_rounded));
+      tester.state<ScaffoldState>(find.byType(Scaffold)).openDrawer();
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
       await tester.tap(find.text('Favorites'));
