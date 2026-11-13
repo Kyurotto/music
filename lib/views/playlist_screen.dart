@@ -355,13 +355,25 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
-                        // 1. 2x2 Grid widget for the 4-cover collage
-                        _CoverCollage2x2(
-                          songs: songs,
-                          fallbackGradient:
-                              widget.playlist?.gradient ??
-                              const [Color(0xFF212121), Color(0xFF0D0D0D)],
-                        ),
+                        // 1. Single artwork if playlist has an imported/explicit imageUrl, or 2x2 Grid widget collage fallback
+                        if (widget.playlist != null &&
+                            widget.playlist!.imageUrl.trim().isNotEmpty)
+                          SongArtworkWidget(
+                            imageUrl: widget.playlist!.imageUrl,
+                            title: _displayTitle,
+                            gradientColors: widget.playlist?.gradient,
+                            width: 220,
+                            height: 220,
+                            borderRadius: 16,
+                            showGlow: true,
+                          )
+                        else
+                          _CoverCollage2x2(
+                            songs: songs,
+                            fallbackGradient:
+                                widget.playlist?.gradient ??
+                                const [Color(0xFF212121), Color(0xFF0D0D0D)],
+                          ),
                         const SizedBox(height: 24),
 
                         // 2. Text widgets: title ("Pang relax"), creator row with CircleAvatar, metadata views/runtime

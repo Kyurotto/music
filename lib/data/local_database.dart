@@ -596,6 +596,15 @@ class LocalDatabase {
         FOREIGN KEY (song_id) REFERENCES imported_songs(id) ON DELETE CASCADE
       )
     ''');
+    try {
+      await database.execute('CREATE INDEX IF NOT EXISTS idx_imported_playlists_user ON imported_playlists(user_id, is_deleted)');
+    } catch (_) {}
+    try {
+      await database.execute('CREATE INDEX IF NOT EXISTS idx_imported_playlist_songs_playlist ON imported_playlist_songs(playlist_id, position)');
+    } catch (_) {}
+    try {
+      await database.execute('CREATE INDEX IF NOT EXISTS idx_imported_songs_id_deleted ON imported_songs(id, is_deleted)');
+    } catch (_) {}
   }
 
   Future<void> _createAccountTables(Database database) async {
@@ -1557,7 +1566,11 @@ class LocalDatabase {
   }
 
   /// Restores a soft-deleted playlist and clears its deleted markers (e.g. on deliberate re-import).
-  Future<void> unmarkPlaylistDeleted(String playlistId, {String? title}) async {
+  Future<void> unmarkPlaylistDeleted(
+    String playlistId, {
+    String? title,
+    String? userId,
+  }) async {
     final db = await database;
     try {
       await db.update(
@@ -1579,12 +1592,18 @@ class LocalDatabase {
       for (final uid in const ['default_user', '1', '3', '5', '6']) {
         keysToRemove.add('deleted_playlist_${titleKey}_$uid');
       }
+      if (userId != null && userId.isNotEmpty) {
+        keysToRemove.add('deleted_playlist_${titleKey}_$userId');
+      }
       final artistName = extractArtistNameFromPlaylist(title);
       if (artistName.isNotEmpty) {
         final artistKey = artistName.toLowerCase().trim();
         keysToRemove.add('deleted_artist_playlist_$artistKey');
         for (final uid in const ['default_user', '1', '3', '5', '6']) {
           keysToRemove.add('deleted_artist_playlist_${artistKey}_$uid');
+        }
+        if (userId != null && userId.isNotEmpty) {
+          keysToRemove.add('deleted_artist_playlist_${artistKey}_$userId');
         }
       }
     }
@@ -1691,12 +1710,13 @@ class LocalDatabase {
     // Verify existing playlist ownership before modifying
     final existingPlaylists = await db.query(
       'imported_playlists',
-      columns: ['id', 'user_id', 'spotify_url'],
+      columns: ['id', 'user_id', 'spotify_url', 'image_url'],
       where: 'id = ?',
       whereArgs: [id],
       limit: 1,
     );
     String? existingSpotifyUrl;
+    String? existingImageUrl;
     if (existingPlaylists.isNotEmpty) {
       final existingOwner = existingPlaylists.first['user_id'] as String;
       final isGuestOwner = guestUserIds.contains(existingOwner);
@@ -1704,14 +1724,18 @@ class LocalDatabase {
         throw StateError('Cannot modify playlist owned by another user');
       }
       existingSpotifyUrl = existingPlaylists.first['spotify_url'] as String?;
+      existingImageUrl = existingPlaylists.first['image_url'] as String?;
     }
 
     final effectiveSpotifyUrl = (spotifyUrl != null && spotifyUrl.isNotEmpty)
         ? spotifyUrl
         : existingSpotifyUrl;
+    final effectiveImageUrl = (imageUrl != null && imageUrl.trim().isNotEmpty)
+        ? imageUrl.trim()
+        : (existingImageUrl ?? '');
 
     // Clear any deletion markers so the newly saved/imported playlist is active and displays across restarts
-    await unmarkPlaylistDeleted(id, title: title);
+    await unmarkPlaylistDeleted(id, title: title, userId: userId);
 
     await db.transaction((txn) async {
       await txn.insert('imported_playlists', {
@@ -1720,7 +1744,7 @@ class LocalDatabase {
         'title': title,
         'subtitle': subtitle ?? 'Imported from Spotify',
         'spotify_url': effectiveSpotifyUrl,
-        'image_url': imageUrl ?? '',
+        'image_url': effectiveImageUrl,
         'gradient_colors': gradientColors != null
             ? jsonEncode(gradientColors)
             : null,
@@ -1934,91 +1958,112 @@ class LocalDatabase {
       );
     }
 
+    final allSettings = await getAllSettings();
     final results = <Map<String, dynamic>>[];
     final titleIndexMap = <String, int>{};
 
+    // Filter active playlists without individual DB queries
+    final activePlaylists = <Map<String, dynamic>>[];
     for (final playlist in playlists) {
       final playlistId = playlist['id'] as String;
-      final rawTitle = playlist['title'] as String? ?? '';
-      final titleKey = rawTitle.toLowerCase().trim();
       final isDel = (playlist['is_deleted'] as int? ?? 0) == 1;
       if (isDel) continue;
 
-      if (await isPlaylistDeleted(playlistId, title: rawTitle, userId: targetId)) {
+      if (_isPlaylistDeletedFast(playlistId, allSettings)) {
+        continue;
+      }
+      activePlaylists.add(playlist);
+    }
+
+    if (activePlaylists.isEmpty) {
+      return results;
+    }
+
+    final activePlaylistIds = activePlaylists.map((p) => p['id'] as String).toList();
+    final placeholders = List.filled(activePlaylistIds.length, '?').join(',');
+
+    final songRows = await db.rawQuery(
+      '''
+      SELECT s.*, ps.playlist_id, ps.position
+      FROM imported_songs s
+      INNER JOIN imported_playlist_songs ps ON s.id = ps.song_id
+      WHERE ps.playlist_id IN ($placeholders) AND (s.is_deleted IS NULL OR s.is_deleted = 0)
+      ORDER BY ps.playlist_id, ps.position ASC
+    ''',
+      activePlaylistIds,
+    );
+
+    final cachedAudioIndex = await getOfflineAudioFileIndex();
+
+    // Group songs by playlist_id
+    final songsByPlaylist = <String, List<Map<String, dynamic>>>{};
+    for (final row in songRows) {
+      final songId = row['id'] as String;
+      final songTitle = row['title'] as String? ?? '';
+      final songArtist = row['artist'] as String? ?? '';
+      final playlistId = row['playlist_id'] as String;
+
+      if (_isSongDeletedFast(songId, songTitle, songArtist, allSettings)) {
         continue;
       }
 
-      final songRows = await db.rawQuery(
-        '''
-        SELECT s.*, ps.position
-        FROM imported_songs s
-        INNER JOIN imported_playlist_songs ps ON s.id = ps.song_id
-        WHERE ps.playlist_id = ? AND (s.is_deleted IS NULL OR s.is_deleted = 0)
-        ORDER BY ps.position ASC
-      ''',
-        [playlistId],
-      );
-
-      final songs = <Map<String, dynamic>>[];
-      for (final row in songRows) {
-        final songId = row['id'] as String;
-        final songTitle = row['title'] as String? ?? '';
-        final songArtist = row['artist'] as String? ?? '';
-        if (await isSongDeleted(songId, title: songTitle, artist: songArtist)) {
-          continue;
-        }
-
-        List<String> lyricsList = [];
-        final rawLyrics = row['lyrics'] as String?;
-        if (rawLyrics != null && rawLyrics.isNotEmpty) {
-          try {
-            final decoded = jsonDecode(rawLyrics);
-            if (decoded is List) {
-              lyricsList = decoded.map((e) => e.toString()).toList();
-            }
-          } catch (_) {
-            lyricsList = rawLyrics.split('\n');
+      List<String> lyricsList = [];
+      final rawLyrics = row['lyrics'] as String?;
+      if (rawLyrics != null && rawLyrics.isNotEmpty) {
+        try {
+          final decoded = jsonDecode(rawLyrics);
+          if (decoded is List) {
+            lyricsList = decoded.map((e) => e.toString()).toList();
           }
+        } catch (_) {
+          lyricsList = rawLyrics.split('\n');
         }
-
-        var resolvedAudio = row['audio_url'] as String? ?? '';
-        var isPreview = (row['is_preview'] as int? ?? 0) == 1;
-        var isYouTubeAudio = (row['is_youtube_audio'] as int? ?? 0) == 1;
-
-        // Auto-heal cached offline audio files if audio_url is empty in the database
-        if (resolvedAudio.isEmpty ||
-            (!resolvedAudio.startsWith('http') &&
-             !resolvedAudio.startsWith('asset') &&
-             !File(resolvedAudio).existsSync())) {
-          final cached = await findCachedAudioFile(songId);
-          if (cached != null) {
-            resolvedAudio = cached.path;
-            isPreview = false;
-            isYouTubeAudio = false;
-            unawaited(db.update(
-              'imported_songs',
-              {'audio_url': cached.path, 'is_preview': 0, 'is_youtube_audio': 0},
-              where: 'id = ?',
-              whereArgs: [songId],
-            ));
-          }
-        }
-
-        songs.add(<String, dynamic>{
-          'id': songId,
-          'title': songTitle,
-          'artist': songArtist,
-          'album': row['album'] as String? ?? '',
-          'duration_ms': row['duration_ms'] as int? ?? 180000,
-          'image_url': row['image_url'] as String? ?? '',
-          'audio_url': resolvedAudio,
-          'lyrics': lyricsList,
-          'genre': row['genre'] as String? ?? 'Spotify',
-          'is_preview': isPreview,
-          'is_youtube_audio': isYouTubeAudio,
-          'youtube_video_id': row['youtube_video_id'] as String? ?? '',
-        });
       }
+
+      var resolvedAudio = row['audio_url'] as String? ?? '';
+      var isPreview = (row['is_preview'] as int? ?? 0) == 1;
+      var isYouTubeAudio = (row['is_youtube_audio'] as int? ?? 0) == 1;
+
+      // Auto-heal cached offline audio files if audio_url is empty in the database
+      if (resolvedAudio.isEmpty ||
+          (!resolvedAudio.startsWith('http') &&
+           !resolvedAudio.startsWith('asset') &&
+           !File(resolvedAudio).existsSync())) {
+        final cached = cachedAudioIndex[songId];
+        if (cached != null) {
+          resolvedAudio = cached.path;
+          isPreview = false;
+          isYouTubeAudio = false;
+          unawaited(db.update(
+            'imported_songs',
+            {'audio_url': cached.path, 'is_preview': 0, 'is_youtube_audio': 0},
+            where: 'id = ?',
+            whereArgs: [songId],
+          ));
+        }
+      }
+
+      songsByPlaylist.putIfAbsent(playlistId, () => []).add(<String, dynamic>{
+        'id': songId,
+        'title': songTitle,
+        'artist': songArtist,
+        'album': row['album'] as String? ?? '',
+        'duration_ms': row['duration_ms'] as int? ?? 180000,
+        'image_url': row['image_url'] as String? ?? '',
+        'audio_url': resolvedAudio,
+        'lyrics': lyricsList,
+        'genre': row['genre'] as String? ?? 'Spotify',
+        'is_preview': isPreview,
+        'is_youtube_audio': isYouTubeAudio,
+        'youtube_video_id': row['youtube_video_id'] as String? ?? '',
+      });
+    }
+
+    for (final playlist in activePlaylists) {
+      final playlistId = playlist['id'] as String;
+      final rawTitle = playlist['title'] as String? ?? '';
+      final titleKey = rawTitle.toLowerCase().trim();
+      final songs = songsByPlaylist[playlistId] ?? <Map<String, dynamic>>[];
 
       List<int>? gradientColors;
       final rawColors = playlist['gradient_colors'] as String?;
@@ -2051,6 +2096,7 @@ class LocalDatabase {
         'title': rawTitle,
         'subtitle': playlist['subtitle'] as String? ?? 'Imported from Spotify',
         'spotify_url': playlist['spotify_url'] as String?,
+        'image_url': playlist['image_url'] as String? ?? '',
         'gradient_colors': gradientColors,
         'created_at': playlist['created_at'] as int,
         'songs': songs,
@@ -2062,6 +2108,41 @@ class LocalDatabase {
     }
 
     return results;
+  }
+
+  /// Fast deletion check for playlists that are already active in the
+  /// database (the query has filtered out `is_deleted = 1` rows).
+  ///
+  /// Mirrors [isPlaylistDeleted]: an explicitly active row can only be hidden
+  /// by an ID-based tombstone. Title/artist tombstones must NOT hide it,
+  /// otherwise a stale marker from an old deletion (for example
+  /// `deleted_playlist_flow g radio_2`) keeps sweeping away playlists that
+  /// were deliberately re-imported afterwards, on every app launch.
+  static bool _isPlaylistDeletedFast(
+    String playlistId,
+    Map<String, String> allSettings,
+  ) {
+    if (allSettings['deleted_playlist_$playlistId'] == 'true') return true;
+    final cleanId = playlistId.replaceAll(RegExp(r'-[356]$'), '');
+    if (cleanId != playlistId &&
+        allSettings['deleted_playlist_$cleanId'] == 'true') {
+      return true;
+    }
+    return false;
+  }
+
+  static bool _isSongDeletedFast(
+    String songId,
+    String title,
+    String artist,
+    Map<String, String> allSettings,
+  ) {
+    if (allSettings['deleted_song_$songId'] == 'true') return true;
+    if (title.isNotEmpty && artist.isNotEmpty) {
+      final key = '${title.toLowerCase().trim()}_${artist.toLowerCase().trim()}';
+      if (allSettings['deleted_song_$key'] == 'true') return true;
+    }
+    return false;
   }
 
   /// Deletes an imported playlist and its track associations.
@@ -2503,36 +2584,78 @@ class LocalDatabase {
     } catch (_) {}
   }
 
-  static Future<File?> findCachedAudioFile(String songId) async {
+  static final Map<String, File?> _cachedAudioFileMemo = {};
+  static Map<String, File>? _cachedAudioIndex;
+  static DateTime? _lastIndexScan;
+
+  static void invalidateCachedAudioFileMemo([String? songId]) {
+    if (songId != null) {
+      _cachedAudioFileMemo.remove(songId);
+      _cachedAudioIndex?.remove(songId);
+    } else {
+      _cachedAudioFileMemo.clear();
+      _cachedAudioIndex = null;
+    }
+  }
+
+  static Future<Map<String, File>> getOfflineAudioFileIndex({bool forceRefresh = false}) async {
+    final now = DateTime.now();
+    if (!forceRefresh &&
+        _cachedAudioIndex != null &&
+        _lastIndexScan != null &&
+        now.difference(_lastIndexScan!).inSeconds < 15) {
+      return _cachedAudioIndex!;
+    }
+    final index = <String, File>{};
     final dirs = await getOfflineCandidateDirs();
     for (final dir in dirs) {
       try {
         if (!await dir.exists()) continue;
-        for (final ext in const [
-          '.m4a',
-          '.mp3',
-          '.mp4',
-          '.aac',
-          '.wav',
-          '.ogg',
-          '.webm',
-          '.opus',
-          '.flac',
-        ]) {
-          final f = File(path.join(dir.path, '$songId$ext'));
-          if (await f.exists()) {
-            final len = await f.length();
-            if (len >= 1600000) {
-              return f;
+        final entities = dir.listSync();
+        for (final entity in entities) {
+          if (entity is File) {
+            final name = path.basenameWithoutExtension(entity.path);
+            final ext = path.extension(entity.path).toLowerCase();
+            if (const [
+              '.m4a',
+              '.mp3',
+              '.mp4',
+              '.aac',
+              '.wav',
+              '.ogg',
+              '.webm',
+              '.opus',
+              '.flac',
+            ].contains(ext)) {
+              if (entity.lengthSync() >= 1600000) {
+                index[name] = entity;
+                _cachedAudioFileMemo[name] = entity;
+              }
             }
           }
         }
       } catch (_) {}
     }
-    return null;
+    _cachedAudioIndex = index;
+    _lastIndexScan = now;
+    return index;
+  }
+
+  static Future<File?> findCachedAudioFile(String songId) async {
+    if (_cachedAudioFileMemo.containsKey(songId)) {
+      final f = _cachedAudioFileMemo[songId];
+      if (f == null) return null;
+      if (await f.exists() && await f.length() >= 1600000) return f;
+      _cachedAudioFileMemo.remove(songId);
+    }
+    final index = await getOfflineAudioFileIndex();
+    final f = index[songId];
+    _cachedAudioFileMemo[songId] = f;
+    return f;
   }
 
   Future<void> _deleteCachedAudioFile(String songId) async {
+    invalidateCachedAudioFileMemo(songId);
     var deleted = false;
     try {
       final dirs = await getOfflineCandidateDirs();
