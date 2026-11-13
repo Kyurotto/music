@@ -425,8 +425,10 @@ class _TrackRowState extends State<_TrackRow> {
                       Row(
                         children: [
                           if (_hasBadge(widget.song)) ...[
-                            ExcludeSemantics(
-                              child: _buildInlineBadge(widget.song),
+                            Flexible(
+                              child: ExcludeSemantics(
+                                child: _buildInlineBadge(widget.song),
+                              ),
                             ),
                             const SizedBox(width: 6),
                           ],
@@ -580,13 +582,17 @@ class _TrackRowState extends State<_TrackRow> {
               ),
             ),
             SizedBox(width: 4),
-            Text(
-              'LOCATING AUDIO',
-              style: TextStyle(
-                fontSize: 8.5,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 0.4,
-                color: AppTheme.accentPink,
+            Flexible(
+              child: Text(
+                'LOCATING AUDIO',
+                style: TextStyle(
+                  fontSize: 8.5,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.4,
+                  color: AppTheme.accentPink,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
             ),
           ],
@@ -613,6 +619,8 @@ class _TrackRowState extends State<_TrackRow> {
             letterSpacing: 0.4,
             color: AppTheme.accentGreen,
           ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
         ),
       );
     }
@@ -636,6 +644,8 @@ class _TrackRowState extends State<_TrackRow> {
             letterSpacing: 0.4,
             color: Colors.amber,
           ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
         ),
       );
     }

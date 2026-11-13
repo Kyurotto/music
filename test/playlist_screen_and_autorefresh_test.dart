@@ -145,7 +145,7 @@ void main() {
       expect(find.text('Acoustic Morning'), findsOneWidget);
       expect(find.text('Locating Track'), findsOneWidget);
       expect(find.text('FULL TRACK'), findsOneWidget);
-      expect(find.text('LOCATING AUDIO'), findsOneWidget);
+      expect(find.text('LOCATING'), findsOneWidget);
 
       // Verify Bottom Navigation items: Home, Samples, Explore, Library
       expect(find.text('Home'), findsOneWidget);

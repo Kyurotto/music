@@ -128,7 +128,7 @@ class SidebarNav extends StatelessWidget {
                   icon: Icons.library_music_rounded,
                   label: 'Library',
                   isSelected: controller.currentNavIndex == 2,
-                  badge: '${controller.playlists.length}',
+                  badge: '${controller.libraryPlaylists.length}',
                   onTap: () => controller.setNavIndex(2),
                 ),
                 _NavItem(

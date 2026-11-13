@@ -138,7 +138,7 @@ class _SpotifyImportDialogState extends State<SpotifyImportDialog> {
   @override
   Widget build(BuildContext context) {
     final preview = _preview;
-    final playlists = widget.controller.playlists;
+    final playlists = widget.controller.libraryPlaylists;
 
     return AlertDialog(
       backgroundColor: AppTheme.surface,

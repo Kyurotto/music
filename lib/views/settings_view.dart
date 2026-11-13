@@ -709,7 +709,7 @@ class _SettingsViewState extends State<SettingsView> {
           ),
         ),
         content: const Text(
-          'This will free up storage space. Your playlists, library tracks, and account data will NOT be deleted.',
+          'This will free up storage space by clearing temporary streaming cache. Your permanently downloaded songs, playlists, library tracks, and account data will NOT be deleted.',
           style: TextStyle(color: AppTheme.textSecondary, height: 1.4),
         ),
         actions: [
@@ -751,10 +751,12 @@ class _SettingsViewState extends State<SettingsView> {
       setState(() => _clearingCache = false);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(
-            'Cache cleared! Freed ${_formatCacheSize(freed)} of storage.',
-          )),
-        );
+        SnackBar(
+          content: Text(
+            'Cache cleared! Freed ${_formatCacheSize(freed)} of storage. Offline downloads remain intact.',
+          ),
+        ),
+      );
       }
     }
 
