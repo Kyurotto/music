@@ -234,9 +234,9 @@
     "semantic_hash": ""
   },
   "lib/views/music_dashboard_view.dart": {
-    "mtime": 1794542543.5636277,
-    "seen": 1794545038.7101455,
-    "ast_hash": "1181b33e442f763aa9da2d902c13fceb",
+    "mtime": 1794546244.0440156,
+    "seen": 1794546372.4613261,
+    "ast_hash": "92edf3c9cacf6a7e555cfdc9ad93cc90",
     "semantic_hash": ""
   },
   "lib/views/settings_view.dart": {
@@ -1398,9 +1398,9 @@
     "semantic_hash": ""
   },
   "README.md": {
-    "mtime": 1794542543.4593618,
-    "seen": 1794545038.7422228,
-    "ast_hash": "91b02f192b1e404822b139a335c41385",
+    "mtime": 1794546113.9997108,
+    "seen": 1794546372.516879,
+    "ast_hash": "33473907a82de2d59c0d74de4b3aa910",
     "semantic_hash": ""
   },
   "analysis_options.yaml": {
