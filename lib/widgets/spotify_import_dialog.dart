@@ -4,6 +4,7 @@ import '../controllers/music_player_controller.dart';
 import '../services/spotify_import_service.dart';
 import '../theme/app_theme.dart';
 import 'song_artwork_widget.dart';
+import 'spotify_export_import_dialog.dart';
 
 /// Dialog that accepts a Spotify track/playlist/album link and imports it
 /// into a new or existing playlist.
@@ -120,6 +121,15 @@ class _SpotifyImportDialogState extends State<SpotifyImportDialog> {
     }
   }
 
+  Future<void> _openDataExportImport() async {
+    final playlistId = await SpotifyExportImportDialog.show(
+      context,
+      controller: widget.controller,
+    );
+    if (!mounted || playlistId == null) return;
+    Navigator.of(context).pop(playlistId);
+  }
+
   String get _playlistLabel {
     switch (_preview?.type) {
       case SpotifyLinkType.playlist:
@@ -167,6 +177,47 @@ class _SpotifyImportDialogState extends State<SpotifyImportDialog> {
                   color: AppTheme.textSecondary,
                   fontSize: 13,
                   height: 1.4,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.fromLTRB(12, 8, 6, 8),
+                decoration: BoxDecoration(
+                  color: AppTheme.cardSurface,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppTheme.border),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.inventory_2_rounded,
+                      size: 18,
+                      color: AppTheme.accentGreen,
+                    ),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        'Have your Spotify data export? Import every playlist '
+                        'and Liked Songs at once — no Premium needed.',
+                        style: TextStyle(
+                          color: AppTheme.textSecondary,
+                          fontSize: 11.5,
+                          height: 1.3,
+                        ),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: _isLoading ? null : _openDataExportImport,
+                      child: const Text(
+                        'Open',
+                        style: TextStyle(
+                          color: AppTheme.accentGreen,
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
               const SizedBox(height: 16),
