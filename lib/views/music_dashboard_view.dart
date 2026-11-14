@@ -52,6 +52,7 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
   final TextEditingController _radioSearchController = TextEditingController();
 
   String? _lastSongId;
+  bool _autoLyricsSheetOpen = false;
   bool _lastIsPlaying = false;
   int _lastNavIndex = 0;
   String _lastGenre = 'All';
@@ -128,7 +129,8 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
           _isLoadingDynamicRadios = false;
         });
         _controller.preLocateExploreRadios(stations);
-        final isTest = !kIsWeb && Platform.environment.containsKey('FLUTTER_TEST');
+        final isTest =
+            !kIsWeb && Platform.environment.containsKey('FLUTTER_TEST');
         if (!isTest) {
           Future.delayed(const Duration(milliseconds: 600), () {
             if (mounted) {
@@ -244,6 +246,33 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
     final repeatMode = _controller.repeatMode;
     final shuffle = _controller.isShuffle;
     final isMuted = _controller.isMuted;
+
+    // "Show Lyrics Automatically": open the sheet once per new track. The
+    // sheet itself follows controller.currentSong, so it stays in sync when
+    // the queue advances while it is open.
+    if (currentSongId != _lastSongId &&
+        currentSongId != null &&
+        isPlaying &&
+        _controller.autoLyrics &&
+        !_autoLyricsSheetOpen) {
+      final song = _controller.currentSong;
+      if (song != null) {
+        _autoLyricsSheetOpen = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) {
+            _autoLyricsSheetOpen = false;
+            return;
+          }
+          SpotifyLyricsSheet.show(
+            context,
+            song: song,
+            controller: _controller,
+          ).whenComplete(() {
+            _autoLyricsSheetOpen = false;
+          });
+        });
+      }
+    }
 
     if (currentSongId != _lastSongId ||
         isPlaying != _lastIsPlaying ||
@@ -743,9 +772,7 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
     return Container(
       decoration: BoxDecoration(
         color: AppTheme.surface,
-        border: const Border(
-          top: BorderSide(color: AppTheme.border, width: 1),
-        ),
+        border: const Border(top: BorderSide(color: AppTheme.border, width: 1)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.4),
@@ -861,7 +888,9 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                   style: TextStyle(
                     fontSize: 11,
                     fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                    color: isSelected ? AppTheme.textPrimary : AppTheme.textMuted,
+                    color: isSelected
+                        ? AppTheme.textPrimary
+                        : AppTheme.textMuted,
                     letterSpacing: 0.2,
                   ),
                 ),

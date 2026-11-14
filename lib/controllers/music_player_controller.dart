@@ -166,13 +166,16 @@ class MusicPlayerController extends ChangeNotifier {
   DateTime _lastPositionNotify = DateTime(0);
   static const _positionNotifyInterval = Duration(milliseconds: 300);
 
-  // Real audio player. The Android equalizer effect is attached to the same
-  // audio session so preset changes modify the actual output signal.
+  // Real audio player. The Android equalizer and loudness effects are attached
+  // to the same audio session so setting changes modify the actual output.
   final AudioEqualizerService _equalizer = AudioEqualizerService();
+  final AndroidLoudnessEnhancer _loudnessEnhancer = AndroidLoudnessEnhancer();
   late final AudioPlayer _audioPlayer = AudioPlayer(
     useProxyForRequestHeaders: false,
     audioPipeline: AudioEqualizerService.isPlatformSupported
-        ? AudioPipeline(androidAudioEffects: [_equalizer.effect])
+        ? AudioPipeline(
+            androidAudioEffects: [_equalizer.effect, _loudnessEnhancer],
+          )
         : null,
   );
   StreamSubscription<Duration>? _positionSub;
@@ -412,6 +415,242 @@ class MusicPlayerController extends ChangeNotifier {
     }
   }
 
+  // Playback settings persisted in `app_settings` and consumed by the audio
+  // pipeline. The Settings screen used to write these keys without anything
+  // ever reading them, so every toggle was a no-op.
+
+  static const String autoLyricsSettingKey = 'auto_lyrics';
+  static const String streamingQualitySettingKey = 'streaming_quality';
+  static const String downloadQualitySettingKey = 'download_quality';
+  static const String gaplessPlaybackSettingKey = 'gapless_playback';
+  static const String automixSettingKey = 'automix';
+  static const String normalizeVolumeSettingKey = 'normalize_volume';
+  static const String monoAudioSettingKey = 'mono_audio';
+  static const String autoplaySettingKey = 'autoplay';
+  static const String crossfadeSettingKey = 'crossfade';
+
+  bool _autoLyrics = false;
+  bool _gaplessPlayback = true;
+  bool _automix = true;
+  bool _normalizeVolume = true;
+  bool _monoAudio = false;
+  bool _autoplay = true;
+  String _streamingQuality = 'Very High (320 kbps)';
+  String _downloadQuality = 'High (160 kbps)';
+  double _crossfadeSeconds = 4.0;
+
+  /// Pop the lyrics sheet automatically whenever a new song starts.
+  bool get autoLyrics => _autoLyrics;
+
+  /// Whether auto-advance should start the next track immediately.
+  bool get gaplessPlayback => _gaplessPlayback;
+
+  /// Whether automatic transitions fade out/in using [crossfadeSeconds].
+  bool get automix => _automix;
+
+  /// Whether the Android loudness enhancer is boosting quiet tracks.
+  bool get normalizeVolume => _normalizeVolume;
+
+  /// Saved mono preference. `just_audio` 0.9.x exposes no channel-mapping
+  /// processor, so the value is kept for engines that can honour it.
+  bool get monoAudio => _monoAudio;
+
+  /// Whether the queue should be extended with similar local songs when the
+  /// user's own queue runs out.
+  bool get autoplay => _autoplay;
+
+  String get streamingQuality => _streamingQuality;
+
+  String get downloadQuality => _downloadQuality;
+
+  double get crossfadeSeconds => _crossfadeSeconds;
+
+  /// Preferred bitrate parsed from labels such as `High (160 kbps)`.
+  /// `null` means "Automatic" (keep the resolver's default choice).
+  static int? qualityBitrateKbps(String quality) {
+    if (quality.trim().toLowerCase().startsWith('automatic')) return null;
+    final match = RegExp(r'(\d+)').firstMatch(quality);
+    return match == null ? null : int.tryParse(match.group(1)!);
+  }
+
+  int? get streamingQualityKbps => qualityBitrateKbps(_streamingQuality);
+
+  int? get downloadQualityKbps => qualityBitrateKbps(_downloadQuality);
+
+  void setAutoLyrics(bool enabled, {bool save = true}) {
+    if (_autoLyrics != enabled) {
+      _autoLyrics = enabled;
+      notifyListeners();
+    }
+    if (save) {
+      unawaited(
+        LocalDatabase.instance.saveSetting(
+          autoLyricsSettingKey,
+          enabled.toString(),
+        ),
+      );
+    }
+  }
+
+  void setGaplessPlayback(bool enabled, {bool save = true}) {
+    if (_gaplessPlayback != enabled) {
+      _gaplessPlayback = enabled;
+      notifyListeners();
+    }
+    if (save) {
+      unawaited(
+        LocalDatabase.instance.saveSetting(
+          gaplessPlaybackSettingKey,
+          enabled.toString(),
+        ),
+      );
+    }
+  }
+
+  void setAutomix(bool enabled, {bool save = true}) {
+    if (_automix != enabled) {
+      _automix = enabled;
+      if (!enabled) _cancelAutomixFade();
+      notifyListeners();
+    }
+    if (save) {
+      unawaited(
+        LocalDatabase.instance.saveSetting(
+          automixSettingKey,
+          enabled.toString(),
+        ),
+      );
+    }
+  }
+
+  void setNormalizeVolume(bool enabled, {bool save = true}) {
+    if (_normalizeVolume != enabled) {
+      _normalizeVolume = enabled;
+      unawaited(_applyLoudnessNormalization());
+      notifyListeners();
+    }
+    if (save) {
+      unawaited(
+        LocalDatabase.instance.saveSetting(
+          normalizeVolumeSettingKey,
+          enabled.toString(),
+        ),
+      );
+    }
+  }
+
+  void setMonoAudio(bool enabled, {bool save = true}) {
+    if (_monoAudio != enabled) {
+      _monoAudio = enabled;
+      // just_audio 0.9.x has no mono/channel-mapping API. The preference is
+      // still persisted so a device/engine that supports it can apply it.
+      debugPrint('[MusicPlayerController] Mono audio preference: $enabled');
+      notifyListeners();
+    }
+    if (save) {
+      unawaited(
+        LocalDatabase.instance.saveSetting(
+          monoAudioSettingKey,
+          enabled.toString(),
+        ),
+      );
+    }
+  }
+
+  void setAutoplay(bool enabled, {bool save = true}) {
+    if (_autoplay != enabled) {
+      _autoplay = enabled;
+      notifyListeners();
+    }
+    if (save) {
+      unawaited(
+        LocalDatabase.instance.saveSetting(
+          autoplaySettingKey,
+          enabled.toString(),
+        ),
+      );
+    }
+  }
+
+  void setStreamingQuality(String quality, {bool save = true}) {
+    if (_streamingQuality != quality) {
+      _streamingQuality = quality;
+      notifyListeners();
+    }
+    if (save) {
+      unawaited(
+        LocalDatabase.instance.saveSetting(streamingQualitySettingKey, quality),
+      );
+    }
+  }
+
+  void setDownloadQuality(String quality, {bool save = true}) {
+    if (_downloadQuality != quality) {
+      _downloadQuality = quality;
+      notifyListeners();
+    }
+    if (save) {
+      unawaited(
+        LocalDatabase.instance.saveSetting(downloadQualitySettingKey, quality),
+      );
+    }
+  }
+
+  void setCrossfadeSeconds(double seconds, {bool save = true}) {
+    final clamped = seconds.clamp(0.0, 12.0).toDouble();
+    if (_crossfadeSeconds != clamped) {
+      _crossfadeSeconds = clamped;
+      notifyListeners();
+    }
+    if (save) {
+      unawaited(
+        LocalDatabase.instance.saveSetting(
+          crossfadeSettingKey,
+          clamped.toString(),
+        ),
+      );
+    }
+  }
+
+  /// Reads the playback settings from the shared settings map. Missing keys
+  /// keep the documented defaults (matching the Settings screen).
+  void _loadPlaybackSettings(Map<String, String> settings) {
+    _gaplessPlayback = settings[gaplessPlaybackSettingKey] != 'false';
+    _automix = settings[automixSettingKey] != 'false';
+    _normalizeVolume = settings[normalizeVolumeSettingKey] != 'false';
+    _monoAudio = settings[monoAudioSettingKey] == 'true';
+    _autoplay = settings[autoplaySettingKey] != 'false';
+    _autoLyrics = settings[autoLyricsSettingKey] == 'true';
+
+    final streaming = settings[streamingQualitySettingKey];
+    if (streaming != null && streaming.trim().isNotEmpty) {
+      _streamingQuality = streaming;
+    }
+    final download = settings[downloadQualitySettingKey];
+    if (download != null && download.trim().isNotEmpty) {
+      _downloadQuality = download;
+    }
+    final crossfade = double.tryParse(settings[crossfadeSettingKey] ?? '');
+    if (crossfade != null) {
+      _crossfadeSeconds = crossfade.clamp(0.0, 12.0).toDouble();
+    }
+
+    unawaited(_applyLoudnessNormalization());
+  }
+
+  /// The Android loudness enhancer only applies a gain offset; it has no
+  /// ReplayGain metadata to normalise against. A small boost is still audible
+  /// when the user turns the setting on, while "off" leaves output untouched.
+  Future<void> _applyLoudnessNormalization() async {
+    if (!AudioEqualizerService.isPlatformSupported) return;
+    try {
+      await _loudnessEnhancer.setEnabled(true);
+      await _loudnessEnhancer.setTargetGain(_normalizeVolume ? 3.0 : 0.0);
+    } catch (e) {
+      debugPrint('[MusicPlayerController] Loudness enhancer error: $e');
+    }
+  }
+
   bool _isExplicitBlocked(Song? song) =>
       !_allowExplicit && (song?.isExplicit ?? false);
 
@@ -455,6 +694,15 @@ class MusicPlayerController extends ChangeNotifier {
     return baseVol.clamp(0.0, 1.0).toDouble();
   }
 
+  // Automix uses the existing crossfade duration to duck the outgoing track
+  // and ramp the incoming one in. The override is kept separate from
+  // [_volume] so the user's slider value is not destroyed by a fade.
+  Timer? _automixFadeTimer;
+  double? _automixFadeLevel;
+  bool _automixFadeInPending = false;
+
+  double get _outputVolume => _automixFadeLevel ?? _effectiveVolume;
+
   /// Re-assert volume on the native player.
   ///
   /// ExoPlayer resets its volume while a source is being (re)prepared, so a
@@ -466,7 +714,7 @@ class MusicPlayerController extends ChangeNotifier {
     if (_disposed || !_audioPlayerHasSource) return;
     try {
       // ignore: discarded_futures
-      _audioPlayer.setVolume(_effectiveVolume).catchError((_) {});
+      _audioPlayer.setVolume(_outputVolume).catchError((_) {});
     } catch (_) {}
   }
 
@@ -475,6 +723,129 @@ class MusicPlayerController extends ChangeNotifier {
     for (final delayMs in const [0, 80, 200, 450, 800, 1400, 2200, 3200]) {
       Future.delayed(Duration(milliseconds: delayMs), _assertNativeVolume);
     }
+  }
+
+  void _cancelAutomixFade({bool restore = true}) {
+    _automixFadeTimer?.cancel();
+    _automixFadeTimer = null;
+    _automixFadeInPending = false;
+    final hadLevel = _automixFadeLevel != null;
+    _automixFadeLevel = null;
+    if (restore && hadLevel) {
+      try {
+        // ignore: discarded_futures
+        _audioPlayer.setVolume(_effectiveVolume).catchError((_) {});
+      } catch (_) {}
+    }
+  }
+
+  /// Starts ducking the current track when it is within the crossfade window.
+  /// Called from the 500 ms playback heartbeat.
+  void _maybeStartAutomixFadeOut() {
+    if (!_automix || _automixFadeTimer != null) return;
+    if (_crossfadeSeconds <= 0 ||
+        _repeatMode == PlaybackRepeatMode.one ||
+        !_isPlaying ||
+        !_audioPlayerHasSource ||
+        _disposed) {
+      return;
+    }
+
+    final hasNext =
+        nextPlayableTrackIndex(
+          _queue,
+          _currentIndex,
+          _repeatMode == PlaybackRepeatMode.all,
+          isBlocked: _isExplicitBlocked,
+        ) !=
+        null;
+    if (!hasNext &&
+        !(_autoplay &&
+            _repeatMode == PlaybackRepeatMode.off &&
+            _queue.length < _allSongs.length)) {
+      return;
+    }
+
+    final remaining = currentDuration - _currentPosition;
+    final fadeWindow = Duration(
+      milliseconds: (_crossfadeSeconds * 1000).round(),
+    );
+    if (remaining <= Duration.zero || remaining > fadeWindow) return;
+
+    _startAutomixFadeOut(remaining);
+  }
+
+  void _startAutomixFadeOut(Duration remaining) {
+    final totalMs = remaining.inMilliseconds.clamp(150, 12000);
+    final startLevel = _automixFadeLevel ?? _effectiveVolume;
+    final startedAt = DateTime.now();
+    _automixFadeTimer?.cancel();
+    _automixFadeTimer = Timer.periodic(const Duration(milliseconds: 80), (
+      timer,
+    ) {
+      if (_disposed || !_isPlaying) {
+        _cancelAutomixFade();
+        return;
+      }
+      final elapsed = DateTime.now().difference(startedAt).inMilliseconds;
+      final progress = (elapsed / totalMs).clamp(0.0, 1.0);
+      final level = startLevel * (1.0 - progress);
+      _automixFadeLevel = level.clamp(0.0, 1.0).toDouble();
+      try {
+        // ignore: discarded_futures
+        _audioPlayer.setVolume(_automixFadeLevel!).catchError((_) {});
+      } catch (_) {}
+      if (progress >= 1.0) {
+        timer.cancel();
+        _automixFadeTimer = null;
+        _automixFadeLevel = 0.0;
+        _automixFadeInPending = true;
+      }
+    });
+  }
+
+  /// Ramps the next track in after an automix crossfade. Safe to call after
+  /// every successful source load; it only acts when a fade-out completed.
+  void _maybeStartAutomixFadeIn() {
+    if (!_automix || !_automixFadeInPending) return;
+    _automixFadeInPending = false;
+    if (_crossfadeSeconds <= 0) {
+      _automixFadeLevel = null;
+      _assertNativeVolume();
+      return;
+    }
+
+    final totalMs = (_crossfadeSeconds * 1000).round().clamp(250, 12000);
+    final startedAt = DateTime.now();
+    _automixFadeTimer?.cancel();
+    _automixFadeLevel = 0.0;
+    try {
+      // ignore: discarded_futures
+      _audioPlayer.setVolume(0).catchError((_) {});
+    } catch (_) {}
+
+    _automixFadeTimer = Timer.periodic(const Duration(milliseconds: 80), (
+      timer,
+    ) {
+      if (_disposed || !_isPlaying) {
+        _cancelAutomixFade();
+        return;
+      }
+      final elapsed = DateTime.now().difference(startedAt).inMilliseconds;
+      final progress = (elapsed / totalMs).clamp(0.0, 1.0);
+      final level = _effectiveVolume * progress;
+      _automixFadeLevel = level.clamp(0.0, 1.0).toDouble();
+      try {
+        // ignore: discarded_futures
+        _audioPlayer.setVolume(_automixFadeLevel!).catchError((_) {});
+      } catch (_) {}
+      if (progress >= 1.0) {
+        timer.cancel();
+        _automixFadeTimer = null;
+        _automixFadeLevel = null;
+        _assertNativeVolume();
+      }
+    });
   }
 
   /// Re-assert audio focus before starting playback.
@@ -515,7 +886,9 @@ class MusicPlayerController extends ChangeNotifier {
     unawaited(_equalizer.initialize());
     unawaited(_offlineCandidateDirs());
     if (!Platform.environment.containsKey('FLUTTER_TEST')) {
-      unawaited(RadioDiscoveryService.instance.loadCachedRadios().catchError((_) {}));
+      unawaited(
+        RadioDiscoveryService.instance.loadCachedRadios().catchError((_) {}),
+      );
     }
     _startImportRetryLoop();
     _startConnectivityWatcher();
@@ -622,6 +995,10 @@ class MusicPlayerController extends ChangeNotifier {
 
       // ignore: discarded_futures
       _audioPlayer.setVolume(_volume).catchError((_) {});
+
+      // The effect is attached to the pipeline at construction; push the
+      // persisted gain once the player is available.
+      unawaited(_applyLoudnessNormalization());
 
       // Listen to position updates from real audio player
       _positionSub = _audioPlayer.positionStream.listen((pos) {
@@ -1386,6 +1763,7 @@ class MusicPlayerController extends ChangeNotifier {
       _autoCachePlayedSongs = allSettings[_autoCachePlayedSongsKey] != 'false';
       _allowExplicit = allSettings[allowExplicitSettingKey] != 'false';
       _visualizerEnabled = allSettings[visualizerSettingKey] != 'false';
+      _loadPlaybackSettings(allSettings);
       _playlists.removeWhere((p) {
         if (allSettings['deleted_playlist_${p.id}'] == 'true') return true;
         final cleanId = p.id.replaceAll(RegExp(r'-[356]$'), '');
@@ -2028,8 +2406,9 @@ class MusicPlayerController extends ChangeNotifier {
           !kIsWeb && Platform.environment.containsKey('FLUTTER_TEST');
       if (_autoDownloadOnImport && !isTestEnv) {
         for (final pl in _playlists) {
-          final plSongs =
-              _allSongs.where((s) => pl.songIds.contains(s.id)).toList();
+          final plSongs = _allSongs
+              .where((s) => pl.songIds.contains(s.id))
+              .toList();
           final hasUndownloaded = plSongs.any((s) => !isSongDownloaded(s.id));
           if (hasUndownloaded) {
             unawaited(
@@ -3082,6 +3461,7 @@ class MusicPlayerController extends ChangeNotifier {
     Song song, {
     bool previewFallbackOnly = false,
     bool fastImport = false,
+    int? preferredBitrateKbps,
   }) {
     if (_disposed) return Future<void>.value();
     final key = previewFallbackOnly ? '${song.id}:preview' : song.id;
@@ -3096,6 +3476,7 @@ class MusicPlayerController extends ChangeNotifier {
       song,
       previewFallbackOnly: previewFallbackOnly,
       fastImport: fastImport,
+      preferredBitrateKbps: preferredBitrateKbps,
     ).whenComplete(() => _pendingEnrichment.remove(key));
     _pendingEnrichment[key] = future;
     return future;
@@ -3148,6 +3529,7 @@ class MusicPlayerController extends ChangeNotifier {
       try {
         final ytStream = await _enrichment.fetchYouTubeStreamById(
           song.youtubeVideoId,
+          preferredBitrateKbps: streamingQualityKbps,
         );
         if (ytStream.hasAudio && ytStream.previewUrl != failedUrl) {
           _applyEnrichment(song, ytStream);
@@ -3179,7 +3561,11 @@ class MusicPlayerController extends ChangeNotifier {
     Song song, {
     bool previewFallbackOnly = false,
     bool fastImport = false,
+    int? preferredBitrateKbps,
   }) async {
+    // Playback resolution honours the Streaming Quality setting; downloads pass
+    // Download Quality explicitly when they need to resolve a fresh stream.
+    final qualityKbps = preferredBitrateKbps ?? streamingQualityKbps;
     if (!previewFallbackOnly) {
       final isStuck =
           !song.hasAudio ||
@@ -3222,7 +3608,10 @@ class MusicPlayerController extends ChangeNotifier {
       if (song.youtubeVideoId.isNotEmpty) {
         try {
           final ytEnrichment = await _enrichment
-              .fetchYouTubeStreamById(song.youtubeVideoId)
+              .fetchYouTubeStreamById(
+                song.youtubeVideoId,
+                preferredBitrateKbps: qualityKbps,
+              )
               .timeout(const Duration(seconds: 8));
           if (ytEnrichment.hasAudio) {
             final changed = _applyEnrichment(song, ytEnrichment);
@@ -3242,7 +3631,10 @@ class MusicPlayerController extends ChangeNotifier {
           song.youtubeVideoId = dbYtId;
           try {
             final ytEnrichment = await _enrichment
-                .fetchYouTubeStreamById(dbYtId)
+                .fetchYouTubeStreamById(
+                  dbYtId,
+                  preferredBitrateKbps: qualityKbps,
+                )
                 .timeout(const Duration(seconds: 8));
             if (ytEnrichment.hasAudio) {
               final changed = _applyEnrichment(song, ytEnrichment);
@@ -3292,6 +3684,7 @@ class MusicPlayerController extends ChangeNotifier {
         prioritizeYouTube: true,
         fastImport: fastImport,
         youtubeOnly: _isYouTubeCatalogSong(song),
+        preferredBitrateKbps: qualityKbps,
       );
       _logDiag(
         'enrichment done in ${DateTime.now().difference(enrichStart).inMilliseconds}ms '
@@ -3646,7 +4039,9 @@ class MusicPlayerController extends ChangeNotifier {
     final dirs = <Directory>[];
     if (!kIsWeb && Platform.isAndroid) {
       dirs.add(
-        Directory('/data/user/0/com.example.music/app_flutter/offline_downloads'),
+        Directory(
+          '/data/user/0/com.example.music/app_flutter/offline_downloads',
+        ),
       );
       dirs.add(
         Directory('/data/user/0/com.example.music/files/offline_downloads'),
@@ -4267,6 +4662,7 @@ class MusicPlayerController extends ChangeNotifier {
             allowPreviewFallback: false,
             prioritizeYouTube: true,
             youtubeOnly: _isYouTubeCatalogSong(song),
+            preferredBitrateKbps: downloadQualityKbps,
           );
           if (enrichment.hasAudio &&
               enrichment.previewUrl != null &&
@@ -4361,9 +4757,7 @@ class MusicPlayerController extends ChangeNotifier {
             // Also cache artwork locally if available
             if (song.imageUrl.startsWith('http')) {
               try {
-                final artTarget = File(
-                  p.join(cacheDir.path, '${song.id}.jpg'),
-                );
+                final artTarget = File(p.join(cacheDir.path, '${song.id}.jpg'));
                 if (!artTarget.existsSync()) {
                   final artResp = await http
                       .get(Uri.parse(song.imageUrl))
@@ -4437,8 +4831,7 @@ class MusicPlayerController extends ChangeNotifier {
         s.duration = song.duration;
       }
     }
-    if (_isDownloadableCatalogId(song.id) ||
-        song.id.startsWith('discovery-')) {
+    if (_isDownloadableCatalogId(song.id) || song.id.startsWith('discovery-')) {
       try {
         final dbAudioUrl =
             (song.audioUrl.contains('googlevideo.com') ||
@@ -4481,8 +4874,9 @@ class MusicPlayerController extends ChangeNotifier {
           try {
             final persistentDir = await _getPersistentOfflineDirectory();
             final ext = p.extension(cached.path);
-            final targetFile =
-                File(p.join(persistentDir.path, '${song.id}$ext'));
+            final targetFile = File(
+              p.join(persistentDir.path, '${song.id}$ext'),
+            );
             if (!targetFile.existsSync() || targetFile.lengthSync() < 1024) {
               await cached.copy(targetFile.path);
             }
@@ -4545,8 +4939,11 @@ class MusicPlayerController extends ChangeNotifier {
       // (duplicate searches were a major source of YouTube throttling).
       if (_needsFreshDownloadUrl(song, urlToDownload)) {
         try {
-          await _ensureEnrichment(song, fastImport: true)
-              .timeout(const Duration(seconds: 45));
+          await _ensureEnrichment(
+            song,
+            fastImport: true,
+            preferredBitrateKbps: downloadQualityKbps,
+          ).timeout(const Duration(seconds: 45));
         } catch (_) {}
         urlToDownload = song.audioUrl;
         previewOnly = song.isPreview;
@@ -4554,8 +4951,7 @@ class MusicPlayerController extends ChangeNotifier {
 
       // Preview fallback is opt-in only. Catalog downloads stay full-track so
       // a 30s clip is never stored as if it were a permanent download.
-      if (_needsFreshDownloadUrl(song, urlToDownload) &&
-          allowPreviewFallback) {
+      if (_needsFreshDownloadUrl(song, urlToDownload) && allowPreviewFallback) {
         try {
           final enrichment = await _enrichment.enrichTrack(
             title: song.title,
@@ -4566,6 +4962,7 @@ class MusicPlayerController extends ChangeNotifier {
             allowPreviewFallback: true,
             prioritizeYouTube: true,
             youtubeOnly: _isYouTubeCatalogSong(song),
+            preferredBitrateKbps: downloadQualityKbps,
           );
           if (enrichment.hasAudio &&
               enrichment.previewUrl != null &&
@@ -4681,9 +5078,7 @@ class MusicPlayerController extends ChangeNotifier {
                 lyrics: song.lyrics,
               );
             } catch (e) {
-              debugPrint(
-                '[MusicPlayerController] persist download error: $e',
-              );
+              debugPrint('[MusicPlayerController] persist download error: $e');
             }
 
             // Also cache artwork locally if available
@@ -4823,8 +5218,9 @@ class MusicPlayerController extends ChangeNotifier {
         continue;
       }
 
-      final existingTask =
-          _downloadQueue.where((t) => t.song.id == song.id).firstOrNull;
+      final existingTask = _downloadQueue
+          .where((t) => t.song.id == song.id)
+          .firstOrNull;
       if (existingTask != null) {
         existingTask.completers.add(completer);
       } else {
@@ -4971,8 +5367,9 @@ class MusicPlayerController extends ChangeNotifier {
   }) async {
     final playlist = playlistById(playlistId);
     if (playlist == null) return 0;
-    final songs =
-        _allSongs.where((s) => playlist.songIds.contains(s.id)).toList();
+    final songs = _allSongs
+        .where((s) => playlist.songIds.contains(s.id))
+        .toList();
     return downloadPlaylistSongs(
       songs,
       playlist: playlist,
@@ -5027,8 +5424,8 @@ class MusicPlayerController extends ChangeNotifier {
       final rawUserId = (_loadedUserId != null && _loadedUserId!.isNotEmpty)
           ? _loadedUserId!
           : (AuthService.instance.currentUserId.isNotEmpty
-              ? AuthService.instance.currentUserId
-              : 'default_user');
+                ? AuthService.instance.currentUserId
+                : 'default_user');
       final userId = rawUserId;
 
       MusicPlaylist target;
@@ -5153,10 +5550,7 @@ class MusicPlayerController extends ChangeNotifier {
   static String _downloadPlaylistId(String title) {
     final slug = _normalizeKey(
       title,
-    ).replaceAll(RegExp(r'[^a-z0-9]+'), '-').replaceAll(
-      RegExp(r'^-+|-+$'),
-      '',
-    );
+    ).replaceAll(RegExp(r'[^a-z0-9]+'), '-').replaceAll(RegExp(r'^-+|-+$'), '');
     return 'download-${slug.isEmpty ? DateTime.now().microsecondsSinceEpoch : slug}';
   }
 
@@ -5267,6 +5661,7 @@ class MusicPlayerController extends ChangeNotifier {
         allowPreviewFallback: true,
         prioritizeYouTube: false,
         youtubeOnly: _isYouTubeCatalogSong(song),
+        preferredBitrateKbps: streamingQualityKbps,
       );
       if (enrichment.hasAudio || enrichment.hasLyrics) {
         _enrichedIds.add(song.id);
@@ -5627,13 +6022,11 @@ class MusicPlayerController extends ChangeNotifier {
       _startTimer();
       if (_audioPlayerHasSource) {
         try {
-          final effectiveVolume = _isMuted
-              ? 0.0
-              : (_volume > 0.05 ? _volume : 0.8);
           // ignore: discarded_futures
-          _audioPlayer.setVolume(effectiveVolume).catchError((_) {});
+          _audioPlayer.setVolume(_outputVolume).catchError((_) {});
           // ignore: discarded_futures
           _audioPlayer.play().catchError((_) {});
+          _maybeStartAutomixFadeIn();
           _scheduleVolumeReasserts();
         } catch (_) {}
       } else {
@@ -5648,6 +6041,7 @@ class MusicPlayerController extends ChangeNotifier {
       }
       _playbackTimer?.cancel();
       _cancelStallWatchdog();
+      _cancelAutomixFade();
     }
     notifyListeners();
   }
@@ -5667,13 +6061,11 @@ class MusicPlayerController extends ChangeNotifier {
       _startTimer();
       if (_audioPlayerHasSource) {
         try {
-          final effectiveVolume = _isMuted
-              ? 0.0
-              : (_volume > 0.05 ? _volume : 0.8);
           // ignore: discarded_futures
-          _audioPlayer.setVolume(effectiveVolume).catchError((_) {});
+          _audioPlayer.setVolume(_outputVolume).catchError((_) {});
           // ignore: discarded_futures
           _audioPlayer.play().catchError((_) {});
+          _maybeStartAutomixFadeIn();
           _scheduleVolumeReasserts();
         } catch (_) {}
       } else {
@@ -5694,6 +6086,7 @@ class MusicPlayerController extends ChangeNotifier {
       }
       _playbackTimer?.cancel();
       _cancelStallWatchdog();
+      _cancelAutomixFade();
       notifyListeners();
     }
   }
@@ -5842,6 +6235,39 @@ class MusicPlayerController extends ChangeNotifier {
     return null;
   }
 
+  /// Appends up to [limit] similar local songs when the queue runs out.
+  ///
+  /// Only genuinely playable library tracks are considered, and songs already
+  /// queued are skipped so autoplay cannot loop the same few tracks.
+  int _appendAutoplayTracks({int limit = 8}) {
+    if (_queue.length >= 500) return 0;
+    final current = currentSong;
+    final queuedIds = _queue.map((song) => song.id).toSet();
+    final candidates = _allSongs.where((song) {
+      return !queuedIds.contains(song.id) &&
+          song.hasAudio &&
+          !song.isSilentPlaceholder &&
+          !song.isPreview &&
+          !isLocatingStatus(song) &&
+          !_isExplicitBlocked(song);
+    }).toList();
+    if (candidates.isEmpty) return 0;
+
+    int affinity(Song song) {
+      var value = 0;
+      if (current != null && song.artist == current.artist) value += 4;
+      if (current != null && song.genre == current.genre) value += 2;
+      if (song.isLiked) value += 1;
+      return value;
+    }
+
+    candidates.sort((a, b) => affinity(b).compareTo(affinity(a)));
+    final picked = candidates.take(limit).toList();
+    if (picked.isEmpty) return 0;
+    _queue.addAll(picked);
+    return picked.length;
+  }
+
   void next({bool fromCompletion = false}) {
     if (_queue.isEmpty) return;
     if (!fromCompletion) {
@@ -5896,6 +6322,16 @@ class MusicPlayerController extends ChangeNotifier {
         _repeatMode == PlaybackRepeatMode.all,
         isBlocked: _isExplicitBlocked,
       );
+    }
+
+    if (nextIndex == null &&
+        _autoplay &&
+        !_isShuffle &&
+        _repeatMode == PlaybackRepeatMode.off) {
+      // The user's queue is exhausted. Extend it with similar local songs so
+      // playback keeps going instead of stopping on the last track.
+      final added = _appendAutoplayTracks();
+      if (added > 0) nextIndex = _queue.length - added;
     }
 
     if (nextIndex == null) {
@@ -6043,6 +6479,7 @@ class MusicPlayerController extends ChangeNotifier {
   }
 
   void setVolume(double val) {
+    _cancelAutomixFade(restore: false);
     _volume = val.clamp(0.0, 1.0);
     if (_volume > 0) {
       _isMuted = false;
@@ -6055,6 +6492,7 @@ class MusicPlayerController extends ChangeNotifier {
   }
 
   void toggleMute() {
+    _cancelAutomixFade(restore: false);
     if (_isMuted) {
       _isMuted = false;
       _volume = _prevVolume > 0 ? _prevVolume : 0.5;
@@ -6239,8 +6677,10 @@ class MusicPlayerController extends ChangeNotifier {
             cachedOnDevice.existsSync() &&
             cachedOnDevice.lengthSync() > 1024) {
           song.audioUrl = cachedOnDevice.path;
-          final isComplete =
-              await _isCompleteOfflineFile(song.id, cachedOnDevice);
+          final isComplete = await _isCompleteOfflineFile(
+            song.id,
+            cachedOnDevice,
+          );
           song.isPreview = !isComplete;
           song.isYouTubeAudio = false;
           _syncSongPathToQueueAndDb(song);
@@ -6368,6 +6808,14 @@ class MusicPlayerController extends ChangeNotifier {
       _isPlaying = false;
       _notifyExplicitBlocked(song);
       return;
+    }
+    // A stale half-fade from an interrupted transition must not leave the new
+    // track quieter than the user's slider value. A completed fade-out sets
+    // [_automixFadeInPending], which is the only case we keep the 0-volume.
+    if (!_automixFadeInPending) {
+      _automixFadeTimer?.cancel();
+      _automixFadeTimer = null;
+      _automixFadeLevel = null;
     }
     if (_isPlayingAudioInProgress) {
       // A different song was requested (skip / previous / tap) while another
@@ -6630,7 +7078,7 @@ class MusicPlayerController extends ChangeNotifier {
       _unmuteOnPlay();
       _activateAudioSession();
       _lastPositionUpdate = DateTime.now();
-      final effectiveVolume = _isMuted ? 0.0 : (_volume > 0.05 ? _volume : 0.8);
+      final effectiveVolume = _outputVolume;
       try {
         await _audioPlayer.setVolume(effectiveVolume);
       } catch (_) {}
@@ -6646,9 +7094,10 @@ class MusicPlayerController extends ChangeNotifier {
                 _handleAudioLoadFailure(song);
               }),
             );
+            _maybeStartAutomixFadeIn();
             if (sessionId == _playSessionId) {
               try {
-                await _audioPlayer.setVolume(effectiveVolume);
+                await _audioPlayer.setVolume(_outputVolume);
               } catch (_) {}
               _scheduleVolumeReasserts();
               _preloadNextQueueSong();
@@ -6799,10 +7248,7 @@ class MusicPlayerController extends ChangeNotifier {
         _lastPositionUpdate = DateTime.now();
         _unmuteOnPlay();
         _activateAudioSession();
-        final effectiveVolume = _isMuted
-            ? 0.0
-            : (_volume > 0.05 ? _volume : 0.8);
-        await _audioPlayer.setVolume(effectiveVolume);
+        await _audioPlayer.setVolume(_outputVolume);
         if (_isPlaying) {
           if (_currentPosition > Duration.zero &&
               _currentPosition < currentDuration) {
@@ -6811,6 +7257,7 @@ class MusicPlayerController extends ChangeNotifier {
             } catch (_) {}
           }
           unawaited(_audioPlayer.play().catchError((_) {}));
+          _maybeStartAutomixFadeIn();
           _scheduleVolumeReasserts();
         }
         _startTimer();
@@ -6874,6 +7321,22 @@ class MusicPlayerController extends ChangeNotifier {
     if (song != null && (song.isPreview || needsFullTrack(song))) {
       // ignore: discarded_futures
       _proceedToFullTrack(song);
+      return;
+    }
+
+    // A crossfade may still be in flight when the completion signal lands.
+    // Remember it so the next track ramps in instead of starting at full blast.
+    if (_automix && _automixFadeLevel != null) {
+      _automixFadeInPending = true;
+    }
+
+    if (!_gaplessPlayback && !_automix) {
+      // Gapless is off: leave a short, audible gap between tracks. With
+      // Automix on the crossfade itself provides the transition.
+      Future.delayed(const Duration(milliseconds: 500), () {
+        if (_disposed || !_completionHandled || !_isPlaying) return;
+        next(fromCompletion: true);
+      });
       return;
     }
     next(fromCompletion: true);
@@ -6986,6 +7449,9 @@ class MusicPlayerController extends ChangeNotifier {
         timer.cancel();
         return;
       }
+
+      // Duck the outgoing track if it is inside the crossfade window.
+      _maybeStartAutomixFadeOut();
 
       // If audio load is actively in progress, pause timer briefly until resolved
       if (!_audioPlayerHasSource && _isPlayingAudioInProgress) {
@@ -7194,6 +7660,7 @@ class MusicPlayerController extends ChangeNotifier {
     }
     _inFlightCompleters.clear();
     _playbackTimer?.cancel();
+    _automixFadeTimer?.cancel();
     _silentRetryTimer?.cancel();
     _importRetryTimer?.cancel();
     _connectivityTimer?.cancel();

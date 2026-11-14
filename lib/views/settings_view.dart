@@ -263,6 +263,11 @@ class _SettingsViewState extends State<SettingsView> {
         isStreaming ? 'streaming_quality' : 'download_quality',
         selected,
       );
+      if (isStreaming) {
+        widget.controller?.setStreamingQuality(selected, save: false);
+      } else {
+        widget.controller?.setDownloadQuality(selected, save: false);
+      }
     }
   }
 
@@ -757,8 +762,8 @@ class _SettingsViewState extends State<SettingsView> {
           ),
         ),
       );
-      }
     }
+  }
 
   Future<void> _handleLogout() async {
     final displayName = AuthService.instance.userDisplayName;
@@ -932,8 +937,13 @@ class _SettingsViewState extends State<SettingsView> {
                             divisions: 12,
                             onChanged: (val) =>
                                 setState(() => _crossfadeSeconds = val),
-                            onChangeEnd: (val) =>
-                                _saveSetting('crossfade', val.toString()),
+                            onChangeEnd: (val) {
+                              _saveSetting('crossfade', val.toString());
+                              widget.controller?.setCrossfadeSeconds(
+                                val,
+                                save: false,
+                              );
+                            },
                           ),
                         ),
                       ],
@@ -948,6 +958,7 @@ class _SettingsViewState extends State<SettingsView> {
                     value: _gaplessPlayback,
                     onChanged: (val) {
                       setState(() => _gaplessPlayback = val);
+                      widget.controller?.setGaplessPlayback(val, save: false);
                       _saveSetting('gapless_playback', val.toString());
                     },
                   ),
@@ -961,6 +972,7 @@ class _SettingsViewState extends State<SettingsView> {
                     value: _automix,
                     onChanged: (val) {
                       setState(() => _automix = val);
+                      widget.controller?.setAutomix(val, save: false);
                       _saveSetting('automix', val.toString());
                     },
                   ),
@@ -973,6 +985,7 @@ class _SettingsViewState extends State<SettingsView> {
                     value: _normalizeVolume,
                     onChanged: (val) {
                       setState(() => _normalizeVolume = val);
+                      widget.controller?.setNormalizeVolume(val, save: false);
                       _saveSetting('normalize_volume', val.toString());
                     },
                   ),
@@ -986,7 +999,18 @@ class _SettingsViewState extends State<SettingsView> {
                     value: _monoAudio,
                     onChanged: (val) {
                       setState(() => _monoAudio = val);
+                      widget.controller?.setMonoAudio(val, save: false);
                       _saveSetting('mono_audio', val.toString());
+                      if (val) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'Mono Audio is saved. Downmixing depends on '
+                              'the device audio engine.',
+                            ),
+                          ),
+                        );
+                      }
                     },
                   ),
                   const Divider(height: 1, color: AppTheme.border),
@@ -999,6 +1023,7 @@ class _SettingsViewState extends State<SettingsView> {
                     value: _autoplay,
                     onChanged: (val) {
                       setState(() => _autoplay = val);
+                      widget.controller?.setAutoplay(val, save: false);
                       _saveSetting('autoplay', val.toString());
                     },
                   ),
@@ -1098,6 +1123,7 @@ class _SettingsViewState extends State<SettingsView> {
                     value: _autoLyrics,
                     onChanged: (val) {
                       setState(() => _autoLyrics = val);
+                      widget.controller?.setAutoLyrics(val, save: false);
                       _saveSetting('auto_lyrics', val.toString());
                     },
                   ),
@@ -1195,7 +1221,8 @@ class _SettingsViewState extends State<SettingsView> {
                         const SizedBox(height: 14),
                         OutlinedButton.icon(
                           onPressed: _cacheSizeBytes > 0 && !_clearingCache
-                              ? _clearCache : null,
+                              ? _clearCache
+                              : null,
                           icon: _clearingCache
                               ? const SizedBox(
                                   width: 18,
@@ -1206,9 +1233,9 @@ class _SettingsViewState extends State<SettingsView> {
                                   ),
                                 )
                               : const Icon(
-                            Icons.delete_sweep_outlined,
-                            size: 18,
-                          ),
+                                  Icons.delete_sweep_outlined,
+                                  size: 18,
+                                ),
                           label: Text(
                             _clearingCache
                                 ? 'Clearing cache…'
