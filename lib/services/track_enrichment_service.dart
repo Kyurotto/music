@@ -65,8 +65,14 @@ class TrackEnrichmentService {
   static const ytAndroidUserAgent =
       'com.google.android.youtube/19.10.38 (Linux; U; Android 14; en_US) gzip';
 
-  Future<TrackEnrichment> fetchYouTubeStreamById(String videoId) async {
-    final res = await fetchYouTubeStreamByVideoId(videoId);
+  Future<TrackEnrichment> fetchYouTubeStreamById(
+    String videoId, {
+    int? preferredBitrateKbps,
+  }) async {
+    final res = await fetchYouTubeStreamByVideoId(
+      videoId,
+      preferredBitrateKbps: preferredBitrateKbps,
+    );
     return res ?? const TrackEnrichment();
   }
 
@@ -106,6 +112,7 @@ class TrackEnrichmentService {
     bool prioritizeYouTube = false,
     bool fastImport = false,
     bool youtubeOnly = false,
+    int? preferredBitrateKbps,
   }) async {
     final t = title.trim();
     final a = artist.trim();
@@ -123,6 +130,7 @@ class TrackEnrichmentService {
           prioritizeYouTube: prioritizeYouTube,
           fastImport: fastImport,
           youtubeOnly: youtubeOnly,
+          preferredBitrateKbps: preferredBitrateKbps,
         ),
         // A preview-only pass exists to get something audible quickly while
         // the full pass is still running (and that pass fetches the lyrics).
@@ -167,6 +175,7 @@ class TrackEnrichmentService {
     bool prioritizeYouTube = false,
     bool fastImport = false,
     bool youtubeOnly = false,
+    int? preferredBitrateKbps,
   }) async {
     // When youtubeOnly is active (for Explore radio playlists), query YouTube strictly
     // and skip all other music services, third-party CDNs, and 30-second previews.
@@ -182,6 +191,7 @@ class TrackEnrichmentService {
           artist: artist,
           duration: duration,
           fastSearch: true,
+          preferredBitrateKbps: preferredBitrateKbps,
         );
         _stageLog('yt-only', sw, yt != null ? 'HIT' : 'miss');
         return yt;
@@ -215,6 +225,7 @@ class TrackEnrichmentService {
             title: title,
             artist: artist,
             duration: duration,
+            preferredBitrateKbps: preferredBitrateKbps,
           );
           _stageLog('yt-fastpath', sw, yt != null ? 'HIT' : 'miss');
           if (yt != null) return yt;
@@ -230,6 +241,7 @@ class TrackEnrichmentService {
               title: title,
               artist: artist,
               duration: duration,
+              preferredBitrateKbps: preferredBitrateKbps,
             ).timeout(const Duration(seconds: 5), onTimeout: () => null),
             _fetchSoundCloudFullAudio(
               title: title,
@@ -239,6 +251,7 @@ class TrackEnrichmentService {
             _fetchSaavnFullAudio(
               title: title,
               artist: artist,
+              preferredBitrateKbps: preferredBitrateKbps,
             ).timeout(const Duration(seconds: 4), onTimeout: () => null),
             _fetchArchiveOrgFullAudio(
               title: title,
@@ -283,7 +296,11 @@ class TrackEnrichmentService {
       }
 
       try {
-        final full = await _fetchSaavnFullAudio(title: title, artist: artist);
+        final full = await _fetchSaavnFullAudio(
+          title: title,
+          artist: artist,
+          preferredBitrateKbps: preferredBitrateKbps,
+        );
         _stageLog(
           'saavn',
           sw,
@@ -304,8 +321,9 @@ class TrackEnrichmentService {
           sw,
           sc != null ? 'HIT ${Uri.tryParse(sc.previewUrl)?.host}' : 'miss',
         );
-        if (sc != null && !sc.previewUrl.toLowerCase().contains('.m3u8'))
+        if (sc != null && !sc.previewUrl.toLowerCase().contains('.m3u8')) {
           return sc;
+        }
       } catch (e) {
         _stageLog('soundcloud', sw, 'error $e');
       }
@@ -314,6 +332,7 @@ class TrackEnrichmentService {
           title: title,
           artist: artist,
           duration: duration,
+          preferredBitrateKbps: preferredBitrateKbps,
         );
         _stageLog(
           'web',
@@ -331,6 +350,7 @@ class TrackEnrichmentService {
           title: title,
           artist: artist,
           duration: duration,
+          preferredBitrateKbps: preferredBitrateKbps,
         );
         _stageLog('yt', sw, yt != null ? 'HIT' : 'miss');
         if (yt != null) return yt;
@@ -362,6 +382,7 @@ class TrackEnrichmentService {
   Future<_PreviewHit?> _fetchSaavnFullAudio({
     required String title,
     required String artist,
+    int? preferredBitrateKbps,
   }) async {
     final cleanTitle = _cleanQuery(title);
     final cleanArtist = _cleanQuery(artist);
@@ -384,6 +405,7 @@ class TrackEnrichmentService {
             query: query,
             title: title,
             artist: artist,
+            preferredBitrateKbps: preferredBitrateKbps,
           );
           if (hit != null) return hit;
         } catch (_) {
@@ -399,6 +421,7 @@ class TrackEnrichmentService {
     required String query,
     required String title,
     required String artist,
+    int? preferredBitrateKbps,
   }) async {
     final uri = Uri.https(host, '/api/search/songs', {
       'query': query,
@@ -439,7 +462,10 @@ class TrackEnrichmentService {
 
     for (final item in results) {
       if (item is! Map<String, dynamic>) continue;
-      final url = _saavnBestUrl(item['downloadUrl']);
+      final url = _saavnBestUrl(
+        item['downloadUrl'],
+        preferredKbps: preferredBitrateKbps,
+      );
       if (url.isEmpty) continue;
 
       final hitTitle = _normalize(
@@ -508,7 +534,7 @@ class TrackEnrichmentService {
     return const [];
   }
 
-  static String _saavnBestUrl(Object? value) {
+  static String _saavnBestUrl(Object? value, {int? preferredKbps}) {
     String? pickHttp(String? url) {
       if (url == null || url.isEmpty) return null;
       final trimmed = url.trim();
@@ -520,19 +546,40 @@ class TrackEnrichmentService {
 
     if (value is String) return pickHttp(value) ?? '';
     if (value is! List) return '';
-    for (var i = value.length - 1; i >= 0; i--) {
-      final entry = value[i];
+
+    var lastUrl = '';
+    var closestUrl = '';
+    var closestDiff = 1 << 30;
+    var closestBitrate = -1;
+
+    for (final entry in value) {
+      String? url;
+      int? bitrate;
       if (entry is Map) {
-        final url = pickHttp(
-          entry['url']?.toString() ?? entry['link']?.toString(),
-        );
-        if (url != null) return url;
+        url = pickHttp(entry['url']?.toString() ?? entry['link']?.toString());
+        final quality = entry['quality']?.toString() ?? '';
+        final match = RegExp(r'(\d+)').firstMatch(quality);
+        bitrate = match == null ? null : int.tryParse(match.group(1)!);
       } else if (entry is String) {
-        final url = pickHttp(entry);
-        if (url != null) return url;
+        url = pickHttp(entry);
+      }
+      if (url == null) continue;
+      lastUrl = url;
+      if (preferredKbps == null || bitrate == null) continue;
+
+      // Pick the available quality closest to the user's choice, preferring
+      // the higher bitrate when two entries are equally close.
+      final diff = (bitrate - preferredKbps).abs();
+      if (diff < closestDiff ||
+          (diff == closestDiff && bitrate > closestBitrate)) {
+        closestDiff = diff;
+        closestBitrate = bitrate;
+        closestUrl = url;
       }
     }
-    return '';
+
+    if (preferredKbps == null) return lastUrl;
+    return closestUrl.isNotEmpty ? closestUrl : lastUrl;
   }
 
   static String? _saavnBestImage(Object? value) {
@@ -835,11 +882,17 @@ class TrackEnrichmentService {
 
   /// Direct stream resolution using a known YouTube video ID.
   /// Skips searching and candidate scoring completely (<300ms on WiFi/data).
-  Future<TrackEnrichment?> fetchYouTubeStreamByVideoId(String videoId) async {
+  Future<TrackEnrichment?> fetchYouTubeStreamByVideoId(
+    String videoId, {
+    int? preferredBitrateKbps,
+  }) async {
     final vid = videoId.trim();
     if (vid.isEmpty) return null;
     try {
-      final stream = await _ytAudioStream(vid);
+      final stream = await _ytAudioStream(
+        vid,
+        preferredKbps: preferredBitrateKbps,
+      );
       if (stream == null || stream.url.isEmpty) return null;
 
       if (!stream.isProgressive && stream.url.contains('googlevideo.com')) {
@@ -867,6 +920,7 @@ class TrackEnrichmentService {
     required String artist,
     Duration? duration,
     bool fastSearch = false,
+    int? preferredBitrateKbps,
   }) async {
     final cleanTitle = _cleanQuery(title);
     final cleanArtist = _cleanQuery(artist);
@@ -908,6 +962,7 @@ class TrackEnrichmentService {
           duration: duration,
           maxCandidates: fastSearch ? 3 : 5,
           preferMusicSearch: fastSearch,
+          preferredBitrateKbps: preferredBitrateKbps,
         );
         if (hit != null) return hit;
       } catch (_) {
@@ -924,6 +979,7 @@ class TrackEnrichmentService {
     Duration? duration,
     int maxCandidates = 5,
     bool preferMusicSearch = false,
+    int? preferredBitrateKbps,
   }) async {
     // YouTube Music search is not age-gated like the main YouTube search and
     // returns proper song matches ("XXXX (feat. Hev Abi)") for explicit tracks.
@@ -1054,7 +1110,10 @@ class TrackEnrichmentService {
     // are unthrottled and directly streamable by ExoPlayer/just_audio with
     // no range probe overhead or throttle cooldown risk.
     for (final entry in scored.take(maxCandidates)) {
-      final stream = await _ytAudioStream(entry.c.videoId);
+      final stream = await _ytAudioStream(
+        entry.c.videoId,
+        preferredKbps: preferredBitrateKbps,
+      );
       if (stream == null || stream.url.isEmpty) continue;
 
       if (!stream.isProgressive && stream.url.contains('googlevideo.com')) {
@@ -1359,7 +1418,10 @@ class TrackEnrichmentService {
     return out;
   }
 
-  Future<_YouTubeStream?> _ytAudioStream(String videoId) async {
+  Future<_YouTubeStream?> _ytAudioStream(
+    String videoId, {
+    int? preferredKbps,
+  }) async {
     final uri = Uri.https('www.youtube.com', '/youtubei/v1/player', {
       'key': _ytKey,
       'prettyPrint': 'false',
@@ -1429,8 +1491,14 @@ class TrackEnrichmentService {
     // Progressive MP4 streams contain AAC audio and are NOT rate-limited by YouTube's SABR
     // algorithm, preventing 403 Forbidden errors and playback stalls. ExoPlayer decodes audio
     // natively from progressive MP4 containers.
+    //
+    // They carry roughly 96-160 kbps, so they remain the safe default for
+    // Automatic / Normal / High. Low and Very High fall through to adaptive
+    // formats, where the closest advertised bitrate can actually be chosen.
+    final stereoProgressive =
+        preferredKbps == null || (preferredKbps >= 96 && preferredKbps <= 192);
     final progFormats = streamingData['formats'];
-    if (progFormats is List) {
+    if (stereoProgressive && progFormats is List) {
       for (final f in progFormats) {
         if (f is! Map<String, dynamic>) continue;
         final url = f['url']?.toString() ?? '';
@@ -1470,6 +1538,14 @@ class TrackEnrichmentService {
     var bestBitrate = -1;
     var fallbackUrl = '';
     var fallbackBitrate = -1;
+    var closestMp4Url = '';
+    var closestMp4Diff = 1 << 30;
+    var closestMp4Bitrate = -1;
+    var closestAnyUrl = '';
+    var closestAnyDiff = 1 << 30;
+    var closestAnyBitrate = -1;
+    final targetBitrate = (preferredKbps ?? 0) * 1000;
+
     for (final f in formats) {
       if (f is! Map<String, dynamic>) continue;
       final mime = f['mimeType']?.toString() ?? '';
@@ -1479,17 +1555,40 @@ class TrackEnrichmentService {
       final bitrate = f['bitrate'] is int
           ? f['bitrate'] as int
           : int.tryParse(f['bitrate']?.toString() ?? '') ?? 0;
+      final diff = (bitrate - targetBitrate).abs();
       if (mime.startsWith('audio/mp4')) {
         if (bitrate > bestBitrate) {
           bestBitrate = bitrate;
           bestUrl = url;
         }
-      } else if (bitrate > fallbackBitrate) {
-        fallbackBitrate = bitrate;
-        fallbackUrl = url;
+        if (preferredKbps != null &&
+            (diff < closestMp4Diff ||
+                (diff == closestMp4Diff && bitrate > closestMp4Bitrate))) {
+          closestMp4Diff = diff;
+          closestMp4Bitrate = bitrate;
+          closestMp4Url = url;
+        }
+      } else {
+        if (bitrate > fallbackBitrate) {
+          fallbackBitrate = bitrate;
+          fallbackUrl = url;
+        }
+        if (preferredKbps != null &&
+            (diff < closestAnyDiff ||
+                (diff == closestAnyDiff && bitrate > closestAnyBitrate))) {
+          closestAnyDiff = diff;
+          closestAnyBitrate = bitrate;
+          closestAnyUrl = url;
+        }
       }
     }
-    final url = bestUrl.isNotEmpty ? bestUrl : fallbackUrl;
+    final url = preferredKbps == null
+        ? (bestUrl.isNotEmpty ? bestUrl : fallbackUrl)
+        : (closestMp4Url.isNotEmpty
+              ? closestMp4Url
+              : (closestAnyUrl.isNotEmpty
+                    ? closestAnyUrl
+                    : (bestUrl.isNotEmpty ? bestUrl : fallbackUrl)));
     if (url.isEmpty) return null;
 
     var lengthSeconds = 0;
@@ -1954,8 +2053,9 @@ class TrackEnrichmentService {
               if (protocol == 'hls' || infoUrl.contains('/hls')) continue;
               if (protocol.isNotEmpty &&
                   protocol != 'progressive' &&
-                  !infoUrl.contains('/progressive'))
+                  !infoUrl.contains('/progressive')) {
                 continue;
+              }
 
               try {
                 final resolveRes = await _client
@@ -2016,6 +2116,7 @@ class TrackEnrichmentService {
     required String title,
     required String artist,
     Duration? duration,
+    int? preferredBitrateKbps,
   }) async {
     try {
       final results = await Future.wait([
@@ -2028,6 +2129,7 @@ class TrackEnrichmentService {
           title: title,
           artist: artist,
           duration: duration,
+          preferredBitrateKbps: preferredBitrateKbps,
         ).timeout(const Duration(seconds: 20)),
       ]);
       final archive = results[0];
