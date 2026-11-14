@@ -429,6 +429,7 @@ class MusicPlayerController extends ChangeNotifier {
   static const String autoplaySettingKey = 'autoplay';
   static const String crossfadeSettingKey = 'crossfade';
   static const String dataSaverModeSettingKey = 'data_saver_mode';
+  static const String reduceAnimationsSettingKey = 'reduce_animations';
 
   /// Data Saver caps every freshly resolved stream at 96 kbps.
   static const int dataSaverBitrateKbps = 96;
@@ -440,12 +441,16 @@ class MusicPlayerController extends ChangeNotifier {
   bool _monoAudio = false;
   bool _autoplay = true;
   bool _dataSaverMode = false;
+  bool _reduceAnimations = false;
   String _streamingQuality = 'Very High (320 kbps)';
   String _downloadQuality = 'High (160 kbps)';
   double _crossfadeSeconds = 4.0;
 
   /// Pop the lyrics sheet automatically whenever a new song starts.
   bool get autoLyrics => _autoLyrics;
+
+  /// Whether animations, visualizers, and heavy transitions should be minimized.
+  bool get reduceAnimations => _reduceAnimations;
 
   /// Whether auto-advance should start the next track immediately.
   bool get gaplessPlayback => _gaplessPlayback;
@@ -604,6 +609,21 @@ class MusicPlayerController extends ChangeNotifier {
     }
   }
 
+  void setReduceAnimations(bool enabled, {bool save = true}) {
+    if (_reduceAnimations != enabled) {
+      _reduceAnimations = enabled;
+      notifyListeners();
+    }
+    if (save) {
+      unawaited(
+        LocalDatabase.instance.saveSetting(
+          reduceAnimationsSettingKey,
+          enabled.toString(),
+        ),
+      );
+    }
+  }
+
   void setStreamingQuality(String quality, {bool save = true}) {
     if (_streamingQuality != quality) {
       _streamingQuality = quality;
@@ -654,6 +674,7 @@ class MusicPlayerController extends ChangeNotifier {
     _autoplay = settings[autoplaySettingKey] != 'false';
     _autoLyrics = settings[autoLyricsSettingKey] == 'true';
     _dataSaverMode = settings[dataSaverModeSettingKey] == 'true';
+    _reduceAnimations = settings[reduceAnimationsSettingKey] == 'true';
 
     final streaming = settings[streamingQualitySettingKey];
     if (streaming != null && streaming.trim().isNotEmpty) {

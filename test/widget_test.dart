@@ -16,9 +16,6 @@ void main() {
     // Verify brand title in sidebar
     expect(find.text('PULSE'), findsOneWidget);
 
-    // Verify welcome hero banner
-    expect(find.text('Welcome to Pulse Studio'), findsAtLeastNWidgets(1));
-
     // Verify search bar accepts input cleanly
     final searchField = find.byType(TextField);
     expect(searchField, findsOneWidget);
@@ -35,9 +32,6 @@ void main() {
     await tester.pumpWidget(const MusicApp(firebaseEnabled: false));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
-
-    // Ensure hero banner renders without assertion errors
-    expect(find.text('Welcome to Pulse Studio'), findsAtLeastNWidgets(1));
 
     // Verify mobile bottom navigation bar is present
     expect(find.byIcon(Icons.home_rounded), findsWidgets);

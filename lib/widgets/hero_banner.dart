@@ -104,48 +104,6 @@ class HeroBanner extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          // Badge
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: 0.12),
-                              borderRadius: BorderRadius.circular(20),
-                              border: Border.all(
-                                color: Colors.white.withValues(alpha: 0.15),
-                                width: 1,
-                              ),
-                            ),
-                            child: FittedBox(
-                              fit: BoxFit.scaleDown,
-                              alignment: Alignment.centerLeft,
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    currentSong != null
-                                        ? Icons.local_fire_department_rounded
-                                        : Icons.music_note_rounded,
-                                    size: 15,
-                                    color: currentSong != null
-                                        ? const Color(0xFFFF7A00)
-                                        : AppTheme.secondary,
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    currentSong != null ? 'NOW PLAYING' : 'OFFLINE MUSIC PLAYER',
-                                    style: const TextStyle(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.bold,
-                                      letterSpacing: 1.0,
-                                      color: Colors.white,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-
                           // Title
                           Text(
                             currentSong != null ? currentSong.title : 'Welcome to Pulse Studio',

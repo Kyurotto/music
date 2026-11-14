@@ -9,6 +9,7 @@ class AnimatedVisualizer extends StatefulWidget {
   final double barWidth;
   final List<Color>? gradientColors;
   final List<double>? equalizerBands;
+  final bool reduceAnimations;
 
   const AnimatedVisualizer({
     super.key,
@@ -18,6 +19,7 @@ class AnimatedVisualizer extends StatefulWidget {
     this.barWidth = 3.5,
     this.gradientColors,
     this.equalizerBands,
+    this.reduceAnimations = false,
   });
 
   @override
@@ -41,7 +43,7 @@ class _AnimatedVisualizerState extends State<AnimatedVisualizer>
       duration: const Duration(milliseconds: 1200),
     );
 
-    if (widget.isPlaying) {
+    if (widget.isPlaying && !widget.reduceAnimations) {
       _controller.repeat();
     }
   }
@@ -49,9 +51,12 @@ class _AnimatedVisualizerState extends State<AnimatedVisualizer>
   @override
   void didUpdateWidget(AnimatedVisualizer oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.isPlaying != oldWidget.isPlaying) {
-      if (widget.isPlaying) {
-        _controller.repeat();
+    if (widget.isPlaying != oldWidget.isPlaying ||
+        widget.reduceAnimations != oldWidget.reduceAnimations) {
+      if (widget.isPlaying && !widget.reduceAnimations) {
+        if (!_controller.isAnimating) {
+          _controller.repeat();
+        }
       } else {
         _controller.stop();
       }
@@ -81,11 +86,15 @@ class _AnimatedVisualizerState extends State<AnimatedVisualizer>
             children: List.generate(widget.barCount, (index) {
               double value;
               if (widget.isPlaying) {
-                final phase = (index / widget.barCount) * 2 * pi;
-                final t = _controller.value * 2 * pi;
-                final wave1 = sin(t * 1.5 + phase);
-                final wave2 = cos(t * 2.2 + phase * 1.8);
-                value = ((wave1 + wave2) / 2).abs() * _randomFactors[index % _randomFactors.length];
+                if (widget.reduceAnimations) {
+                  value = 0.42 * _randomFactors[index % _randomFactors.length];
+                } else {
+                  final phase = (index / widget.barCount) * 2 * pi;
+                  final t = _controller.value * 2 * pi;
+                  final wave1 = sin(t * 1.5 + phase);
+                  final wave2 = cos(t * 2.2 + phase * 1.8);
+                  value = ((wave1 + wave2) / 2).abs() * _randomFactors[index % _randomFactors.length];
+                }
 
                 final bands = widget.equalizerBands;
                 if (bands != null && bands.isNotEmpty) {
