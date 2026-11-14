@@ -6090,9 +6090,27 @@ class MusicPlayerController extends ChangeNotifier {
   }
 
   void toggleLike(String songId) {
+    var changed = false;
     final index = _allSongs.indexWhere((s) => s.id == songId);
     if (index != -1) {
       _allSongs[index].isLiked = !_allSongs[index].isLiked;
+      changed = true;
+      final newStatus = _allSongs[index].isLiked;
+      for (final q in _queue) {
+        if (q.id == songId) q.isLiked = newStatus;
+      }
+    } else {
+      final qIndex = _queue.indexWhere((s) => s.id == songId);
+      if (qIndex != -1) {
+        _queue[qIndex].isLiked = !_queue[qIndex].isLiked;
+        changed = true;
+        if (_queue[qIndex].isLiked) {
+          _allSongs.add(_queue[qIndex]);
+          _markSongsChanged();
+        }
+      }
+    }
+    if (changed) {
       notifyListeners();
     }
   }
