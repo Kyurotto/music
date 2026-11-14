@@ -117,8 +117,7 @@ class SpotifyExportService {
     }
     if (bytes.length > maxZipBytes) {
       throw const SpotifyExportException(
-        'That ZIP is too large to read on a phone. Unzip it and pick '
-        'YourLibrary.json plus the Playlist files instead.',
+        'That ZIP is too large to read on this device.',
       );
     }
     if (!_looksLikeZip(bytes)) {

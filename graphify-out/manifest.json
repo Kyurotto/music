@@ -156,20 +156,20 @@
     "semantic_hash": ""
   },
   "lib/controllers/music_player_controller.dart": {
-    "mtime": 1794566330.4322648,
-    "seen": 1794567298.7814763,
+    "mtime": 1794631098.313426,
+    "seen": 1794631447.095563,
     "ast_hash": "d917f5ed9cb2bc897ecf158cbd759de9",
     "semantic_hash": ""
   },
   "lib/data/local_database.dart": {
-    "mtime": 1794581626.141947,
-    "seen": 1794581774.543754,
+    "mtime": 1794583114.1785316,
+    "seen": 1794631447.0955703,
     "ast_hash": "75fd5b0d71deeec63eb9940b863bef4a",
     "semantic_hash": ""
   },
   "lib/main.dart": {
-    "mtime": 1794550658.6038463,
-    "seen": 1794551236.944734,
+    "mtime": 1794583114.1835423,
+    "seen": 1794631447.0955763,
     "ast_hash": "18dd5af8d88ea5a9235ff117e6cc1465",
     "semantic_hash": ""
   },
@@ -198,8 +198,8 @@
     "semantic_hash": "546bb4cfaa1d9c5830da9a9df6286860"
   },
   "lib/services/spotify_import_service.dart": {
-    "mtime": 1794553860.2156374,
-    "seen": 1794554482.8625498,
+    "mtime": 1794583114.1895308,
+    "seen": 1794631447.0971882,
     "ast_hash": "0e66e9433aa4091eb0263426cf59be8d",
     "semantic_hash": ""
   },
@@ -234,14 +234,14 @@
     "semantic_hash": ""
   },
   "lib/views/music_dashboard_view.dart": {
-    "mtime": 1794581626.1539354,
-    "seen": 1794581774.546705,
+    "mtime": 1794631098.3154266,
+    "seen": 1794631447.0980859,
     "ast_hash": "61dbf1f89ada62dd9e215d187dd4b2ef",
     "semantic_hash": ""
   },
   "lib/views/settings_view.dart": {
-    "mtime": 1794547174.937798,
-    "seen": 1794551236.947169,
+    "mtime": 1794586909.3415775,
+    "seen": 1794631447.0980923,
     "ast_hash": "70e585ffb40f472888bc47eff7ca58fb",
     "semantic_hash": ""
   },
@@ -270,14 +270,14 @@
     "semantic_hash": "e4ff5d66090ca9db11ed0f67255322c2"
   },
   "lib/widgets/right_panel.dart": {
-    "mtime": 1794476996.8044274,
-    "seen": 1794503860.2343304,
+    "mtime": 1794631098.316427,
+    "seen": 1794631447.0988238,
     "ast_hash": "55d4c6369c49987c99d8db4678862a84",
     "semantic_hash": ""
   },
   "lib/widgets/sidebar_nav.dart": {
-    "mtime": 1794581626.1644454,
-    "seen": 1794581774.547917,
+    "mtime": 1794586931.7062037,
+    "seen": 1794631447.0988274,
     "ast_hash": "1e76904fe2886eda7cc7ddb87ff8eb97",
     "semantic_hash": ""
   },
@@ -288,14 +288,14 @@
     "semantic_hash": ""
   },
   "lib/widgets/spotify_import_dialog.dart": {
-    "mtime": 1794582184.4461517,
-    "seen": 1794582570.0103412,
+    "mtime": 1794589106.5353217,
+    "seen": 1794631447.0990272,
     "ast_hash": "502928117b7ca24b0fe9017a02af7c48",
     "semantic_hash": ""
   },
   "lib/widgets/spotify_lyrics_sheet.dart": {
-    "mtime": 1794476996.8093078,
-    "seen": 1794503860.234974,
+    "mtime": 1794631098.3184328,
+    "seen": 1794631447.099031,
     "ast_hash": "2ff8d55ff5b4946533558ea64d687ff6",
     "semantic_hash": ""
   },
@@ -336,8 +336,8 @@
     "semantic_hash": "ffa1a7c0a2ad45a2c14a921596516ff8"
   },
   "macos/Flutter/GeneratedPluginRegistrant.swift": {
-    "mtime": 1794582199.7457972,
-    "seen": 1794582570.0119967,
+    "mtime": 1794589112.7527022,
+    "seen": 1794631447.100045,
     "ast_hash": "8d5796d2efcc7fb4bb5a29a4a0f6dd6e",
     "semantic_hash": ""
   },
@@ -402,8 +402,8 @@
     "semantic_hash": ""
   },
   "test/dashboard_overflow_test.dart": {
-    "mtime": 1790400880.8623755,
-    "seen": 1792830995.6329103,
+    "mtime": 1794631098.3204298,
+    "seen": 1794631447.1019137,
     "ast_hash": "3920bdf21c117496612f89ed366e6b2f",
     "semantic_hash": "3920bdf21c117496612f89ed366e6b2f"
   },
@@ -414,8 +414,8 @@
     "semantic_hash": ""
   },
   "test/imported_playlist_database_test.dart": {
-    "mtime": 1794566347.6003685,
-    "seen": 1794567298.7901566,
+    "mtime": 1794583114.201885,
+    "seen": 1794631447.1029458,
     "ast_hash": "25332de134e0b9cf6d77cba704e3813c",
     "semantic_hash": ""
   },
@@ -450,8 +450,8 @@
     "semantic_hash": "60ff95b001410fdf2a4ea034708e2f80"
   },
   "test/widget_test.dart": {
-    "mtime": 1794467714.7831824,
-    "seen": 1794467962.8301206,
+    "mtime": 1794631098.3224275,
+    "seen": 1794631447.105001,
     "ast_hash": "df13fe03548e617de51d9ac27035fad3",
     "semantic_hash": ""
   },
@@ -1434,8 +1434,8 @@
     "semantic_hash": ""
   },
   "pubspec.yaml": {
-    "mtime": 1794582197.5478015,
-    "seen": 1794582570.064678,
+    "mtime": 1794589106.540318,
+    "seen": 1794631447.132024,
     "ast_hash": "1293ddd47b4bbc09b1ceb811f85263e4",
     "semantic_hash": ""
   },
@@ -1686,8 +1686,8 @@
     "semantic_hash": ""
   },
   "lib/views/playlist_screen.dart": {
-    "mtime": 1794554075.622621,
-    "seen": 1794554482.86451,
+    "mtime": 1794583114.1982813,
+    "seen": 1794631447.098089,
     "ast_hash": "7e765155d3b9d4b2e6ccd84fb89ea755",
     "semantic_hash": ""
   },
@@ -1716,8 +1716,8 @@
     "semantic_hash": ""
   },
   "lib/services/radio_discovery_service.dart": {
-    "mtime": 1794551296.8874736,
-    "seen": 1794551338.64231,
+    "mtime": 1794583114.1863856,
+    "seen": 1794631447.0971818,
     "ast_hash": "1dc07be0165b82e0d9c8faa3a44d4719",
     "semantic_hash": ""
   },
@@ -1806,27 +1806,27 @@
     "semantic_hash": ""
   },
   "test/imported_playlist_image_stability_test.dart": {
-    "mtime": 1794554379.0419605,
-    "seen": 1794554482.873963,
-    "ast_hash": "27a798127ceca3baca2278c7607f3543",
+    "mtime": 1794583114.2038958,
+    "seen": 1794631447.1029491,
+    "ast_hash": "cbc9ca0eb3270525aea938b5f9298af9",
     "semantic_hash": ""
   },
   "lib/services/spotify_export_service.dart": {
-    "mtime": 1794582237.8385417,
-    "seen": 1794582570.0062647,
-    "ast_hash": "32d0d31cf18279b62709ee78eee86d2e",
+    "mtime": 1794631332.8952742,
+    "seen": 1794631447.0971854,
+    "ast_hash": "6c57d38c4b2e55578ef93d301fe8404a",
     "semantic_hash": ""
   },
   "lib/widgets/spotify_export_import_dialog.dart": {
-    "mtime": 1794582237.888507,
-    "seen": 1794582570.010335,
-    "ast_hash": "68351ae7ae9c631927e09cd256a578c5",
+    "mtime": 1794631332.9503918,
+    "seen": 1794631447.099022,
+    "ast_hash": "92c301e950bdd779196198147adcf7b0",
     "semantic_hash": ""
   },
   "test/spotify_export_service_test.dart": {
-    "mtime": 1794582237.9401505,
-    "seen": 1794582570.020111,
-    "ast_hash": "9cf6d278ae8c979cd39bde8bea9608fd",
+    "mtime": 1794589106.5461972,
+    "seen": 1794631447.1043153,
+    "ast_hash": "da332e8fe2dac9c76d52cc12e8371ad1",
     "semantic_hash": ""
   }
 }

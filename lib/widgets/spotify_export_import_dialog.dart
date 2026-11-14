@@ -63,15 +63,13 @@ class _SpotifyExportImportDialogState extends State<SpotifyExportImportDialog> {
       }
       if (!file.name.toLowerCase().endsWith('.zip')) {
         throw const SpotifyExportException(
-          'Choose the ZIP file Spotify emailed you, or tap "Choose JSON '
-          'files" after unzipping it.',
+          'Choose the ZIP file Spotify emailed you.',
         );
       }
       final length = await file.length();
       if (length != null && length > SpotifyExportService.maxZipBytes) {
         throw const SpotifyExportException(
-          'That ZIP is too large to read on a phone. Unzip it and choose '
-          'YourLibrary.json plus the Playlist files instead.',
+          'That ZIP is too large to read on this device.',
         );
       }
       final bytes = await _readFile(file, SpotifyExportService.maxZipBytes);
@@ -80,54 +78,9 @@ class _SpotifyExportImportDialogState extends State<SpotifyExportImportDialog> {
     } on SpotifyExportException catch (e) {
       _fail(e.message);
     } on PlatformException catch (_) {
-      _fail(
-        'Could not open the file picker. Try again, or unzip the export and '
-        'use "Choose JSON files".',
-      );
-    } catch (_) {
-      _fail('Could not read that file. Please choose the export ZIP again.');
-    }
-  }
-
-  Future<void> _pickJsonFiles() async {
-    if (_isBusy) return;
-    setState(() {
-      _isParsing = true;
-      _error = null;
-    });
-    try {
-      final files = await FilePicker.pickFiles(type: FileType.any);
-      if (files.isEmpty) {
-        if (mounted) setState(() => _isParsing = false);
-        return;
-      }
-      final documents = <SpotifyExportFile>[];
-      for (final file in files) {
-        if (!file.name.toLowerCase().endsWith('.json')) continue;
-        final length = await file.length();
-        if (length != null && length > SpotifyExportService.maxJsonBytes) {
-          throw SpotifyExportException(
-            '"${file.name}" is too large to be a library file. Choose '
-            'YourLibrary.json or a Playlist file.',
-          );
-        }
-        final bytes = await _readFile(file, SpotifyExportService.maxJsonBytes);
-        documents.add(SpotifyExportFile(name: file.name, bytes: bytes));
-      }
-      if (documents.isEmpty) {
-        throw const SpotifyExportException(
-          'No .json files were chosen. Select YourLibrary.json and any '
-          'Playlist files you want to import.',
-        );
-      }
-      final bundle = _service.parseJsonFiles(documents);
-      _applyBundle(bundle);
-    } on SpotifyExportException catch (e) {
-      _fail(e.message);
-    } on PlatformException catch (_) {
       _fail('Could not open the file picker. Please try again.');
     } catch (_) {
-      _fail('Could not read those files. Please try again.');
+      _fail('Could not read that file. Please choose the export ZIP again.');
     }
   }
 
@@ -137,8 +90,7 @@ class _SpotifyExportImportDialogState extends State<SpotifyExportImportDialog> {
       builder.add(chunk);
       if (builder.length > cap) {
         throw const SpotifyExportException(
-          'That file is larger than expected. Unzip the export and choose '
-          'individual JSON files instead.',
+          'That file is larger than expected.',
         );
       }
     }
@@ -324,10 +276,7 @@ class _SpotifyExportImportDialogState extends State<SpotifyExportImportDialog> {
         _step('1', 'Open Spotify → Account → Privacy settings.'),
         _step('2', 'Tap "Download your data" and request Account data.'),
         _step('3', 'Spotify emails a ZIP, usually within a few days.'),
-        _step(
-          '4',
-          'Choose that ZIP below — or unzip it and pick the JSON files.',
-        ),
+        _step('4', 'Choose that ZIP below to import your library.'),
         const SizedBox(height: 10),
         Container(
           width: double.infinity,
@@ -350,29 +299,14 @@ class _SpotifyExportImportDialogState extends State<SpotifyExportImportDialog> {
           ),
         ),
         const SizedBox(height: 14),
-        Wrap(
-          spacing: 10,
-          runSpacing: 8,
-          children: [
-            ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.primary,
-                foregroundColor: Colors.white,
-              ),
-              onPressed: _isBusy ? null : _pickZip,
-              icon: const Icon(Icons.folder_zip_rounded, size: 18),
-              label: const Text('Choose export ZIP'),
-            ),
-            OutlinedButton.icon(
-              style: OutlinedButton.styleFrom(
-                foregroundColor: AppTheme.textPrimary,
-                side: const BorderSide(color: AppTheme.border),
-              ),
-              onPressed: _isBusy ? null : _pickJsonFiles,
-              icon: const Icon(Icons.data_object_rounded, size: 18),
-              label: const Text('Choose JSON files'),
-            ),
-          ],
+        ElevatedButton.icon(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppTheme.primary,
+            foregroundColor: Colors.white,
+          ),
+          onPressed: _isBusy ? null : _pickZip,
+          icon: const Icon(Icons.folder_zip_rounded, size: 18),
+          label: const Text('Choose export ZIP'),
         ),
       ],
     );
