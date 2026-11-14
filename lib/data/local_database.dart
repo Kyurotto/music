@@ -12,6 +12,8 @@ import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+import '../models/listening_history.dart';
+
 /// Stores the music library, playlists, and user accounts on the device.
 ///
 /// Audio files remain on disk; this database stores their metadata and paths.
@@ -20,7 +22,7 @@ class LocalDatabase {
 
   static final LocalDatabase instance = LocalDatabase._();
   static const _databaseName = 'pulse_music.db';
-  static const _databaseVersion = 7;
+  static const _databaseVersion = 8;
 
   /// Sentinel user IDs that represent anonymous / guest ownership.
   /// Real user IDs must never collide with these values.
@@ -202,18 +204,21 @@ class LocalDatabase {
 
       // 3. Fix 2000's playlist (remove Ed Sheeran 'perfect' hijack, insert Simple Plan 'Perfect')
       const simplePlanId = 'spotify-4j3X4KX8rURekAVIFUhI23';
-      await db.rawInsert('''
+      await db.rawInsert(
+        '''
         INSERT OR REPLACE INTO imported_songs (id, title, artist, album, duration_ms, image_url, audio_url, lyrics, genre, is_preview, is_youtube_audio, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, '', '[]', 'Rock', 0, 1, ?)
-      ''', [
-        simplePlanId,
-        'Perfect',
-        'Simple Plan',
-        'No Pads, No Helmets...Just Balls',
-        277560,
-        'https://i.scdn.co/image/ab67616d0000b2732a3fcce8877bc9eb8903cb64',
-        DateTime.now().millisecondsSinceEpoch,
-      ]);
+      ''',
+        [
+          simplePlanId,
+          'Perfect',
+          'Simple Plan',
+          'No Pads, No Helmets...Just Balls',
+          277560,
+          'https://i.scdn.co/image/ab67616d0000b2732a3fcce8877bc9eb8903cb64',
+          DateTime.now().millisecondsSinceEpoch,
+        ],
+      );
 
       const hinderId = 'spotify-40LQiUUUKXVGyNs09lHVjW';
       final year2000Playlists = await db.rawQuery(
@@ -240,18 +245,21 @@ class LocalDatabase {
 
       // 4. Fix Maroon 5 Radio (remove 'just-the-way-you-are' at pos 0, set 'Maps' at pos 0)
       const mapsId = 'spotify-4gbVRS8gloEluzf0GzDOFc';
-      await db.rawInsert('''
+      await db.rawInsert(
+        '''
         INSERT OR REPLACE INTO imported_songs (id, title, artist, album, duration_ms, image_url, audio_url, lyrics, genre, is_preview, is_youtube_audio, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, '', '[]', 'Pop', 0, 1, ?)
-      ''', [
-        mapsId,
-        'Maps',
-        'Maroon 5',
-        'V',
-        189960,
-        'https://i.scdn.co/image/ab67616d0000b27393437d7a74ee21e05d045d47',
-        DateTime.now().millisecondsSinceEpoch,
-      ]);
+      ''',
+        [
+          mapsId,
+          'Maps',
+          'Maroon 5',
+          'V',
+          189960,
+          'https://i.scdn.co/image/ab67616d0000b27393437d7a74ee21e05d045d47',
+          DateTime.now().millisecondsSinceEpoch,
+        ],
+      );
 
       final maroonPlaylists = await db.rawQuery(
         "SELECT id FROM imported_playlists WHERE title LIKE '%Maroon%'",
@@ -271,18 +279,21 @@ class LocalDatabase {
 
       // 5. Fix Bruno Mars Mix (remove 'just-the-way-you-are' at pos 0, set 'Locked out of Heaven' at pos 0)
       const lockedId = 'spotify-5g7sDjBhZ4I3gcFIpkrLuI';
-      await db.rawInsert('''
+      await db.rawInsert(
+        '''
         INSERT OR REPLACE INTO imported_songs (id, title, artist, album, duration_ms, image_url, audio_url, lyrics, genre, is_preview, is_youtube_audio, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, '', '[]', 'Pop', 0, 1, ?)
-      ''', [
-        lockedId,
-        'Locked out of Heaven',
-        'Bruno Mars',
-        'Unorthodox Jukebox',
-        233480,
-        'https://i.scdn.co/image/ab67616d0000b2739e495fb707973f3390850eea',
-        DateTime.now().millisecondsSinceEpoch,
-      ]);
+      ''',
+        [
+          lockedId,
+          'Locked out of Heaven',
+          'Bruno Mars',
+          'Unorthodox Jukebox',
+          233480,
+          'https://i.scdn.co/image/ab67616d0000b2739e495fb707973f3390850eea',
+          DateTime.now().millisecondsSinceEpoch,
+        ],
+      );
 
       final brunoPlaylists = await db.rawQuery(
         "SELECT id FROM imported_playlists WHERE title LIKE '%Bruno Mars%'",
@@ -310,7 +321,9 @@ class LocalDatabase {
           where: 'user_id = ? AND (is_deleted IS NULL OR is_deleted = 0)',
           whereArgs: [uid],
         );
-        final existingTitles = existingRows.map((r) => (r['title'] as String).toLowerCase().trim()).toSet();
+        final existingTitles = existingRows
+            .map((r) => (r['title'] as String).toLowerCase().trim())
+            .toSet();
 
         for (final donor in allUserPlaylists) {
           final donorIsDeleted = (donor['is_deleted'] as int? ?? 0) == 1;
@@ -323,8 +336,12 @@ class LocalDatabase {
           final donorId = donor['id'] as String;
           final cleanId = donorId.replaceAll(RegExp(r'-[356]$'), '');
 
-          if (await isPlaylistDeleted(donorId, title: rawTitle, userId: uid)) continue;
-          if (await isPlaylistDeleted(cleanId, title: rawTitle, userId: uid)) continue;
+          if (await isPlaylistDeleted(donorId, title: rawTitle, userId: uid)) {
+            continue;
+          }
+          if (await isPlaylistDeleted(cleanId, title: rawTitle, userId: uid)) {
+            continue;
+          }
 
           existingTitles.add(titleKey);
           final newId = '$cleanId-$uid';
@@ -333,7 +350,11 @@ class LocalDatabase {
           map['id'] = newId;
           map['user_id'] = uid;
           map['is_deleted'] = 0;
-          await db.insert('imported_playlists', map, conflictAlgorithm: ConflictAlgorithm.replace);
+          await db.insert(
+            'imported_playlists',
+            map,
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
 
           final songs = await db.query(
             'imported_playlist_songs',
@@ -356,7 +377,9 @@ class LocalDatabase {
         }
       }
     } catch (e) {
-      debugPrint('[LocalDatabase] _cleanImportedPlaylistsAndPreviews error: $e');
+      debugPrint(
+        '[LocalDatabase] _cleanImportedPlaylistsAndPreviews error: $e',
+      );
     }
   }
 
@@ -439,7 +462,9 @@ class LocalDatabase {
     } catch (e) {
       // In unit test environments without platform channels (e.g. MissingPluginException),
       // fall back gracefully to an in-memory database instance.
-      debugPrint('[LocalDatabase] Headless test fallback to in-memory database: $e');
+      debugPrint(
+        '[LocalDatabase] Headless test fallback to in-memory database: $e',
+      );
       sqfliteFfiInit();
       final openedDatabase = await databaseFactoryFfi.openDatabase(
         inMemoryDatabasePath,
@@ -533,6 +558,9 @@ class LocalDatabase {
         );
       } catch (_) {}
     }
+    if (oldVersion < 8) {
+      await _createListeningHistoryTable(database);
+    }
   }
 
   Future<void> _createImportedPlaylistTables(Database database) async {
@@ -551,16 +579,24 @@ class LocalDatabase {
       )
     ''');
     try {
-      await database.execute('ALTER TABLE imported_playlists ADD COLUMN image_url TEXT');
+      await database.execute(
+        'ALTER TABLE imported_playlists ADD COLUMN image_url TEXT',
+      );
     } catch (_) {}
     try {
-      await database.execute('ALTER TABLE imported_playlists ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0');
+      await database.execute(
+        'ALTER TABLE imported_playlists ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0',
+      );
     } catch (_) {}
     try {
-      await database.execute('ALTER TABLE imported_songs ADD COLUMN youtube_video_id TEXT');
+      await database.execute(
+        'ALTER TABLE imported_songs ADD COLUMN youtube_video_id TEXT',
+      );
     } catch (_) {}
     try {
-      await database.execute('ALTER TABLE imported_songs ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0');
+      await database.execute(
+        'ALTER TABLE imported_songs ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0',
+      );
     } catch (_) {}
     try {
       await database.execute(
@@ -597,13 +633,19 @@ class LocalDatabase {
       )
     ''');
     try {
-      await database.execute('CREATE INDEX IF NOT EXISTS idx_imported_playlists_user ON imported_playlists(user_id, is_deleted)');
+      await database.execute(
+        'CREATE INDEX IF NOT EXISTS idx_imported_playlists_user ON imported_playlists(user_id, is_deleted)',
+      );
     } catch (_) {}
     try {
-      await database.execute('CREATE INDEX IF NOT EXISTS idx_imported_playlist_songs_playlist ON imported_playlist_songs(playlist_id, position)');
+      await database.execute(
+        'CREATE INDEX IF NOT EXISTS idx_imported_playlist_songs_playlist ON imported_playlist_songs(playlist_id, position)',
+      );
     } catch (_) {}
     try {
-      await database.execute('CREATE INDEX IF NOT EXISTS idx_imported_songs_id_deleted ON imported_songs(id, is_deleted)');
+      await database.execute(
+        'CREATE INDEX IF NOT EXISTS idx_imported_songs_id_deleted ON imported_songs(id, is_deleted)',
+      );
     } catch (_) {}
   }
 
@@ -642,6 +684,37 @@ class LocalDatabase {
     ''');
     await _createEmployeeTable(database);
     await _createRememberedAccountsTable(database);
+    await _createListeningHistoryTable(database);
+  }
+
+  /// Every real play (audio actually started) for Listening Stats and Recents.
+  Future<void> _createListeningHistoryTable(Database database) async {
+    await database.execute('''
+      CREATE TABLE IF NOT EXISTS listening_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        song_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        artist TEXT NOT NULL,
+        album TEXT,
+        image_url TEXT,
+        started_at INTEGER NOT NULL,
+        listened_seconds INTEGER NOT NULL DEFAULT 0,
+        completed INTEGER NOT NULL DEFAULT 0
+      )
+    ''');
+    try {
+      await database.execute(
+        'CREATE INDEX IF NOT EXISTS idx_listening_history_user_started '
+        'ON listening_history(user_id, started_at DESC)',
+      );
+    } catch (_) {}
+    try {
+      await database.execute(
+        'CREATE INDEX IF NOT EXISTS idx_listening_history_user_song '
+        'ON listening_history(user_id, song_id)',
+      );
+    } catch (_) {}
   }
 
   /// Emails the user asked to remember on the sign-in screen.
@@ -929,8 +1002,12 @@ class LocalDatabase {
 
     final updates = <String, Object?>{
       'email': cleanEmail,
-      'backup_email': cleanBackup != null && cleanBackup.isNotEmpty ? cleanBackup : null,
-      'phone_number': cleanPhone != null && cleanPhone.isNotEmpty ? cleanPhone : null,
+      'backup_email': cleanBackup != null && cleanBackup.isNotEmpty
+          ? cleanBackup
+          : null,
+      'phone_number': cleanPhone != null && cleanPhone.isNotEmpty
+          ? cleanPhone
+          : null,
       'last_login_at': DateTime.now().millisecondsSinceEpoch,
     };
 
@@ -942,18 +1019,17 @@ class LocalDatabase {
       updates['password_hash'] = hashPassword(newPassword.trim());
     }
 
-    await db.update(
-      'users',
-      updates,
-      where: 'id = ?',
-      whereArgs: [id],
-    );
+    await db.update('users', updates, where: 'id = ?', whereArgs: [id]);
 
     // Keep remembered account synchronized
     try {
       await db.execute(
         'INSERT OR REPLACE INTO remembered_accounts (email, display_name, saved_at) VALUES (?, ?, ?)',
-        [cleanEmail, cleanDisplayName ?? cleanEmail.split('@').first, DateTime.now().millisecondsSinceEpoch],
+        [
+          cleanEmail,
+          cleanDisplayName ?? cleanEmail.split('@').first,
+          DateTime.now().millisecondsSinceEpoch,
+        ],
       );
     } catch (_) {}
 
@@ -1108,6 +1184,178 @@ class LocalDatabase {
         whereArgs: [email.trim().toLowerCase()],
       );
       await _syncToWorkspace();
+    } catch (_) {}
+  }
+
+  /// Starts a listening-history row when audio actually begins playing.
+  /// Returns the row id so the controller can finalise the listened time.
+  Future<int> recordListeningStart({
+    required String userId,
+    required String songId,
+    required String title,
+    required String artist,
+    String album = '',
+    String imageUrl = '',
+    DateTime? startedAt,
+  }) async {
+    final db = await database;
+    await _createListeningHistoryTable(db);
+    final id = await db.insert('listening_history', {
+      'user_id': userId,
+      'song_id': songId,
+      'title': title,
+      'artist': artist,
+      'album': album,
+      'image_url': imageUrl,
+      'started_at': (startedAt ?? DateTime.now()).millisecondsSinceEpoch,
+      'listened_seconds': 0,
+      'completed': 0,
+    });
+    return id;
+  }
+
+  /// Finalises a row started by [recordListeningStart].
+  Future<void> finishListeningEntry({
+    required int id,
+    required int listenedSeconds,
+    required bool completed,
+  }) async {
+    try {
+      final db = await database;
+      await db.update(
+        'listening_history',
+        {
+          'listened_seconds': listenedSeconds < 0 ? 0 : listenedSeconds,
+          'completed': completed ? 1 : 0,
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+    } catch (_) {}
+  }
+
+  /// Newest play sessions for Recents, one row per song.
+  Future<List<ListeningHistoryEntry>> getRecentListening({
+    required String userId,
+    int limit = 50,
+  }) async {
+    try {
+      final db = await database;
+      await _createListeningHistoryTable(db);
+      final rows = await db.rawQuery(
+        '''
+        SELECT h.* FROM listening_history h
+        INNER JOIN (
+          SELECT song_id, MAX(id) AS max_id
+          FROM listening_history
+          WHERE user_id = ?
+          GROUP BY song_id
+        ) latest ON h.id = latest.max_id
+        ORDER BY h.started_at DESC
+        LIMIT ?
+        ''',
+        [userId, limit],
+      );
+      return rows.map(ListeningHistoryEntry.fromMap).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Aggregated plays/time for the Listening Stats screen.
+  Future<ListeningStats> getListeningStats({required String userId}) async {
+    try {
+      final db = await database;
+      await _createListeningHistoryTable(db);
+      final totalsRows = await db.rawQuery(
+        '''
+        SELECT
+          COUNT(*) AS plays,
+          COALESCE(SUM(listened_seconds), 0) AS seconds,
+          COUNT(DISTINCT song_id) AS unique_songs,
+          COUNT(DISTINCT artist) AS unique_artists,
+          COALESCE(SUM(completed), 0) AS completed_plays
+        FROM listening_history
+        WHERE user_id = ?
+        ''',
+        [userId],
+      );
+      final totals = totalsRows.isEmpty
+          ? const <String, Object?>{}
+          : totalsRows.first;
+      final topSongRows = await db.rawQuery(
+        '''
+        SELECT song_id, title, artist, image_url,
+          COUNT(*) AS plays,
+          COALESCE(SUM(listened_seconds), 0) AS seconds
+        FROM listening_history
+        WHERE user_id = ?
+        GROUP BY song_id
+        ORDER BY plays DESC, seconds DESC
+        LIMIT 5
+        ''',
+        [userId],
+      );
+      final topArtistRows = await db.rawQuery(
+        '''
+        SELECT artist,
+          COUNT(*) AS plays,
+          COALESCE(SUM(listened_seconds), 0) AS seconds
+        FROM listening_history
+        WHERE user_id = ? AND TRIM(artist) != ''
+        GROUP BY artist
+        ORDER BY plays DESC, seconds DESC
+        LIMIT 5
+        ''',
+        [userId],
+      );
+
+      ListeningRankedItem rankedArtist(Map<String, Object?> row) {
+        final name = (row['artist'] as String?) ?? '';
+        return ListeningRankedItem(
+          key: name,
+          title: name,
+          subtitle: '',
+          imageUrl: '',
+          plays: (row['plays'] as int?) ?? 0,
+          listenedSeconds: (row['seconds'] as int?) ?? 0,
+        );
+      }
+
+      return ListeningStats(
+        totalPlays: (totals['plays'] as int?) ?? 0,
+        totalListenedSeconds: (totals['seconds'] as int?) ?? 0,
+        uniqueSongs: (totals['unique_songs'] as int?) ?? 0,
+        uniqueArtists: (totals['unique_artists'] as int?) ?? 0,
+        completedPlays: (totals['completed_plays'] as int?) ?? 0,
+        topSongs: topSongRows.map((row) {
+          final title = (row['title'] as String?) ?? '';
+          final artist = (row['artist'] as String?) ?? '';
+          return ListeningRankedItem(
+            key: (row['song_id'] as String?) ?? title,
+            title: title,
+            subtitle: artist,
+            imageUrl: (row['image_url'] as String?) ?? '',
+            plays: (row['plays'] as int?) ?? 0,
+            listenedSeconds: (row['seconds'] as int?) ?? 0,
+          );
+        }).toList(),
+        topArtists: topArtistRows.map(rankedArtist).toList(),
+      );
+    } catch (e) {
+      debugPrint('[LocalDatabase] getListeningStats error: $e');
+      return ListeningStats.empty;
+    }
+  }
+
+  Future<void> clearListeningHistory({required String userId}) async {
+    try {
+      final db = await database;
+      await db.delete(
+        'listening_history',
+        where: 'user_id = ?',
+        whereArgs: [userId],
+      );
     } catch (_) {}
   }
 
@@ -1286,9 +1534,7 @@ class LocalDatabase {
     // 1. Update users table
     await db.update(
       'users',
-      {
-        'role': normalizedRole,
-      },
+      {'role': normalizedRole},
       where: 'id = ?',
       whereArgs: [userId],
     );
@@ -1310,8 +1556,8 @@ class LocalDatabase {
 
       if (empRows.isNotEmpty) {
         final existingEmp = empRows.first;
-        final currentCode =
-            (existingEmp['employee_code'] as String? ?? '').toUpperCase();
+        final currentCode = (existingEmp['employee_code'] as String? ?? '')
+            .toUpperCase();
         String targetCode = currentCode;
         if (isAdminRole &&
             !currentCode.startsWith('EMP-ADM') &&
@@ -1331,11 +1577,7 @@ class LocalDatabase {
 
         await db.update(
           'employees',
-          {
-            'status': 'active',
-            'employee_code': targetCode,
-            'updated_at': now,
-          },
+          {'status': 'active', 'employee_code': targetCode, 'updated_at': now},
           where: 'user_id = ?',
           whereArgs: [userId],
         );
@@ -1353,8 +1595,8 @@ class LocalDatabase {
 
         if (emailMatch.isNotEmpty) {
           final matched = emailMatch.first;
-          final currentCode =
-              (matched['employee_code'] as String? ?? '').toUpperCase();
+          final currentCode = (matched['employee_code'] as String? ?? '')
+              .toUpperCase();
           String targetCode = currentCode;
           if (isAdminRole &&
               !currentCode.startsWith('EMP-ADM') &&
@@ -1381,25 +1623,23 @@ class LocalDatabase {
           final codeSuffix = suffix.length >= 6
               ? suffix.substring(0, 6).toUpperCase()
               : (suffix.isNotEmpty ? suffix.toUpperCase() : '001');
-          final targetCode =
-              isAdminRole ? 'EMP-ADM-$codeSuffix' : 'EMP-$codeSuffix';
-          final effectiveEmail =
-              cleanEmail.isNotEmpty ? cleanEmail : '$userId@pulsemusic.app';
+          final targetCode = isAdminRole
+              ? 'EMP-ADM-$codeSuffix'
+              : 'EMP-$codeSuffix';
+          final effectiveEmail = cleanEmail.isNotEmpty
+              ? cleanEmail
+              : '$userId@pulsemusic.app';
 
-          await db.insert(
-            'employees',
-            {
-              'id': 'emp-$userId',
-              'user_id': userId,
-              'employee_code': targetCode,
-              'display_name': cleanName,
-              'email': effectiveEmail,
-              'status': 'active',
-              'created_at': now,
-              'updated_at': now,
-            },
-            conflictAlgorithm: ConflictAlgorithm.replace,
-          );
+          await db.insert('employees', {
+            'id': 'emp-$userId',
+            'user_id': userId,
+            'employee_code': targetCode,
+            'display_name': cleanName,
+            'email': effectiveEmail,
+            'status': 'active',
+            'created_at': now,
+            'updated_at': now,
+          }, conflictAlgorithm: ConflictAlgorithm.replace);
         }
       }
     } else {
@@ -1407,10 +1647,7 @@ class LocalDatabase {
       if (empRows.isNotEmpty) {
         await db.update(
           'employees',
-          {
-            'status': 'inactive',
-            'updated_at': now,
-          },
+          {'status': 'inactive', 'updated_at': now},
           where: 'user_id = ?',
           whereArgs: [userId],
         );
@@ -1471,19 +1708,24 @@ class LocalDatabase {
 
   Future<void> removeSetting(String key) async {
     final db = await database;
-    await db.delete(
-      'app_settings',
-      where: 'key = ?',
-      whereArgs: [key],
-    );
+    await db.delete('app_settings', where: 'key = ?', whereArgs: [key]);
   }
 
   /// Extracts the base artist name from an artist-based playlist title.
   static String extractArtistNameFromPlaylist(String title) {
     var res = title.toLowerCase().trim();
-    res = res.replaceAll(RegExp(r'^(this is|best of|top songs of|top tracks of)\s+'), '');
-    res = res.replaceAll(RegExp(r'\s*-\s*(top songs|top tracks|essentials|greatest hits)'), '');
-    res = res.replaceAll(RegExp(r'\s+(top songs|top tracks|essentials|greatest hits)$'), '');
+    res = res.replaceAll(
+      RegExp(r'^(this is|best of|top songs of|top tracks of)\s+'),
+      '',
+    );
+    res = res.replaceAll(
+      RegExp(r'\s*-\s*(top songs|top tracks|essentials|greatest hits)'),
+      '',
+    );
+    res = res.replaceAll(
+      RegExp(r'\s+(top songs|top tracks|essentials|greatest hits)$'),
+      '',
+    );
     return res.trim();
   }
 
@@ -1506,9 +1748,12 @@ class LocalDatabase {
         final isDel = rows.first['is_deleted'] as int? ?? 0;
         if (isDel == 1) return true;
         // If explicitly active in DB, only an exact playlistId deleted setting can mark it deleted.
-        if (await getSetting('deleted_playlist_$playlistId') == 'true') return true;
+        if (await getSetting('deleted_playlist_$playlistId') == 'true') {
+          return true;
+        }
         final cleanId = playlistId.replaceAll(RegExp(r'-[356]$'), '');
-        if (cleanId != playlistId && await getSetting('deleted_playlist_$cleanId') == 'true') {
+        if (cleanId != playlistId &&
+            await getSetting('deleted_playlist_$cleanId') == 'true') {
           return true;
         }
         return false;
@@ -1518,24 +1763,33 @@ class LocalDatabase {
     // Fallback for non-table or virtual playlists
     if (await getSetting('deleted_playlist_$playlistId') == 'true') return true;
     final cleanId = playlistId.replaceAll(RegExp(r'-[356]$'), '');
-    if (cleanId != playlistId && await getSetting('deleted_playlist_$cleanId') == 'true') {
+    if (cleanId != playlistId &&
+        await getSetting('deleted_playlist_$cleanId') == 'true') {
       return true;
     }
     if (title != null && title.isNotEmpty) {
       final titleKey = title.toLowerCase().trim();
       if (await getSetting('deleted_playlist_$titleKey') == 'true') return true;
-      if (userId != null && await getSetting('deleted_playlist_${titleKey}_$userId') == 'true') {
+      if (userId != null &&
+          await getSetting('deleted_playlist_${titleKey}_$userId') == 'true') {
         return true;
       }
       for (final uid in const ['default_user', '1', '3', '5', '6']) {
-        if (await getSetting('deleted_playlist_${titleKey}_$uid') == 'true') return true;
+        if (await getSetting('deleted_playlist_${titleKey}_$uid') == 'true') {
+          return true;
+        }
       }
       final artistName = extractArtistNameFromPlaylist(title);
       if (artistName.isNotEmpty) {
         final artistKey = artistName.toLowerCase().trim();
-        if (await getSetting('deleted_artist_playlist_$artistKey') == 'true') return true;
+        if (await getSetting('deleted_artist_playlist_$artistKey') == 'true') {
+          return true;
+        }
         for (final uid in const ['default_user', '1', '3', '5', '6']) {
-          if (await getSetting('deleted_artist_playlist_${artistKey}_$uid') == 'true') return true;
+          if (await getSetting('deleted_artist_playlist_${artistKey}_$uid') ==
+              'true') {
+            return true;
+          }
         }
       }
     }
@@ -1543,10 +1797,15 @@ class LocalDatabase {
   }
 
   /// Checks whether a song has been soft-deleted or marked as deleted in settings.
-  Future<bool> isSongDeleted(String songId, {String? title, String? artist}) async {
+  Future<bool> isSongDeleted(
+    String songId, {
+    String? title,
+    String? artist,
+  }) async {
     if (await getSetting('deleted_song_$songId') == 'true') return true;
     if (title != null && artist != null) {
-      final key = '${title.toLowerCase().trim()}_${artist.toLowerCase().trim()}';
+      final key =
+          '${title.toLowerCase().trim()}_${artist.toLowerCase().trim()}';
       if (await getSetting('deleted_song_$key') == 'true') return true;
     }
     final db = await database;
@@ -1680,12 +1939,18 @@ class LocalDatabase {
   }
 
   /// Updates only the image_url of an imported playlist.
-  Future<void> updateImportedPlaylistImageUrl(String playlistId, String imageUrl) async {
+  Future<void> updateImportedPlaylistImageUrl(
+    String playlistId,
+    String imageUrl,
+  ) async {
     try {
       final db = await database;
       await db.update(
         'imported_playlists',
-        {'image_url': imageUrl, 'updated_at': DateTime.now().millisecondsSinceEpoch},
+        {
+          'image_url': imageUrl,
+          'updated_at': DateTime.now().millisecondsSinceEpoch,
+        },
         where: 'id = ?',
         whereArgs: [playlistId],
       );
@@ -1823,26 +2088,22 @@ class LocalDatabase {
     bool isExplicit = false,
   }) async {
     final db = await database;
-    await db.insert(
-      'imported_songs',
-      {
-        'id': id,
-        'title': title,
-        'artist': artist,
-        'album': album,
-        'duration_ms': durationMs,
-        'image_url': imageUrl,
-        'audio_url': audioUrl,
-        'lyrics': jsonEncode(lyrics ?? const <String>[]),
-        'genre': genre,
-        'is_preview': isPreview ? 1 : 0,
-        'is_youtube_audio': isYouTubeAudio ? 1 : 0,
-        'youtube_video_id': youtubeVideoId,
-        'is_explicit': isExplicit ? 1 : 0,
-        'updated_at': DateTime.now().millisecondsSinceEpoch,
-      },
-      conflictAlgorithm: ConflictAlgorithm.ignore,
-    );
+    await db.insert('imported_songs', {
+      'id': id,
+      'title': title,
+      'artist': artist,
+      'album': album,
+      'duration_ms': durationMs,
+      'image_url': imageUrl,
+      'audio_url': audioUrl,
+      'lyrics': jsonEncode(lyrics ?? const <String>[]),
+      'genre': genre,
+      'is_preview': isPreview ? 1 : 0,
+      'is_youtube_audio': isYouTubeAudio ? 1 : 0,
+      'youtube_video_id': youtubeVideoId,
+      'is_explicit': isExplicit ? 1 : 0,
+      'updated_at': DateTime.now().millisecondsSinceEpoch,
+    }, conflictAlgorithm: ConflictAlgorithm.ignore);
   }
 
   /// Updates an imported song when audio or lyrics enrichment finishes.
@@ -1929,7 +2190,9 @@ class LocalDatabase {
       where: isGuest
           ? '(user_id = ? OR user_id = ?) AND $notDel'
           : '(user_id = ? OR user_id = ? OR user_id = ?) AND $notDel',
-      whereArgs: isGuest ? ['default_user', '1'] : [targetId, 'default_user', '1'],
+      whereArgs: isGuest
+          ? ['default_user', '1']
+          : [targetId, 'default_user', '1'],
       orderBy: 'created_at ASC',
     );
 
@@ -1942,10 +2205,12 @@ class LocalDatabase {
       );
     }
 
-    if (playlists.isEmpty && (targetId == '3' || targetId == '5' || targetId == '6')) {
+    if (playlists.isEmpty &&
+        (targetId == '3' || targetId == '5' || targetId == '6')) {
       playlists = await db.query(
         'imported_playlists',
-        where: '(user_id = ? OR user_id = ? OR user_id = ? OR user_id = ? OR user_id = ?) AND $notDel',
+        where:
+            '(user_id = ? OR user_id = ? OR user_id = ? OR user_id = ? OR user_id = ?) AND $notDel',
         whereArgs: ['3', '5', '6', 'default_user', '1'],
         orderBy: 'created_at ASC',
       );
@@ -1979,19 +2244,18 @@ class LocalDatabase {
       return results;
     }
 
-    final activePlaylistIds = activePlaylists.map((p) => p['id'] as String).toList();
+    final activePlaylistIds = activePlaylists
+        .map((p) => p['id'] as String)
+        .toList();
     final placeholders = List.filled(activePlaylistIds.length, '?').join(',');
 
-    final songRows = await db.rawQuery(
-      '''
+    final songRows = await db.rawQuery('''
       SELECT s.*, ps.playlist_id, ps.position
       FROM imported_songs s
       INNER JOIN imported_playlist_songs ps ON s.id = ps.song_id
       WHERE ps.playlist_id IN ($placeholders) AND (s.is_deleted IS NULL OR s.is_deleted = 0)
       ORDER BY ps.playlist_id, ps.position ASC
-    ''',
-      activePlaylistIds,
-    );
+    ''', activePlaylistIds);
 
     final cachedAudioIndex = await getOfflineAudioFileIndex();
 
@@ -2027,19 +2291,25 @@ class LocalDatabase {
       // Auto-heal cached offline audio files if audio_url is empty in the database
       if (resolvedAudio.isEmpty ||
           (!resolvedAudio.startsWith('http') &&
-           !resolvedAudio.startsWith('asset') &&
-           !File(resolvedAudio).existsSync())) {
+              !resolvedAudio.startsWith('asset') &&
+              !File(resolvedAudio).existsSync())) {
         final cached = cachedAudioIndex[songId];
         if (cached != null) {
           resolvedAudio = cached.path;
           isPreview = false;
           isYouTubeAudio = false;
-          unawaited(db.update(
-            'imported_songs',
-            {'audio_url': cached.path, 'is_preview': 0, 'is_youtube_audio': 0},
-            where: 'id = ?',
-            whereArgs: [songId],
-          ));
+          unawaited(
+            db.update(
+              'imported_songs',
+              {
+                'audio_url': cached.path,
+                'is_preview': 0,
+                'is_youtube_audio': 0,
+              },
+              where: 'id = ?',
+              whereArgs: [songId],
+            ),
+          );
         }
       }
 
@@ -2079,8 +2349,11 @@ class LocalDatabase {
       if (titleKey.isNotEmpty && titleIndexMap.containsKey(titleKey)) {
         final existingIdx = titleIndexMap[titleKey]!;
         final existingPlaylist = results[existingIdx];
-        final existingSongs = existingPlaylist['songs'] as List<Map<String, dynamic>>;
-        final existingSongIds = existingSongs.map((s) => s['id'] as String).toSet();
+        final existingSongs =
+            existingPlaylist['songs'] as List<Map<String, dynamic>>;
+        final existingSongIds = existingSongs
+            .map((s) => s['id'] as String)
+            .toSet();
         for (final s in songs) {
           if (!existingSongIds.contains(s['id'])) {
             existingSongs.add(s);
@@ -2139,7 +2412,8 @@ class LocalDatabase {
   ) {
     if (allSettings['deleted_song_$songId'] == 'true') return true;
     if (title.isNotEmpty && artist.isNotEmpty) {
-      final key = '${title.toLowerCase().trim()}_${artist.toLowerCase().trim()}';
+      final key =
+          '${title.toLowerCase().trim()}_${artist.toLowerCase().trim()}';
       if (allSettings['deleted_song_$key'] == 'true') return true;
     }
     return false;
@@ -2168,8 +2442,16 @@ class LocalDatabase {
       final rawTitle = rows.first['title'] as String? ?? '';
       final titleKey = rawTitle.toLowerCase().trim();
       final ownerIsGuest = guestUserIds.contains(owner);
-      const allowedSystemAccounts = {'3', '5', '6', 'john@example.com', 'novi@example.com', 'john1@example.com'};
-      final isCallerAllowed = owner == callerId ||
+      const allowedSystemAccounts = {
+        '3',
+        '5',
+        '6',
+        'john@example.com',
+        'novi@example.com',
+        'john1@example.com',
+      };
+      final isCallerAllowed =
+          owner == callerId ||
           ownerIsGuest ||
           callerIsGuest ||
           allowedSystemAccounts.contains(callerId) ||
@@ -2197,7 +2479,15 @@ class LocalDatabase {
       await setSetting('deleted_playlist_$cleanId', 'true');
       if (titleKey.isNotEmpty) {
         await setSetting('deleted_playlist_$titleKey', 'true');
-        for (final uid in ['default_user', '1', '3', '5', '6', callerId, owner]) {
+        for (final uid in [
+          'default_user',
+          '1',
+          '3',
+          '5',
+          '6',
+          callerId,
+          owner,
+        ]) {
           if (uid.isNotEmpty) {
             await setSetting('deleted_playlist_${titleKey}_$uid', 'true');
           }
@@ -2207,9 +2497,20 @@ class LocalDatabase {
         if (artistName.isNotEmpty) {
           final artistKey = artistName.toLowerCase().trim();
           await setSetting('deleted_artist_playlist_$artistKey', 'true');
-          for (final uid in ['default_user', '1', '3', '5', '6', callerId, owner]) {
+          for (final uid in [
+            'default_user',
+            '1',
+            '3',
+            '5',
+            '6',
+            callerId,
+            owner,
+          ]) {
             if (uid.isNotEmpty) {
-              await setSetting('deleted_artist_playlist_${artistKey}_$uid', 'true');
+              await setSetting(
+                'deleted_artist_playlist_${artistKey}_$uid',
+                'true',
+              );
             }
           }
         }
@@ -2250,8 +2551,7 @@ class LocalDatabase {
   Future<void> markImportedPlaylistDeleted(
     String playlistId, {
     String? userId,
-  }) =>
-      deleteImportedPlaylist(playlistId, userId: userId);
+  }) => deleteImportedPlaylist(playlistId, userId: userId);
 
   /// Deletes an imported song association from a playlist.
   Future<void> deleteImportedSongFromPlaylist({
@@ -2288,10 +2588,7 @@ class LocalDatabase {
 
       await db.update(
         'imported_songs',
-        {
-          'is_deleted': 1,
-          'updated_at': DateTime.now().millisecondsSinceEpoch,
-        },
+        {'is_deleted': 1, 'updated_at': DateTime.now().millisecondsSinceEpoch},
         where: 'id = ?',
         whereArgs: [songId],
       );
@@ -2304,7 +2601,8 @@ class LocalDatabase {
 
       await setSetting('deleted_song_$songId', 'true');
       if (title != null && artist != null) {
-        final key = '${title.toLowerCase().trim()}_${artist.toLowerCase().trim()}';
+        final key =
+            '${title.toLowerCase().trim()}_${artist.toLowerCase().trim()}';
         await setSetting('deleted_song_$key', 'true');
       }
       _syncToWorkspace();
@@ -2342,7 +2640,8 @@ class LocalDatabase {
     try {
       final rows = await db.query(
         'imported_songs',
-        where: "is_preview = 0 AND audio_url IS NOT NULL AND audio_url != '' AND audio_url NOT LIKE '%apple.com%' AND audio_url NOT LIKE '%itunes%'",
+        where:
+            "is_preview = 0 AND audio_url IS NOT NULL AND audio_url != '' AND audio_url NOT LIKE '%apple.com%' AND audio_url NOT LIKE '%itunes%'",
         orderBy: 'updated_at DESC',
       );
       return rows.map((r) => Map<String, dynamic>.from(r)).toList();
@@ -2364,7 +2663,8 @@ class LocalDatabase {
         final isPreview = (row['is_preview'] as int? ?? 0) == 1;
         final audioUrl = (row['audio_url'] as String? ?? '').trim();
         // NEVER delete songs that were located as full tracks:
-        final isLocatedFullTrack = !isPreview &&
+        final isLocatedFullTrack =
+            !isPreview &&
             audioUrl.isNotEmpty &&
             !audioUrl.contains('apple.com') &&
             !audioUrl.contains('itunes');
@@ -2393,7 +2693,9 @@ class LocalDatabase {
     final dirs = <Directory>[];
     if (!kIsWeb && Platform.isAndroid) {
       dirs.add(
-        Directory('/data/user/0/com.example.music/app_flutter/offline_downloads'),
+        Directory(
+          '/data/user/0/com.example.music/app_flutter/offline_downloads',
+        ),
       );
       dirs.add(
         Directory('/data/user/0/com.example.music/files/offline_downloads'),
@@ -2572,7 +2874,9 @@ class LocalDatabase {
         final songId = r['id']?.toString() ?? '';
         if (songId.isEmpty) continue;
         final cached = await findCachedAudioFile(songId);
-        if (cached != null && await cached.exists() && await cached.length() >= 1600000) {
+        if (cached != null &&
+            await cached.exists() &&
+            await cached.length() >= 1600000) {
           await db.update(
             'imported_songs',
             {'audio_url': cached.path, 'is_preview': 0, 'is_youtube_audio': 0},
@@ -2598,7 +2902,9 @@ class LocalDatabase {
     }
   }
 
-  static Future<Map<String, File>> getOfflineAudioFileIndex({bool forceRefresh = false}) async {
+  static Future<Map<String, File>> getOfflineAudioFileIndex({
+    bool forceRefresh = false,
+  }) async {
     final now = DateTime.now();
     if (!forceRefresh &&
         _cachedAudioIndex != null &&

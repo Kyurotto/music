@@ -80,6 +80,10 @@ class AuthService {
   bool _listenerStarted = false;
   bool _isInitialized = false;
 
+  /// One-shot app setting: the email the sign-in screen should prefill after
+  /// the user taps an account in the drawer's "Add Accounts" screen.
+  static const String authPrefillEmailKey = 'auth_prefill_email';
+
   /// True while an explicit social sign-in (Google/Facebook/OAuth) is in
   /// flight. Background Firebase `authStateChanges` events are still
   /// persisted to SQLite, but never emitted to the UI during that window:
@@ -438,8 +442,8 @@ class AuthService {
     // Source of truth is employees.user_id -> users.id. Never trust the
     // cached users.role column; an employee row linked to this ID makes
     // the account admin/employee automatically.
-    final resolvedRole =
-        await LocalDatabase.instance.refreshUserRoleFromEmployees(userId);
+    final resolvedRole = await LocalDatabase.instance
+        .refreshUserRoleFromEmployees(userId);
     final localUser = LocalUser(
       id: userId,
       email: userData['email'] as String,
@@ -651,10 +655,7 @@ class AuthService {
 
     try {
       final credential = await auth
-          .signInWithEmailAndPassword(
-            email: cleanEmail,
-            password: password,
-          )
+          .signInWithEmailAndPassword(email: cleanEmail, password: password)
           .timeout(const Duration(seconds: 4));
       _currentUser = credential.user;
       _authController.add(credential.user);
@@ -825,8 +826,9 @@ class AuthService {
   Future<String> refreshRoleFromDatabase() async {
     final uid = currentUserId;
     if (uid.isEmpty) return userRole;
-    final resolved =
-        await LocalDatabase.instance.refreshUserRoleFromEmployees(uid);
+    final resolved = await LocalDatabase.instance.refreshUserRoleFromEmployees(
+      uid,
+    );
     if (_currentUser is LocalUser) {
       _currentUser = (_currentUser as LocalUser).copyWith(role: resolved);
       _authController.add(_currentUser);
@@ -908,12 +910,13 @@ class AuthService {
     } else {
       final localData = await LocalDatabase.instance.getUserById(uid);
       if (localData != null) {
-        final resolvedRole =
-            await LocalDatabase.instance.refreshUserRoleFromEmployees(uid);
+        final resolvedRole = await LocalDatabase.instance
+            .refreshUserRoleFromEmployees(uid);
         final updated = LocalUser(
           id: uid,
           email: cleanEmail,
-          displayName: cleanName ?? (localData['display_name'] as String? ?? 'User'),
+          displayName:
+              cleanName ?? (localData['display_name'] as String? ?? 'User'),
           role: resolvedRole,
           photoUrl: localData['photo_url'] as String?,
           backupEmail: cleanBackup,

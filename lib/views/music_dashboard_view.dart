@@ -16,7 +16,6 @@ import '../widgets/spotify_lyrics_sheet.dart';
 import '../widgets/spotify_import_dialog.dart';
 import '../widgets/song_artwork_widget.dart';
 import '../services/display_rate_service.dart';
-import 'settings_view.dart';
 import 'discovery_sections.dart';
 import 'playlist_screen.dart';
 import '../services/discovery_service.dart';
@@ -634,10 +633,11 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
           backgroundColor: AppTheme.background,
           drawer: isMobile
               ? Drawer(
-                  backgroundColor: AppTheme.surface,
+                  backgroundColor: const Color(0xFF121212),
                   child: SafeArea(
                     child: SidebarNav(
                       controller: _controller,
+                      isDrawer: true,
                       selectedPlaylistId: _selectedPlaylistId,
                       onPlaylistSelected: (id) {
                         Navigator.of(context).pop();
@@ -914,7 +914,20 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
       ),
       child: Row(
         children: [
-          // Search Input Bar
+          if (isMobile) ...[
+            IconButton(
+              tooltip: 'Open menu',
+              icon: const Icon(
+                Icons.menu_rounded,
+                size: 24,
+                color: AppTheme.textPrimary,
+              ),
+              onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+            ),
+            const SizedBox(width: 6),
+          ],
+
+          // Search Input Bar (full width, single line, no wrapping)
           Expanded(
             child: Container(
               height: 42,
@@ -925,12 +938,15 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
               ),
               child: TextField(
                 controller: _searchTextController,
+                maxLines: 1,
+                textAlignVertical: TextAlignVertical.center,
                 onChanged: (val) => _controller.setSearchQuery(val),
                 style: const TextStyle(
                   fontSize: 14,
                   color: AppTheme.textPrimary,
                 ),
                 decoration: InputDecoration(
+                  isDense: true,
                   hintText: 'Search songs, artists, albums...',
                   hintStyle: const TextStyle(
                     fontSize: 13,
@@ -955,35 +971,13 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
                         )
                       : null,
                   border: InputBorder.none,
-                  contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
                 ),
               ),
             ),
-          ),
-
-          const SizedBox(width: 12),
-
-          // Notifications button
-          IconButton(
-            tooltip: 'Notifications',
-            icon: const Icon(
-              Icons.notifications_none_rounded,
-              size: 22,
-              color: AppTheme.textSecondary,
-            ),
-            onPressed: () {},
-          ),
-
-          // Settings button
-          IconButton(
-            tooltip: 'Settings',
-            icon: const Icon(
-              Icons.settings_outlined,
-              size: 22,
-              color: AppTheme.textSecondary,
-            ),
-            onPressed: () =>
-                SettingsView.show(context, controller: _controller),
           ),
         ],
       ),
