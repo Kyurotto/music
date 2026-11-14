@@ -55,6 +55,7 @@ class _SettingsViewState extends State<SettingsView> {
   bool _allowExplicit = true;
   bool _downloadOnMobile = false;
   bool _autoCachePlayedSongs = true;
+  bool _dataSaverMode = false;
 
   int _cacheSizeBytes = -1;
   bool _clearingCache = false;
@@ -133,6 +134,9 @@ class _SettingsViewState extends State<SettingsView> {
         }
         if (settings.containsKey('auto_cache_played_songs')) {
           _autoCachePlayedSongs = settings['auto_cache_played_songs'] == 'true';
+        }
+        if (settings.containsKey('data_saver_mode')) {
+          _dataSaverMode = settings['data_saver_mode'] == 'true';
         }
       });
     } catch (e) {
@@ -1042,7 +1046,9 @@ class _SettingsViewState extends State<SettingsView> {
                       ),
                     ),
                     subtitle: Text(
-                      _streamingQuality,
+                      _dataSaverMode
+                          ? '$_streamingQuality · Data Saver caps at 96 kbps'
+                          : _streamingQuality,
                       style: const TextStyle(
                         fontSize: 13,
                         color: AppTheme.primary,
@@ -1064,7 +1070,9 @@ class _SettingsViewState extends State<SettingsView> {
                       ),
                     ),
                     subtitle: Text(
-                      _downloadQuality,
+                      _dataSaverMode
+                          ? '$_downloadQuality · Data Saver caps at 96 kbps'
+                          : _downloadQuality,
                       style: const TextStyle(
                         fontSize: 13,
                         color: AppTheme.textSecondary,
@@ -1101,7 +1109,26 @@ class _SettingsViewState extends State<SettingsView> {
                 ]),
                 const SizedBox(height: 24),
 
-                // 4. Display & Visuals Section
+                // 4. Data Saver Section
+                _buildSectionHeader(Icons.data_saver_on_rounded, 'Data Saver'),
+                _buildCard([
+                  _buildSwitchTile(
+                    title: 'Data Saver Mode',
+                    subtitle:
+                        'Caps new streams and downloads at ~96 kbps, pauses '
+                        'automatic song caching, and blocks cache downloads on '
+                        'mobile data so your data lasts longer.',
+                    value: _dataSaverMode,
+                    onChanged: (val) {
+                      setState(() => _dataSaverMode = val);
+                      widget.controller?.setDataSaverMode(val, save: false);
+                      _saveSetting('data_saver_mode', val.toString());
+                    },
+                  ),
+                ]),
+                const SizedBox(height: 24),
+
+                // 5. Display & Visuals Section
                 _buildSectionHeader(Icons.palette_outlined, 'Display & Lyrics'),
                 _buildCard([
                   _buildSwitchTile(

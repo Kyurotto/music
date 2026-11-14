@@ -17,7 +17,9 @@ class AuthGate extends StatelessWidget {
       builder: (context, snapshot) {
         if (!AuthService.instance.isInitialized &&
             AuthService.instance.currentUser == null) {
-          return const Scaffold(body: Center(child: CircularProgressIndicator()));
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
         }
         final user = snapshot.data ?? AuthService.instance.currentUser;
         return user != null ? const MusicDashboardView() : const AuthView();
@@ -45,6 +47,34 @@ class _AuthViewState extends State<AuthView> {
   bool _rememberMe = true;
 
   @override
+  void initState() {
+    super.initState();
+    _loadPrefillEmail();
+  }
+
+  /// Fills the email after the user chooses an account in the drawer's
+  /// "Add Accounts" screen. The setting is one-shot.
+  Future<void> _loadPrefillEmail() async {
+    try {
+      final email = await LocalDatabase.instance.getSetting(
+        AuthService.authPrefillEmailKey,
+      );
+      final clean = email?.trim() ?? '';
+      if (!mounted || clean.isEmpty) return;
+      setState(() {
+        _isRegistering = false;
+        _emailController.text = clean;
+        _emailController.selection = TextSelection.collapsed(
+          offset: clean.length,
+        );
+      });
+      await LocalDatabase.instance.removeSetting(
+        AuthService.authPrefillEmailKey,
+      );
+    } catch (_) {}
+  }
+
+  @override
   void dispose() {
     _emailController.dispose();
     _passwordController.dispose();
@@ -63,7 +93,8 @@ class _AuthViewState extends State<AuthView> {
 
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
-    if (_isRegistering && _passwordController.text != _confirmPasswordController.text) {
+    if (_isRegistering &&
+        _passwordController.text != _confirmPasswordController.text) {
       _showError('Passwords do not match.');
       return;
     }
@@ -91,6 +122,10 @@ class _AuthViewState extends State<AuthView> {
       // built-in password manager. Next visit the browser autofills BOTH
       // fields automatically.
       TextInput.finishAutofillContext(shouldSave: true);
+      await LocalDatabase.instance.saveRememberedAccount(
+        email: email,
+        displayName: AuthService.instance.userDisplayName,
+      );
       await _handleRememberMe();
     } on FirebaseAuthException catch (error) {
       _showError(_friendlyError(error));
@@ -116,8 +151,9 @@ class _AuthViewState extends State<AuthView> {
 
   void _showError(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.maybeOf(context)
-        ?.showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.maybeOf(
+      context,
+    )?.showSnackBar(SnackBar(content: Text(message)));
   }
 
   String _friendlyError(FirebaseAuthException error) {
@@ -183,242 +219,268 @@ class _AuthViewState extends State<AuthView> {
               // and the password stays blank (the bug in the screenshot).
               child: AutofillGroup(
                 child: Form(
-                key: _formKey,
-                autovalidateMode: AutovalidateMode.onUserInteraction,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    const Icon(Icons.graphic_eq_rounded,
-                        size: 52, color: AppTheme.primary),
-                    const SizedBox(height: 16),
-                    Text(
-                      _isRegistering ? 'Create account' : 'Welcome back',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        fontSize: 26,
-                        fontWeight: FontWeight.bold,
-                        color: AppTheme.textPrimary,
+                  key: _formKey,
+                  autovalidateMode: AutovalidateMode.onUserInteraction,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Icon(
+                        Icons.graphic_eq_rounded,
+                        size: 52,
+                        color: AppTheme.primary,
                       ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      _isRegistering
-                          ? 'Enter your email and choose a password to get started.'
-                          : 'Sign in to continue to Pulse Studio.',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: AppTheme.textSecondary),
-                    ),
-                    const SizedBox(height: 24),
-
-                    TextFormField(
-                      controller: _emailController,
-                      keyboardType: TextInputType.emailAddress,
-                      textInputAction: TextInputAction.next,
-                      // Tells Chrome/Edge/Safari this is the username/email
-                      // of the credential. The browser saves + autofills
-                      // email AND password together.
-                      autofillHints: _isRegistering
-                          ? const [AutofillHints.email]
-                          : const [
-                              AutofillHints.username,
-                              AutofillHints.email,
-                            ],
-                      enableSuggestions: true,
-                      autocorrect: false,
-                      decoration: const InputDecoration(
-                        labelText: 'Email address',
-                        hintText: 'name@example.com',
-                        prefixIcon: Icon(Icons.email_outlined, size: 20),
-                      ),
-                      validator: (value) {
-                        final v = value?.trim() ?? '';
-                        if (v.isEmpty) return 'Enter an email address.';
-                        if (!v.contains('@') || !v.contains('.')) {
-                          return 'Enter a valid email address.';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 14),
-                    TextFormField(
-                      controller: _passwordController,
-                      obscureText: _obscurePassword,
-                      // password = existing credential (browser autofills the
-                      // saved password automatically, just like the email);
-                      // newPassword = new credential (browser offers to save).
-                      autofillHints: _isRegistering
-                          ? const [AutofillHints.newPassword]
-                          : const [AutofillHints.password],
-                      enableSuggestions: !_isRegistering,
-                      autocorrect: false,
-                      textInputAction: _isRegistering ? TextInputAction.next : TextInputAction.done,
-                      onFieldSubmitted: _isRegistering ? null : (_) => _submit(),
-                      decoration: InputDecoration(
-                        labelText: 'Password',
-                        prefixIcon: const Icon(Icons.lock_outline, size: 20),
-                        suffixIcon: IconButton(
-                          icon: Icon(
-                            _obscurePassword ? Icons.visibility_off_outlined : Icons.visibility_outlined,
-                            size: 20,
-                            color: AppTheme.textSecondary,
-                          ),
-                          onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                      const SizedBox(height: 16),
+                      Text(
+                        _isRegistering ? 'Create account' : 'Welcome back',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontSize: 26,
+                          fontWeight: FontWeight.bold,
+                          color: AppTheme.textPrimary,
                         ),
                       ),
-                      validator: (value) => value != null && value.length >= 6
-                          ? null
-                          : 'Use at least 6 characters.',
-                    ),
-                    if (_isRegistering) ...[
-                      const SizedBox(height: 14),
+                      const SizedBox(height: 6),
+                      Text(
+                        _isRegistering
+                            ? 'Enter your email and choose a password to get started.'
+                            : 'Sign in to continue to Pulse Studio.',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: AppTheme.textSecondary),
+                      ),
+                      const SizedBox(height: 24),
+
                       TextFormField(
-                        controller: _confirmPasswordController,
-                        obscureText: _obscureConfirmPassword,
-                        autofillHints: const [AutofillHints.newPassword],
-                        enableSuggestions: false,
+                        controller: _emailController,
+                        keyboardType: TextInputType.emailAddress,
+                        textInputAction: TextInputAction.next,
+                        // Tells Chrome/Edge/Safari this is the username/email
+                        // of the credential. The browser saves + autofills
+                        // email AND password together.
+                        autofillHints: _isRegistering
+                            ? const [AutofillHints.email]
+                            : const [
+                                AutofillHints.username,
+                                AutofillHints.email,
+                              ],
+                        enableSuggestions: true,
                         autocorrect: false,
-                        textInputAction: TextInputAction.done,
-                        onFieldSubmitted: (_) => _submit(),
-                        decoration: InputDecoration(
-                          labelText: 'Confirm password',
-                          prefixIcon: const Icon(Icons.lock_reset_outlined, size: 20),
-                          suffixIcon: IconButton(
-                            icon: Icon(
-                              _obscureConfirmPassword ? Icons.visibility_off_outlined : Icons.visibility_outlined,
-                              size: 20,
-                              color: AppTheme.textSecondary,
-                            ),
-                            onPressed: () => setState(() => _obscureConfirmPassword = !_obscureConfirmPassword),
-                          ),
+                        decoration: const InputDecoration(
+                          labelText: 'Email address',
+                          hintText: 'name@example.com',
+                          prefixIcon: Icon(Icons.email_outlined, size: 20),
                         ),
                         validator: (value) {
-                          if (!_isRegistering) return null;
-                          if (value == null || value.isEmpty) {
-                            return 'Please confirm your password.';
-                          }
-                          if (value != _passwordController.text) {
-                            return 'Passwords do not match.';
+                          final v = value?.trim() ?? '';
+                          if (v.isEmpty) return 'Enter an email address.';
+                          if (!v.contains('@') || !v.contains('.')) {
+                            return 'Enter a valid email address.';
                           }
                           return null;
                         },
                       ),
-                    ],
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        SizedBox(
-                          height: 24,
-                          width: 24,
-                          child: Checkbox(
-                            value: _rememberMe,
-                            activeColor: AppTheme.primary,
-                            onChanged: _isBusy
-                                ? null
-                                : (v) => setState(
-                                      () => _rememberMe = v ?? true,
-                                    ),
+                      const SizedBox(height: 14),
+                      TextFormField(
+                        controller: _passwordController,
+                        obscureText: _obscurePassword,
+                        // password = existing credential (browser autofills the
+                        // saved password automatically, just like the email);
+                        // newPassword = new credential (browser offers to save).
+                        autofillHints: _isRegistering
+                            ? const [AutofillHints.newPassword]
+                            : const [AutofillHints.password],
+                        enableSuggestions: !_isRegistering,
+                        autocorrect: false,
+                        textInputAction: _isRegistering
+                            ? TextInputAction.next
+                            : TextInputAction.done,
+                        onFieldSubmitted: _isRegistering
+                            ? null
+                            : (_) => _submit(),
+                        decoration: InputDecoration(
+                          labelText: 'Password',
+                          prefixIcon: const Icon(Icons.lock_outline, size: 20),
+                          suffixIcon: IconButton(
+                            icon: Icon(
+                              _obscurePassword
+                                  ? Icons.visibility_off_outlined
+                                  : Icons.visibility_outlined,
+                              size: 20,
+                              color: AppTheme.textSecondary,
+                            ),
+                            onPressed: () => setState(
+                              () => _obscurePassword = !_obscurePassword,
+                            ),
                           ),
                         ),
-                        const SizedBox(width: 8),
-                        GestureDetector(
-                          onTap: _isBusy
-                              ? null
-                              : () => setState(
+                        validator: (value) => value != null && value.length >= 6
+                            ? null
+                            : 'Use at least 6 characters.',
+                      ),
+                      if (_isRegistering) ...[
+                        const SizedBox(height: 14),
+                        TextFormField(
+                          controller: _confirmPasswordController,
+                          obscureText: _obscureConfirmPassword,
+                          autofillHints: const [AutofillHints.newPassword],
+                          enableSuggestions: false,
+                          autocorrect: false,
+                          textInputAction: TextInputAction.done,
+                          onFieldSubmitted: (_) => _submit(),
+                          decoration: InputDecoration(
+                            labelText: 'Confirm password',
+                            prefixIcon: const Icon(
+                              Icons.lock_reset_outlined,
+                              size: 20,
+                            ),
+                            suffixIcon: IconButton(
+                              icon: Icon(
+                                _obscureConfirmPassword
+                                    ? Icons.visibility_off_outlined
+                                    : Icons.visibility_outlined,
+                                size: 20,
+                                color: AppTheme.textSecondary,
+                              ),
+                              onPressed: () => setState(
+                                () => _obscureConfirmPassword =
+                                    !_obscureConfirmPassword,
+                              ),
+                            ),
+                          ),
+                          validator: (value) {
+                            if (!_isRegistering) return null;
+                            if (value == null || value.isEmpty) {
+                              return 'Please confirm your password.';
+                            }
+                            if (value != _passwordController.text) {
+                              return 'Passwords do not match.';
+                            }
+                            return null;
+                          },
+                        ),
+                      ],
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          SizedBox(
+                            height: 24,
+                            width: 24,
+                            child: Checkbox(
+                              value: _rememberMe,
+                              activeColor: AppTheme.primary,
+                              onChanged: _isBusy
+                                  ? null
+                                  : (v) =>
+                                        setState(() => _rememberMe = v ?? true),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          GestureDetector(
+                            onTap: _isBusy
+                                ? null
+                                : () => setState(
                                     () => _rememberMe = !_rememberMe,
                                   ),
-                          child: const Text(
-                            'Remember me',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: AppTheme.textPrimary,
-                              fontWeight: FontWeight.w500,
+                            child: const Text(
+                              'Remember me',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: AppTheme.textPrimary,
+                                fontWeight: FontWeight.w500,
+                              ),
                             ),
                           ),
-                        ),
-                        const Spacer(),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    ElevatedButton(
-                      onPressed: _isBusy ? null : _submit,
-                      child: Text(_isRegistering ? 'Create account' : 'Sign in'),
-                    ),
-                    const SizedBox(height: 6),
-                    const Text(
-                      'Works offline — no Wi-Fi or data needed.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: AppTheme.textSecondary,
-                      ),
-                    ),
-                    if (_isBusy)
-                      const Padding(
-                        padding: EdgeInsets.only(top: 8),
-                        child: Center(child: CircularProgressIndicator()),
-                      ),
-                    const SizedBox(height: 16),
-                    Wrap(
-                      alignment: WrapAlignment.center,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      children: [
-                        Text(
-                          _isRegistering ? 'Already have an account? ' : "Don't have an account? ",
-                          style: const TextStyle(
-                            fontSize: 13,
-                            color: AppTheme.textSecondary,
-                          ),
-                        ),
-                        TextButton(
-                          onPressed: _isBusy ? null : () => _toggleMode(!_isRegistering),
-                          style: TextButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(horizontal: 4),
-                            minimumSize: Size.zero,
-                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                          ),
-                          child: Text(
-                            _isRegistering ? 'Sign in' : 'Create account',
-                            style: const TextStyle(
-                              color: AppTheme.primary,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 13,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 24),
-                    Text.rich(
-                      TextSpan(
-                        text: 'By continuing, you agree to Pulse Studio\'s ',
-                        children: [
-                          TextSpan(
-                            text: 'Terms of Service',
-                            style: const TextStyle(
-                              color: AppTheme.primary,
-                              decoration: TextDecoration.underline,
-                            ),
-                          ),
-                          const TextSpan(text: ' and '),
-                          TextSpan(
-                            text: 'Privacy Policy',
-                            style: const TextStyle(
-                              color: AppTheme.primary,
-                              decoration: TextDecoration.underline,
-                            ),
-                          ),
-                          const TextSpan(text: '.'),
+                          const Spacer(),
                         ],
                       ),
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: AppTheme.textSecondary,
-                        height: 1.5,
+                      const SizedBox(height: 8),
+                      ElevatedButton(
+                        onPressed: _isBusy ? null : _submit,
+                        child: Text(
+                          _isRegistering ? 'Create account' : 'Sign in',
+                        ),
                       ),
-                    ),
-                  ],
-                ),
+                      const SizedBox(height: 6),
+                      const Text(
+                        'Works offline — no Wi-Fi or data needed.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: AppTheme.textSecondary,
+                        ),
+                      ),
+                      if (_isBusy)
+                        const Padding(
+                          padding: EdgeInsets.only(top: 8),
+                          child: Center(child: CircularProgressIndicator()),
+                        ),
+                      const SizedBox(height: 16),
+                      Wrap(
+                        alignment: WrapAlignment.center,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          Text(
+                            _isRegistering
+                                ? 'Already have an account? '
+                                : "Don't have an account? ",
+                            style: const TextStyle(
+                              fontSize: 13,
+                              color: AppTheme.textSecondary,
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: _isBusy
+                                ? null
+                                : () => _toggleMode(!_isRegistering),
+                            style: TextButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 4,
+                              ),
+                              minimumSize: Size.zero,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                            child: Text(
+                              _isRegistering ? 'Sign in' : 'Create account',
+                              style: const TextStyle(
+                                color: AppTheme.primary,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 24),
+                      Text.rich(
+                        TextSpan(
+                          text: 'By continuing, you agree to Pulse Studio\'s ',
+                          children: [
+                            TextSpan(
+                              text: 'Terms of Service',
+                              style: const TextStyle(
+                                color: AppTheme.primary,
+                                decoration: TextDecoration.underline,
+                              ),
+                            ),
+                            const TextSpan(text: ' and '),
+                            TextSpan(
+                              text: 'Privacy Policy',
+                              style: const TextStyle(
+                                color: AppTheme.primary,
+                                decoration: TextDecoration.underline,
+                              ),
+                            ),
+                            const TextSpan(text: '.'),
+                          ],
+                        ),
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: AppTheme.textSecondary,
+                          height: 1.5,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),

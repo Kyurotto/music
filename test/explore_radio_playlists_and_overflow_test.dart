@@ -5,6 +5,7 @@ import 'package:music/models/song_model.dart';
 import 'package:music/services/radio_discovery_service.dart';
 import 'package:music/views/music_dashboard_view.dart';
 import 'package:music/views/playlist_screen.dart';
+import 'package:music/widgets/sidebar_nav.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -29,10 +30,22 @@ void main() {
       await tester.tap(exploreNav.first);
       await tester.pump(const Duration(milliseconds: 300));
 
-      // Verify "Made For You" and "Recents" are completely removed
+      // Verify "Made For You" is completely removed. "Recents" now exists
+      // only as the left sidebar/drawer account shortcut, never in Explore.
       expect(find.text('Made For You'), findsNothing);
       expect(find.text('Daily Mix 01'), findsNothing);
-      expect(find.text('Recents'), findsNothing);
+      expect(
+        find.descendant(
+          of: find.byType(SidebarNav),
+          matching: find.text('Recents'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.text('Recents'),
+        findsOneWidget,
+        reason: 'Explore content must not add its own Recents section',
+      );
 
       // Verify Spotify radio sections exist
       expect(find.text('Popular radio'), findsOneWidget);

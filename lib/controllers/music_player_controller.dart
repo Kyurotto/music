@@ -428,6 +428,10 @@ class MusicPlayerController extends ChangeNotifier {
   static const String monoAudioSettingKey = 'mono_audio';
   static const String autoplaySettingKey = 'autoplay';
   static const String crossfadeSettingKey = 'crossfade';
+  static const String dataSaverModeSettingKey = 'data_saver_mode';
+
+  /// Data Saver caps every freshly resolved stream at 96 kbps.
+  static const int dataSaverBitrateKbps = 96;
 
   bool _autoLyrics = false;
   bool _gaplessPlayback = true;
@@ -435,6 +439,7 @@ class MusicPlayerController extends ChangeNotifier {
   bool _normalizeVolume = true;
   bool _monoAudio = false;
   bool _autoplay = true;
+  bool _dataSaverMode = false;
   String _streamingQuality = 'Very High (320 kbps)';
   String _downloadQuality = 'High (160 kbps)';
   double _crossfadeSeconds = 4.0;
@@ -459,6 +464,10 @@ class MusicPlayerController extends ChangeNotifier {
   /// user's own queue runs out.
   bool get autoplay => _autoplay;
 
+  /// Reduces mobile data use by capping fresh streams and pausing automatic
+  /// offline caching while enabled.
+  bool get dataSaverMode => _dataSaverMode;
+
   String get streamingQuality => _streamingQuality;
 
   String get downloadQuality => _downloadQuality;
@@ -476,6 +485,14 @@ class MusicPlayerController extends ChangeNotifier {
   int? get streamingQualityKbps => qualityBitrateKbps(_streamingQuality);
 
   int? get downloadQualityKbps => qualityBitrateKbps(_downloadQuality);
+
+  /// Bitrate actually used for newly resolved playback streams.
+  int? get effectiveStreamingQualityKbps =>
+      _dataSaverMode ? dataSaverBitrateKbps : streamingQualityKbps;
+
+  /// Bitrate actually used for newly resolved downloads.
+  int? get effectiveDownloadQualityKbps =>
+      _dataSaverMode ? dataSaverBitrateKbps : downloadQualityKbps;
 
   void setAutoLyrics(bool enabled, {bool save = true}) {
     if (_autoLyrics != enabled) {
@@ -572,6 +589,21 @@ class MusicPlayerController extends ChangeNotifier {
     }
   }
 
+  void setDataSaverMode(bool enabled, {bool save = true}) {
+    if (_dataSaverMode != enabled) {
+      _dataSaverMode = enabled;
+      notifyListeners();
+    }
+    if (save) {
+      unawaited(
+        LocalDatabase.instance.saveSetting(
+          dataSaverModeSettingKey,
+          enabled.toString(),
+        ),
+      );
+    }
+  }
+
   void setStreamingQuality(String quality, {bool save = true}) {
     if (_streamingQuality != quality) {
       _streamingQuality = quality;
@@ -621,6 +653,7 @@ class MusicPlayerController extends ChangeNotifier {
     _monoAudio = settings[monoAudioSettingKey] == 'true';
     _autoplay = settings[autoplaySettingKey] != 'false';
     _autoLyrics = settings[autoLyricsSettingKey] == 'true';
+    _dataSaverMode = settings[dataSaverModeSettingKey] == 'true';
 
     final streaming = settings[streamingQualitySettingKey];
     if (streaming != null && streaming.trim().isNotEmpty) {
@@ -3074,9 +3107,11 @@ class MusicPlayerController extends ChangeNotifier {
   }
 
   /// Offline-cache downloads are skipped on mobile data unless the user
-  /// turned "Download on mobile data" on. Streaming for playback is unaffected.
+  /// turned "Download on mobile data" on. Data Saver always blocks them on
+  /// metered connections, regardless of that switch.
   Future<bool> _mayDownloadNow() async {
     if (!await _isOnMeteredConnection()) return true;
+    if (_dataSaverMode) return false;
     try {
       final v = await LocalDatabase.instance.getSetting(_downloadOnMobileKey);
       return v == 'true';
@@ -3529,7 +3564,7 @@ class MusicPlayerController extends ChangeNotifier {
       try {
         final ytStream = await _enrichment.fetchYouTubeStreamById(
           song.youtubeVideoId,
-          preferredBitrateKbps: streamingQualityKbps,
+          preferredBitrateKbps: effectiveStreamingQualityKbps,
         );
         if (ytStream.hasAudio && ytStream.previewUrl != failedUrl) {
           _applyEnrichment(song, ytStream);
@@ -3565,7 +3600,7 @@ class MusicPlayerController extends ChangeNotifier {
   }) async {
     // Playback resolution honours the Streaming Quality setting; downloads pass
     // Download Quality explicitly when they need to resolve a fresh stream.
-    final qualityKbps = preferredBitrateKbps ?? streamingQualityKbps;
+    final qualityKbps = preferredBitrateKbps ?? effectiveStreamingQualityKbps;
     if (!previewFallbackOnly) {
       final isStuck =
           !song.hasAudio ||
@@ -4611,6 +4646,9 @@ class MusicPlayerController extends ChangeNotifier {
     // Automatic caching is playback-only. Imports and background enrichment
     // never write audio unless the user explicitly downloads it.
     if (!_autoCachePlayedSongs) return;
+    // Data Saver pauses automatic caching so playback does not quietly pull
+    // full tracks over a metered connection.
+    if (_dataSaverMode) return;
     if (song.isPreview) return;
 
     // 1. Check if a valid local offline file already exists
@@ -4662,7 +4700,7 @@ class MusicPlayerController extends ChangeNotifier {
             allowPreviewFallback: false,
             prioritizeYouTube: true,
             youtubeOnly: _isYouTubeCatalogSong(song),
-            preferredBitrateKbps: downloadQualityKbps,
+            preferredBitrateKbps: effectiveDownloadQualityKbps,
           );
           if (enrichment.hasAudio &&
               enrichment.previewUrl != null &&
@@ -4942,7 +4980,7 @@ class MusicPlayerController extends ChangeNotifier {
           await _ensureEnrichment(
             song,
             fastImport: true,
-            preferredBitrateKbps: downloadQualityKbps,
+            preferredBitrateKbps: effectiveDownloadQualityKbps,
           ).timeout(const Duration(seconds: 45));
         } catch (_) {}
         urlToDownload = song.audioUrl;
@@ -4962,7 +5000,7 @@ class MusicPlayerController extends ChangeNotifier {
             allowPreviewFallback: true,
             prioritizeYouTube: true,
             youtubeOnly: _isYouTubeCatalogSong(song),
-            preferredBitrateKbps: downloadQualityKbps,
+            preferredBitrateKbps: effectiveDownloadQualityKbps,
           );
           if (enrichment.hasAudio &&
               enrichment.previewUrl != null &&
@@ -5661,7 +5699,7 @@ class MusicPlayerController extends ChangeNotifier {
         allowPreviewFallback: true,
         prioritizeYouTube: false,
         youtubeOnly: _isYouTubeCatalogSong(song),
-        preferredBitrateKbps: streamingQualityKbps,
+        preferredBitrateKbps: effectiveStreamingQualityKbps,
       );
       if (enrichment.hasAudio || enrichment.hasLyrics) {
         _enrichedIds.add(song.id);
@@ -6027,6 +6065,7 @@ class MusicPlayerController extends ChangeNotifier {
           // ignore: discarded_futures
           _audioPlayer.play().catchError((_) {});
           _maybeStartAutomixFadeIn();
+          _startListeningHistory(currentSong!);
           _scheduleVolumeReasserts();
         } catch (_) {}
       } else {
@@ -6039,6 +6078,7 @@ class MusicPlayerController extends ChangeNotifier {
           _audioPlayer.pause().catchError((_) {});
         } catch (_) {}
       }
+      _finishListeningHistory();
       _playbackTimer?.cancel();
       _cancelStallWatchdog();
       _cancelAutomixFade();
@@ -6066,6 +6106,7 @@ class MusicPlayerController extends ChangeNotifier {
           // ignore: discarded_futures
           _audioPlayer.play().catchError((_) {});
           _maybeStartAutomixFadeIn();
+          _startListeningHistory(currentSong!);
           _scheduleVolumeReasserts();
         } catch (_) {}
       } else {
@@ -6084,6 +6125,7 @@ class MusicPlayerController extends ChangeNotifier {
           _audioPlayer.pause().catchError((_) {});
         } catch (_) {}
       }
+      _finishListeningHistory();
       _playbackTimer?.cancel();
       _cancelStallWatchdog();
       _cancelAutomixFade();
@@ -6275,6 +6317,7 @@ class MusicPlayerController extends ChangeNotifier {
       // guard armed so a duplicate completion signal cannot skip twice.
       _completionHandled = false;
     }
+    _finishListeningHistory();
 
     for (final s in _queue) {
       if (s.audioUrl.isEmpty ||
@@ -6405,6 +6448,7 @@ class MusicPlayerController extends ChangeNotifier {
   void previous() {
     if (_queue.isEmpty) return;
     _completionHandled = false;
+    _finishListeningHistory();
 
     if (_currentPosition.inSeconds > 3 && !_isExplicitBlocked(currentSong)) {
       _currentPosition = Duration.zero;
@@ -6796,6 +6840,92 @@ class MusicPlayerController extends ChangeNotifier {
     throw StateError('No audio source available for ${song.title}');
   }
 
+  // ---------------------------------------------------------------------
+  // Listening history (Recents + Listening Stats)
+  // ---------------------------------------------------------------------
+
+  int? _activeHistoryEntryId;
+  String? _activeHistorySongId;
+  int _activeHistoryStartSeconds = 0;
+  int _activeHistorySongDurationSeconds = 0;
+  int _historyToken = 0;
+  bool _historyStartPending = false;
+
+  /// Writes a history row when audio actually starts for [song]. Repeated
+  /// calls for the same active song (resume, retry, hot-swap) are ignored.
+  void _startListeningHistory(Song song) {
+    if (_activeHistorySongId == song.id &&
+        (_activeHistoryEntryId != null || _historyStartPending)) {
+      return;
+    }
+    _finishListeningHistory();
+    _activeHistorySongId = song.id;
+    _activeHistoryStartSeconds = _currentPosition.inSeconds;
+    _activeHistorySongDurationSeconds = song.duration.inSeconds;
+    _activeHistoryEntryId = null;
+    final userId = AuthService.instance.currentUserId;
+    if (userId.isEmpty) return;
+    _historyStartPending = true;
+    final token = ++_historyToken;
+    final songId = song.id;
+    unawaited(() async {
+      try {
+        final id = await LocalDatabase.instance.recordListeningStart(
+          userId: userId,
+          songId: songId,
+          title: song.title,
+          artist: song.artist,
+          album: song.album,
+          imageUrl: song.imageUrl,
+        );
+        if (token == _historyToken && _activeHistorySongId == songId) {
+          _activeHistoryEntryId = id;
+        } else {
+          // The session ended before the insert returned: keep the play in
+          // Recents/Stats but with no measured listening time.
+          await LocalDatabase.instance.finishListeningEntry(
+            id: id,
+            listenedSeconds: 0,
+            completed: false,
+          );
+        }
+      } catch (_) {
+      } finally {
+        if (token == _historyToken) _historyStartPending = false;
+      }
+    }());
+  }
+
+  /// Finalises the active history row using the playback position delta.
+  void _finishListeningHistory({bool completed = false}) {
+    final id = _activeHistoryEntryId;
+    final startSeconds = _activeHistoryStartSeconds;
+    final durationSeconds = _activeHistorySongDurationSeconds;
+    _activeHistoryEntryId = null;
+    _activeHistorySongId = null;
+    _activeHistoryStartSeconds = 0;
+    _activeHistorySongDurationSeconds = 0;
+    _historyStartPending = false;
+    _historyToken++;
+    if (id == null) return;
+    var listened = _currentPosition.inSeconds - startSeconds;
+    if (listened < 0) listened = 0;
+    if (completed && listened < 1) listened = durationSeconds;
+    if (durationSeconds > 0 && listened > durationSeconds) {
+      listened = durationSeconds;
+    }
+    if (listened > 24 * 60 * 60) listened = 24 * 60 * 60;
+    unawaited(
+      LocalDatabase.instance
+          .finishListeningEntry(
+            id: id,
+            listenedSeconds: listened,
+            completed: completed,
+          )
+          .catchError((_) {}),
+    );
+  }
+
   /// Load and play the current song's audio URL or asset.
   ///
   /// Multi-tier resilience ensures imported Spotify playlists across all accounts
@@ -7095,6 +7225,7 @@ class MusicPlayerController extends ChangeNotifier {
               }),
             );
             _maybeStartAutomixFadeIn();
+            _startListeningHistory(song);
             if (sessionId == _playSessionId) {
               try {
                 await _audioPlayer.setVolume(_outputVolume);
@@ -7258,6 +7389,7 @@ class MusicPlayerController extends ChangeNotifier {
           }
           unawaited(_audioPlayer.play().catchError((_) {}));
           _maybeStartAutomixFadeIn();
+          _startListeningHistory(song);
           _scheduleVolumeReasserts();
         }
         _startTimer();
@@ -7309,6 +7441,7 @@ class MusicPlayerController extends ChangeNotifier {
     }
     _completionHandled = true;
     if (_repeatMode == PlaybackRepeatMode.one) {
+      _finishListeningHistory(completed: true);
       _currentPosition = Duration.zero;
       _playCurrentSongAudio();
       _startTimer();
@@ -7319,10 +7452,12 @@ class MusicPlayerController extends ChangeNotifier {
     // A 30s preview just ended: go to this song's full track audio first
     // instead of skipping to the next song.
     if (song != null && (song.isPreview || needsFullTrack(song))) {
+      _finishListeningHistory();
       // ignore: discarded_futures
       _proceedToFullTrack(song);
       return;
     }
+    _finishListeningHistory(completed: true);
 
     // A crossfade may still be in flight when the completion signal lands.
     // Remember it so the next track ramps in instead of starting at full blast.
@@ -7647,6 +7782,7 @@ class MusicPlayerController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _finishListeningHistory();
     for (final task in _downloadQueue) {
       for (final c in task.completers) {
         if (!c.isCompleted) c.complete(false);

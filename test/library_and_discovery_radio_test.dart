@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:music/views/music_dashboard_view.dart';
 import 'package:music/views/playlist_screen.dart';
+import 'package:music/widgets/sidebar_nav.dart';
 
 Future<void> pumpDashboard(
   WidgetTester tester,
@@ -85,10 +86,22 @@ void main() {
     expect(find.text('Podcasts'), findsOneWidget);
     expect(find.text('Audiobooks'), findsOneWidget);
 
-    // Verify Made For You & Recents were removed per user requirement
+    // Made For You stays removed. "Recents" only exists as the left
+    // sidebar/drawer account shortcut, not as an Explore section.
     expect(find.text('Made For You'), findsNothing);
     expect(find.text('Daily Mix 01'), findsNothing);
-    expect(find.text('Recents'), findsNothing);
+    expect(
+      find.descendant(
+        of: find.byType(SidebarNav),
+        matching: find.text('Recents'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.text('Recents'),
+      findsOneWidget,
+      reason: 'Explore content must not add its own Recents section',
+    );
 
     // Check Popular Radio and artist radio sections
     expect(find.text('Popular radio'), findsOneWidget);

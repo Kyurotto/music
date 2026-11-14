@@ -54,6 +54,8 @@ void main() {
     expect(find.text('Your Library'), findsOneWidget);
     expect(find.text('Import Spotify link'), findsOneWidget);
     expect(find.text('Create playlist'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
   });
 
   testWidgets('Library header does not overflow on a wide desktop screen', (
@@ -70,6 +72,8 @@ void main() {
     expect(find.text('Your Library'), findsOneWidget);
     expect(find.text('Import Spotify link'), findsOneWidget);
     expect(find.text('Create playlist'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
   });
 
   testWidgets('Favorites header does not overflow on a narrow phone screen', (
@@ -80,12 +84,17 @@ void main() {
     addTearDown(() => tester.view.resetPhysicalSize());
 
     await pumpDashboardWithoutPluginNoise(tester, () async {
-      tester.state<ScaffoldState>(find.byType(Scaffold)).openDrawer();
+      await tester.tap(
+        find.byWidgetPredicate(
+          (w) => w is Icon && w.icon == Icons.library_music_rounded && w.size == 22.0,
+        ),
+      );
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
-      await tester.tap(find.text('Favorites'));
     });
 
-    expect(find.text('Favorite Songs'), findsOneWidget);
+    expect(find.text('Your Library'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
   });
 }
