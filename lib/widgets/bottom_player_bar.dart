@@ -157,6 +157,7 @@ class BottomPlayerBar extends StatelessWidget {
                     barCount: 5,
                     maxHeight: 16,
                     barWidth: 2.2,
+                    reduceAnimations: controller.reduceAnimations,
                   ),
                 ),
               IconButton(
@@ -568,6 +569,7 @@ class BottomPlayerBar extends StatelessWidget {
                       barCount: 5,
                       maxHeight: 18,
                       barWidth: 2.5,
+                      reduceAnimations: controller.reduceAnimations,
                     ),
                   ),
                   const SizedBox(width: 8),

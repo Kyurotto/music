@@ -32,25 +32,38 @@ class _RightActivityPanelState extends State<RightActivityPanel>
       vsync: this,
       duration: const Duration(seconds: 18),
     );
-    if (widget.controller.isPlaying) {
-      _rotationController.repeat();
-    }
+    widget.controller.addListener(_syncRotation);
+    _syncRotation();
   }
 
-  @override
-  void didUpdateWidget(RightActivityPanel oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.controller.isPlaying != oldWidget.controller.isPlaying) {
-      if (widget.controller.isPlaying) {
+  void _syncRotation() {
+    if (!mounted) return;
+    final shouldRotate =
+        widget.controller.isPlaying && !widget.controller.reduceAnimations;
+    if (shouldRotate) {
+      if (!_rotationController.isAnimating) {
         _rotationController.repeat();
-      } else {
+      }
+    } else {
+      if (_rotationController.isAnimating) {
         _rotationController.stop();
       }
     }
   }
 
   @override
+  void didUpdateWidget(RightActivityPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.removeListener(_syncRotation);
+      widget.controller.addListener(_syncRotation);
+    }
+    _syncRotation();
+  }
+
+  @override
   void dispose() {
+    widget.controller.removeListener(_syncRotation);
     _rotationController.dispose();
     super.dispose();
   }

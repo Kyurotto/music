@@ -56,6 +56,9 @@ class _SettingsViewState extends State<SettingsView> {
   bool _downloadOnMobile = false;
   bool _autoCachePlayedSongs = true;
   bool _dataSaverMode = false;
+  bool _reduceAnimations = false;
+  bool _isSearching = false;
+  final TextEditingController _searchController = TextEditingController();
 
   int _cacheSizeBytes = -1;
   bool _clearingCache = false;
@@ -76,6 +79,7 @@ class _SettingsViewState extends State<SettingsView> {
     super.initState();
     if (widget.controller != null) {
       _equalizerPreset = widget.controller!.equalizerPreset;
+      _reduceAnimations = widget.controller!.reduceAnimations;
     }
     _loadSettings();
     _refreshCacheSize();
@@ -137,6 +141,9 @@ class _SettingsViewState extends State<SettingsView> {
         }
         if (settings.containsKey('data_saver_mode')) {
           _dataSaverMode = settings['data_saver_mode'] == 'true';
+        }
+        if (settings.containsKey('reduce_animations')) {
+          _reduceAnimations = settings['reduce_animations'] == 'true';
         }
       });
     } catch (e) {
@@ -838,6 +845,7 @@ class _SettingsViewState extends State<SettingsView> {
 
   @override
   void dispose() {
+    _searchController.dispose();
     LocalDatabase.audioCacheRevision.removeListener(_onAudioCacheChanged);
     _cacheRefreshDebounce?.cancel();
     super.dispose();
@@ -848,518 +856,1084 @@ class _SettingsViewState extends State<SettingsView> {
     return Scaffold(
       backgroundColor: AppTheme.background,
       appBar: AppBar(
-        backgroundColor: AppTheme.surface,
+        backgroundColor: AppTheme.background,
         elevation: 0,
+        centerTitle: true,
         leading: IconButton(
           icon: const Icon(
             Icons.arrow_back_rounded,
-            color: AppTheme.textPrimary,
+            color: Colors.white,
           ),
-          onPressed: () => Navigator.of(context).pop(),
+          onPressed: () {
+            if (_isSearching) {
+              setState(() {
+                _isSearching = false;
+                _searchController.clear();
+              });
+            } else {
+              Navigator.of(context).pop();
+            }
+          },
         ),
-        title: const Text(
-          'Settings',
-          style: TextStyle(
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
-            color: AppTheme.textPrimary,
-          ),
-        ),
-        bottom: const PreferredSize(
-          preferredSize: Size.fromHeight(1),
-          child: Divider(height: 1, color: AppTheme.border),
+        title: _isSearching
+            ? TextField(
+                controller: _searchController,
+                autofocus: true,
+                style: const TextStyle(color: Colors.white, fontSize: 16),
+                decoration: const InputDecoration(
+                  hintText: 'Search settings...',
+                  hintStyle: TextStyle(color: Colors.white54, fontSize: 15),
+                  border: InputBorder.none,
+                ),
+                onChanged: (_) => setState(() {}),
+              )
+            : const Text(
+                'Settings',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
+              ),
+        actions: [
+          if (_isSearching)
+            IconButton(
+              icon: const Icon(Icons.close_rounded, color: Colors.white70),
+              onPressed: () {
+                if (_searchController.text.isNotEmpty) {
+                  _searchController.clear();
+                  setState(() {});
+                } else {
+                  setState(() => _isSearching = false);
+                }
+              },
+            )
+          else
+            IconButton(
+              icon: const Icon(Icons.search_rounded, color: Colors.white),
+              onPressed: () => setState(() => _isSearching = true),
+            ),
+        ],
+      ),
+      body: _isSearching ? _buildSearchResults() : _buildCategoryList(),
+    );
+  }
+
+  Widget _buildCategoryList() {
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 680),
+        child: ListView(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          children: [
+            // 1. Account
+            _buildCategoryRow(
+              icon: Icons.person_outline_rounded,
+              title: 'Account',
+              subtitle: 'Username • Close account',
+              onTap: () => _openCategory(
+                'Account',
+                (ctx, setSub) => _buildAccountCategory(setSub),
+              ),
+            ),
+
+            // 2. Content and display
+            _buildCategoryRow(
+              icon: Icons.music_note_outlined,
+              title: 'Content and display',
+              subtitle: 'Reduce animations • Canvas • Allow explicit content',
+              onTap: () => _openCategory(
+                'Content and display',
+                (ctx, setSub) => _buildContentAndDisplayCategory(setSub),
+              ),
+            ),
+
+            // 3. Playback
+            _buildCategoryRow(
+              icon: Icons.volume_up_outlined,
+              title: 'Playback',
+              subtitle: 'Gapless playback • Autoplay • Equalizer',
+              onTap: () => _openCategory(
+                'Playback',
+                (ctx, setSub) => _buildPlaybackCategory(setSub),
+              ),
+            ),
+
+            // 4. Data-saving and offline
+            _buildCategoryRow(
+              icon: Icons.arrow_circle_down_outlined,
+              title: 'Data-saving and offline',
+              subtitle: 'Data saver mode • Downloads over cellular',
+              onTap: () => _openCategory(
+                'Data-saving and offline',
+                (ctx, setSub) => _buildDataSavingCategory(setSub),
+              ),
+            ),
+
+            // 5. Media quality
+            _buildCategoryRow(
+              icon: Icons.bar_chart_rounded,
+              title: 'Media quality',
+              subtitle: 'Wi-Fi streaming quality • Audio download quality',
+              onTap: () => _openCategory(
+                'Media quality',
+                (ctx, setSub) => _buildMediaQualityCategory(setSub),
+              ),
+            ),
+          ],
         ),
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 680),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // 1. User Profile Header Card
-                _buildProfileCard(),
-                const SizedBox(height: 24),
+    );
+  }
 
-                // 2. Playback Settings Section
-                _buildSectionHeader(
-                  Icons.play_circle_outline_rounded,
-                  'Playback',
-                ),
-                _buildCard([
-                  // Crossfade Slider
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            const Text(
-                              'Crossfade',
-                              style: TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.w600,
-                                color: AppTheme.textPrimary,
-                              ),
-                            ),
-                            Text(
-                              _crossfadeSeconds == 0
-                                  ? 'Off'
-                                  : '${_crossfadeSeconds.toInt()}s',
-                              style: const TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.bold,
-                                color: AppTheme.primary,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 4),
-                        const Text(
-                          'Allows you to crossfade smoothly between songs',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: AppTheme.textMuted,
-                          ),
-                        ),
-                        SliderTheme(
-                          data: SliderTheme.of(context).copyWith(
-                            activeTrackColor: AppTheme.primary,
-                            inactiveTrackColor: AppTheme.border,
-                            thumbColor: AppTheme.primary,
-                            overlayColor: AppTheme.primary.withValues(
-                              alpha: 0.2,
-                            ),
-                          ),
-                          child: Slider(
-                            value: _crossfadeSeconds,
-                            min: 0,
-                            max: 12,
-                            divisions: 12,
-                            onChanged: (val) =>
-                                setState(() => _crossfadeSeconds = val),
-                            onChangeEnd: (val) {
-                              _saveSetting('crossfade', val.toString());
-                              widget.controller?.setCrossfadeSeconds(
-                                val,
-                                save: false,
-                              );
-                            },
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const Divider(height: 1, color: AppTheme.border),
-
-                  // Gapless Playback
-                  _buildSwitchTile(
-                    title: 'Gapless Playback',
-                    subtitle: 'Seamless playback of songs with no silent gaps',
-                    value: _gaplessPlayback,
-                    onChanged: (val) {
-                      setState(() => _gaplessPlayback = val);
-                      widget.controller?.setGaplessPlayback(val, save: false);
-                      _saveSetting('gapless_playback', val.toString());
-                    },
-                  ),
-                  const Divider(height: 1, color: AppTheme.border),
-
-                  // Automix
-                  _buildSwitchTile(
-                    title: 'Automix',
-                    subtitle:
-                        'Allow smooth AI-curated transitions between tracks',
-                    value: _automix,
-                    onChanged: (val) {
-                      setState(() => _automix = val);
-                      widget.controller?.setAutomix(val, save: false);
-                      _saveSetting('automix', val.toString());
-                    },
-                  ),
-                  const Divider(height: 1, color: AppTheme.border),
-
-                  // Normalize Volume
-                  _buildSwitchTile(
-                    title: 'Normalize Volume',
-                    subtitle: 'Set the same volume level for all audio tracks',
-                    value: _normalizeVolume,
-                    onChanged: (val) {
-                      setState(() => _normalizeVolume = val);
-                      widget.controller?.setNormalizeVolume(val, save: false);
-                      _saveSetting('normalize_volume', val.toString());
-                    },
-                  ),
-                  const Divider(height: 1, color: AppTheme.border),
-
-                  // Mono Audio
-                  _buildSwitchTile(
-                    title: 'Mono Audio',
-                    subtitle:
-                        'Makes the left and right speakers play the same audio',
-                    value: _monoAudio,
-                    onChanged: (val) {
-                      setState(() => _monoAudio = val);
-                      widget.controller?.setMonoAudio(val, save: false);
-                      _saveSetting('mono_audio', val.toString());
-                      if (val) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text(
-                              'Mono Audio is saved. Downmixing depends on '
-                              'the device audio engine.',
-                            ),
-                          ),
-                        );
-                      }
-                    },
-                  ),
-                  const Divider(height: 1, color: AppTheme.border),
-
-                  // Autoplay
-                  _buildSwitchTile(
-                    title: 'Autoplay',
-                    subtitle:
-                        'Keep listening to similar songs when your queue ends',
-                    value: _autoplay,
-                    onChanged: (val) {
-                      setState(() => _autoplay = val);
-                      widget.controller?.setAutoplay(val, save: false);
-                      _saveSetting('autoplay', val.toString());
-                    },
-                  ),
-                ]),
-                const SizedBox(height: 24),
-
-                // 3. Audio Quality Section
-                _buildSectionHeader(Icons.equalizer_rounded, 'Audio Quality'),
-                _buildCard([
-                  ListTile(
-                    title: const Text(
-                      'Streaming Quality',
-                      style: TextStyle(
-                        fontSize: 15,
-                        color: AppTheme.textPrimary,
-                      ),
-                    ),
-                    subtitle: Text(
-                      _dataSaverMode
-                          ? '$_streamingQuality · Data Saver caps at 96 kbps'
-                          : _streamingQuality,
+  Widget _buildCategoryRow({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        splashColor: Colors.white.withValues(alpha: 0.08),
+        highlightColor: Colors.white.withValues(alpha: 0.04),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Icon(icon, size: 26, color: Colors.white),
+              const SizedBox(width: 20),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      title,
                       style: const TextStyle(
-                        fontSize: 13,
-                        color: AppTheme.primary,
-                      ),
-                    ),
-                    trailing: const Icon(
-                      Icons.chevron_right_rounded,
-                      color: AppTheme.textSecondary,
-                    ),
-                    onTap: () => _showQualityPicker(isStreaming: true),
-                  ),
-                  const Divider(height: 1, color: AppTheme.border),
-                  ListTile(
-                    title: const Text(
-                      'Download Quality',
-                      style: TextStyle(
-                        fontSize: 15,
-                        color: AppTheme.textPrimary,
-                      ),
-                    ),
-                    subtitle: Text(
-                      _dataSaverMode
-                          ? '$_downloadQuality · Data Saver caps at 96 kbps'
-                          : _downloadQuality,
-                      style: const TextStyle(
-                        fontSize: 13,
-                        color: AppTheme.textSecondary,
-                      ),
-                    ),
-                    trailing: const Icon(
-                      Icons.chevron_right_rounded,
-                      color: AppTheme.textSecondary,
-                    ),
-                    onTap: () => _showQualityPicker(isStreaming: false),
-                  ),
-                  const Divider(height: 1, color: AppTheme.border),
-                  ListTile(
-                    title: const Text(
-                      'Equalizer',
-                      style: TextStyle(
-                        fontSize: 15,
-                        color: AppTheme.textPrimary,
-                      ),
-                    ),
-                    subtitle: Text(
-                      _equalizerPreset,
-                      style: const TextStyle(
-                        fontSize: 13,
-                        color: AppTheme.primary,
-                      ),
-                    ),
-                    trailing: const Icon(
-                      Icons.tune_rounded,
-                      color: AppTheme.primary,
-                    ),
-                    onTap: _showEqualizerPicker,
-                  ),
-                ]),
-                const SizedBox(height: 24),
-
-                // 4. Data Saver Section
-                _buildSectionHeader(Icons.data_saver_on_rounded, 'Data Saver'),
-                _buildCard([
-                  _buildSwitchTile(
-                    title: 'Data Saver Mode',
-                    subtitle:
-                        'Caps new streams and downloads at ~96 kbps, pauses '
-                        'automatic song caching, and blocks cache downloads on '
-                        'mobile data so your data lasts longer.',
-                    value: _dataSaverMode,
-                    onChanged: (val) {
-                      setState(() => _dataSaverMode = val);
-                      widget.controller?.setDataSaverMode(val, save: false);
-                      _saveSetting('data_saver_mode', val.toString());
-                    },
-                  ),
-                ]),
-                const SizedBox(height: 24),
-
-                // 5. Display & Visuals Section
-                _buildSectionHeader(Icons.palette_outlined, 'Display & Lyrics'),
-                _buildCard([
-                  _buildSwitchTile(
-                    title: 'Animated Audio Wave Visualizer',
-                    subtitle:
-                        'Show live frequency wave effect in the player bar',
-                    value: _canvasAnimation,
-                    onChanged: (val) {
-                      setState(() => _canvasAnimation = val);
-                      widget.controller?.setVisualizerEnabled(val, save: false);
-                      _saveSetting('canvas_animation', val.toString());
-                    },
-                  ),
-                  const Divider(height: 1, color: AppTheme.border),
-                  _buildSwitchTile(
-                    title: 'Show Lyrics Automatically',
-                    subtitle:
-                        'Pop up the Spotify-style lyrics sheet when starting a song',
-                    value: _autoLyrics,
-                    onChanged: (val) {
-                      setState(() => _autoLyrics = val);
-                      widget.controller?.setAutoLyrics(val, save: false);
-                      _saveSetting('auto_lyrics', val.toString());
-                    },
-                  ),
-                  const Divider(height: 1, color: AppTheme.border),
-                  _buildSwitchTile(
-                    title: 'Explicit Content Filter',
-                    subtitle: 'Block playback of explicit-rated tracks',
-                    value: !_allowExplicit,
-                    onChanged: (val) {
-                      final allow = !val;
-                      setState(() => _allowExplicit = allow);
-                      widget.controller?.setAllowExplicit(allow, save: false);
-                      _saveSetting('allow_explicit', allow.toString());
-                    },
-                  ),
-                ]),
-                const SizedBox(height: 24),
-
-                // 5. Storage & Cache Section
-                _buildSectionHeader(Icons.storage_rounded, 'Storage & Cache'),
-                _buildCard([
-                  Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            const Text(
-                              'Local Audio Cache',
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: AppTheme.textPrimary,
-                              ),
-                            ),
-                            Text(
-                              _formatCacheSize(_cacheSizeBytes),
-                              style: const TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.bold,
-                                color: AppTheme.textPrimary,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(4),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                flex: _cacheBarFlex,
-                                child: Container(
-                                  height: 8,
-                                  color: AppTheme.primary,
-                                ),
-                              ),
-                              Expanded(
-                                flex: 20,
-                                child: Container(
-                                  height: 8,
-                                  color: Colors.blueAccent,
-                                ),
-                              ),
-                              Expanded(
-                                flex: 65,
-                                child: Container(
-                                  height: 8,
-                                  color: AppTheme.border,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        const Row(
-                          children: [
-                            _StorageLegend(
-                              color: AppTheme.primary,
-                              label: 'Audio Cache',
-                            ),
-                            SizedBox(width: 16),
-                            _StorageLegend(
-                              color: Colors.blueAccent,
-                              label: 'Playlists & Tracks',
-                            ),
-                            SizedBox(width: 16),
-                            _StorageLegend(
-                              color: AppTheme.border,
-                              label: 'Free Space',
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 14),
-                        OutlinedButton.icon(
-                          onPressed: _cacheSizeBytes > 0 && !_clearingCache
-                              ? _clearCache
-                              : null,
-                          icon: _clearingCache
-                              ? const SizedBox(
-                                  width: 18,
-                                  height: 18,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: AppTheme.textMuted,
-                                  ),
-                                )
-                              : const Icon(
-                                  Icons.delete_sweep_outlined,
-                                  size: 18,
-                                ),
-                          label: Text(
-                            _clearingCache
-                                ? 'Clearing cache…'
-                                : _cacheSizeBytes < 0
-                                ? 'Calculating…'
-                                : _cacheSizeBytes > 0
-                                ? 'Clear Audio Cache'
-                                : 'Cache is Clean (0 MB)',
-                          ),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: _cacheSizeBytes > 0
-                                ? AppTheme.textPrimary
-                                : AppTheme.textMuted,
-                            side: BorderSide(
-                              color: _cacheSizeBytes > 0
-                                  ? AppTheme.border
-                                  : AppTheme.border.withValues(alpha: 0.3),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const Divider(height: 1, color: AppTheme.border),
-                  _buildSwitchTile(
-                    title: 'Cache played songs',
-                    subtitle:
-                        'Only save audio when you play it; imports no longer download automatically',
-                    value: _autoCachePlayedSongs,
-                    onChanged: (val) {
-                      setState(() => _autoCachePlayedSongs = val);
-                      if (widget.controller != null) {
-                        widget.controller!.setAutoCachePlayedSongs(val);
-                      } else {
-                        _saveSetting('auto_cache_played_songs', val.toString());
-                      }
-                    },
-                  ),
-                  const Divider(height: 1, color: AppTheme.border),
-                  _buildSwitchTile(
-                    title: 'Download on mobile data',
-                    subtitle:
-                        'Off: songs are saved for offline use only on Wi-Fi',
-                    value: _downloadOnMobile,
-                    onChanged: (val) {
-                      setState(() => _downloadOnMobile = val);
-                      _saveSetting('download_on_mobile_data', val.toString());
-                    },
-                  ),
-                ]),
-                const SizedBox(height: 32),
-
-                // 6. Log Out Button (Spotify Style)
-                Container(
-                  margin: const EdgeInsets.symmetric(horizontal: 16),
-                  child: OutlinedButton.icon(
-                    onPressed: _handleLogout,
-                    icon: const Icon(
-                      Icons.logout_rounded,
-                      color: Colors.redAccent,
-                      size: 20,
-                    ),
-                    label: const Text(
-                      'Log out',
-                      style: TextStyle(
                         fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.redAccent,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white,
+                        letterSpacing: 0.1,
                       ),
                     ),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      side: BorderSide(
-                        color: Colors.redAccent.withValues(alpha: 0.5),
-                        width: 1.5,
+                    const SizedBox(height: 3),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Colors.grey.shade400,
+                        letterSpacing: 0.1,
                       ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(30),
-                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                  ),
+                  ],
                 ),
-                const SizedBox(height: 16),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
-                // Footer branding
-                const Center(
-                  child: Text(
-                    'Pulse Studio • Crafted for audiophiles',
-                    style: TextStyle(fontSize: 11, color: AppTheme.textMuted),
+  void _openCategory(
+    String title,
+    Widget Function(BuildContext, StateSetter) contentBuilder,
+  ) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (subContext) => StatefulBuilder(
+          builder: (ctx, setSubState) {
+            return Scaffold(
+              backgroundColor: AppTheme.background,
+              appBar: AppBar(
+                backgroundColor: AppTheme.background,
+                elevation: 0,
+                leading: IconButton(
+                  icon: const Icon(
+                    Icons.arrow_back_rounded,
+                    color: Colors.white,
+                  ),
+                  onPressed: () => Navigator.of(subContext).pop(),
+                ),
+                centerTitle: true,
+                title: Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
                   ),
                 ),
-                const SizedBox(height: 40),
-              ],
+              ),
+              body: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 16,
+                ),
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 680),
+                    child: contentBuilder(ctx, setSubState),
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAccountCategory(StateSetter setSubState) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildProfileCard(),
+        const SizedBox(height: 24),
+        Container(
+          margin: const EdgeInsets.symmetric(horizontal: 4),
+          child: OutlinedButton.icon(
+            onPressed: _handleLogout,
+            icon: const Icon(
+              Icons.logout_rounded,
+              color: Colors.redAccent,
+              size: 20,
+            ),
+            label: const Text(
+              'Log out',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: Colors.redAccent,
+              ),
+            ),
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              side: BorderSide(
+                color: Colors.redAccent.withValues(alpha: 0.5),
+                width: 1.5,
+              ),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(30),
+              ),
             ),
           ),
         ),
-      ),
+        const SizedBox(height: 20),
+        const Center(
+          child: Text(
+            'Pulse Studio • Crafted for audiophiles',
+            style: TextStyle(fontSize: 11, color: AppTheme.textMuted),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildContentAndDisplayCategory(StateSetter setSubState) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildSectionHeader(Icons.palette_outlined, 'Display & Animations'),
+        _buildCard([
+          // Reduce animations (lag reduction)
+          _buildSwitchTile(
+            title: 'Reduce animations',
+            subtitle:
+                'Minimizes visual wave effects, disk rotations, and heavy animations to prevent app lag',
+            value: _reduceAnimations,
+            onChanged: (val) {
+              setState(() => _reduceAnimations = val);
+              setSubState(() {});
+              widget.controller?.setReduceAnimations(val, save: false);
+              _saveSetting('reduce_animations', val.toString());
+            },
+          ),
+          const Divider(height: 1, color: AppTheme.border),
+
+          // Canvas (Visualizer)
+          _buildSwitchTile(
+            title: 'Canvas',
+            subtitle: 'Display audio wave visualizer effect in the player bar',
+            value: _canvasAnimation,
+            onChanged: (val) {
+              setState(() => _canvasAnimation = val);
+              setSubState(() {});
+              widget.controller?.setVisualizerEnabled(val, save: false);
+              _saveSetting('canvas_animation', val.toString());
+            },
+          ),
+          const Divider(height: 1, color: AppTheme.border),
+
+          // Allow explicit content
+          _buildSwitchTile(
+            title: 'Allow explicit content',
+            subtitle: 'Turn on to play explicit-rated tracks',
+            value: _allowExplicit,
+            onChanged: (val) {
+              setState(() => _allowExplicit = val);
+              setSubState(() {});
+              widget.controller?.setAllowExplicit(val, save: false);
+              _saveSetting('allow_explicit', val.toString());
+            },
+          ),
+          const Divider(height: 1, color: AppTheme.border),
+
+          // Show Lyrics Automatically
+          _buildSwitchTile(
+            title: 'Show lyrics automatically',
+            subtitle: 'Pop up the lyrics sheet when starting a song',
+            value: _autoLyrics,
+            onChanged: (val) {
+              setState(() => _autoLyrics = val);
+              setSubState(() {});
+              widget.controller?.setAutoLyrics(val, save: false);
+              _saveSetting('auto_lyrics', val.toString());
+            },
+          ),
+        ]),
+      ],
+    );
+  }
+
+  Widget _buildPlaybackCategory(StateSetter setSubState) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildSectionHeader(
+          Icons.play_circle_outline_rounded,
+          'Playback Settings',
+        ),
+        _buildCard([
+          // Crossfade Slider
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Crossfade',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                    Text(
+                      _crossfadeSeconds == 0
+                          ? 'Off'
+                          : '${_crossfadeSeconds.toInt()}s',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                        color: AppTheme.primary,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'Allows you to crossfade smoothly between songs',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppTheme.textMuted,
+                  ),
+                ),
+                SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    activeTrackColor: AppTheme.primary,
+                    inactiveTrackColor: AppTheme.border,
+                    thumbColor: AppTheme.primary,
+                    overlayColor: AppTheme.primary.withValues(alpha: 0.2),
+                  ),
+                  child: Slider(
+                    value: _crossfadeSeconds,
+                    min: 0,
+                    max: 12,
+                    divisions: 12,
+                    onChanged: (val) {
+                      setState(() => _crossfadeSeconds = val);
+                      setSubState(() {});
+                    },
+                    onChangeEnd: (val) {
+                      _saveSetting('crossfade', val.toString());
+                      widget.controller?.setCrossfadeSeconds(
+                        val,
+                        save: false,
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1, color: AppTheme.border),
+
+          // Gapless Playback
+          _buildSwitchTile(
+            title: 'Gapless Playback',
+            subtitle: 'Seamless playback of songs with no silent gaps',
+            value: _gaplessPlayback,
+            onChanged: (val) {
+              setState(() => _gaplessPlayback = val);
+              setSubState(() {});
+              widget.controller?.setGaplessPlayback(val, save: false);
+              _saveSetting('gapless_playback', val.toString());
+            },
+          ),
+          const Divider(height: 1, color: AppTheme.border),
+
+          // Automix
+          _buildSwitchTile(
+            title: 'Automix',
+            subtitle: 'Allow smooth transitions between tracks',
+            value: _automix,
+            onChanged: (val) {
+              setState(() => _automix = val);
+              setSubState(() {});
+              widget.controller?.setAutomix(val, save: false);
+              _saveSetting('automix', val.toString());
+            },
+          ),
+          const Divider(height: 1, color: AppTheme.border),
+
+          // Normalize Volume
+          _buildSwitchTile(
+            title: 'Normalize Volume',
+            subtitle: 'Set the same volume level for all audio tracks',
+            value: _normalizeVolume,
+            onChanged: (val) {
+              setState(() => _normalizeVolume = val);
+              setSubState(() {});
+              widget.controller?.setNormalizeVolume(val, save: false);
+              _saveSetting('normalize_volume', val.toString());
+            },
+          ),
+          const Divider(height: 1, color: AppTheme.border),
+
+          // Mono Audio
+          _buildSwitchTile(
+            title: 'Mono Audio',
+            subtitle: 'Makes the left and right speakers play the same audio',
+            value: _monoAudio,
+            onChanged: (val) {
+              setState(() => _monoAudio = val);
+              setSubState(() {});
+              widget.controller?.setMonoAudio(val, save: false);
+              _saveSetting('mono_audio', val.toString());
+              if (val) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'Mono Audio is saved. Downmixing depends on the device audio engine.',
+                    ),
+                  ),
+                );
+              }
+            },
+          ),
+          const Divider(height: 1, color: AppTheme.border),
+
+          // Autoplay
+          _buildSwitchTile(
+            title: 'Autoplay',
+            subtitle: 'Keep listening to similar songs when your queue ends',
+            value: _autoplay,
+            onChanged: (val) {
+              setState(() => _autoplay = val);
+              setSubState(() {});
+              widget.controller?.setAutoplay(val, save: false);
+              _saveSetting('autoplay', val.toString());
+            },
+          ),
+          const Divider(height: 1, color: AppTheme.border),
+
+          // Equalizer Tile
+          ListTile(
+            title: const Text(
+              'Equalizer',
+              style: TextStyle(
+                fontSize: 15,
+                color: AppTheme.textPrimary,
+              ),
+            ),
+            subtitle: Text(
+              _equalizerPreset,
+              style: const TextStyle(
+                fontSize: 13,
+                color: AppTheme.primary,
+              ),
+            ),
+            trailing: const Icon(
+              Icons.tune_rounded,
+              color: AppTheme.primary,
+            ),
+            onTap: () async {
+              await _showEqualizerPicker();
+              if (mounted) {
+                setState(() {});
+                setSubState(() {});
+              }
+            },
+          ),
+        ]),
+      ],
+    );
+  }
+
+  Widget _buildDataSavingCategory(StateSetter setSubState) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildSectionHeader(Icons.data_saver_on_rounded, 'Data Saver'),
+        _buildCard([
+          _buildSwitchTile(
+            title: 'Data Saver Mode',
+            subtitle:
+                'Caps new streams and downloads at ~96 kbps, pauses automatic song caching, and blocks cache downloads on mobile data.',
+            value: _dataSaverMode,
+            onChanged: (val) {
+              setState(() => _dataSaverMode = val);
+              setSubState(() {});
+              widget.controller?.setDataSaverMode(val, save: false);
+              _saveSetting('data_saver_mode', val.toString());
+            },
+          ),
+          const Divider(height: 1, color: AppTheme.border),
+          _buildSwitchTile(
+            title: 'Downloads over cellular',
+            subtitle:
+                'Off: songs are saved for offline use only on Wi-Fi',
+            value: _downloadOnMobile,
+            onChanged: (val) {
+              setState(() => _downloadOnMobile = val);
+              setSubState(() {});
+              _saveSetting('download_on_mobile_data', val.toString());
+            },
+          ),
+          const Divider(height: 1, color: AppTheme.border),
+          _buildSwitchTile(
+            title: 'Cache played songs',
+            subtitle:
+                'Only save audio when you play it; imports no longer download automatically',
+            value: _autoCachePlayedSongs,
+            onChanged: (val) {
+              setState(() => _autoCachePlayedSongs = val);
+              setSubState(() {});
+              if (widget.controller != null) {
+                widget.controller!.setAutoCachePlayedSongs(val);
+              } else {
+                _saveSetting('auto_cache_played_songs', val.toString());
+              }
+            },
+          ),
+        ]),
+        const SizedBox(height: 24),
+        _buildSectionHeader(Icons.storage_rounded, 'Storage & Cache'),
+        _buildCard([
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Flexible(
+                      child: Text(
+                        'Local Audio Cache',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: AppTheme.textPrimary,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      _formatCacheSize(_cacheSizeBytes),
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        flex: _cacheBarFlex,
+                        child: Container(
+                          height: 8,
+                          color: AppTheme.primary,
+                        ),
+                      ),
+                      Expanded(
+                        flex: 20,
+                        child: Container(
+                          height: 8,
+                          color: Colors.blueAccent,
+                        ),
+                      ),
+                      Expanded(
+                        flex: 65,
+                        child: Container(
+                          height: 8,
+                          color: AppTheme.border,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Wrap(
+                  spacing: 12,
+                  runSpacing: 4,
+                  children: [
+                    _StorageLegend(
+                      color: AppTheme.primary,
+                      label: 'Audio Cache',
+                    ),
+                    _StorageLegend(
+                      color: Colors.blueAccent,
+                      label: 'Playlists & Tracks',
+                    ),
+                    _StorageLegend(
+                      color: AppTheme.border,
+                      label: 'Free Space',
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                OutlinedButton.icon(
+                  onPressed: _cacheSizeBytes > 0 && !_clearingCache
+                      ? () async {
+                          await _clearCache();
+                          if (mounted) {
+                            setState(() {});
+                            setSubState(() {});
+                          }
+                        }
+                      : null,
+                  icon: _clearingCache
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: AppTheme.textMuted,
+                          ),
+                        )
+                      : const Icon(
+                          Icons.delete_sweep_outlined,
+                          size: 18,
+                        ),
+                  label: Text(
+                    _clearingCache
+                        ? 'Clearing cache…'
+                        : _cacheSizeBytes < 0
+                        ? 'Calculating…'
+                        : _cacheSizeBytes > 0
+                        ? 'Clear Audio Cache'
+                        : 'Cache is Clean (0 MB)',
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: _cacheSizeBytes > 0
+                        ? AppTheme.textPrimary
+                        : AppTheme.textMuted,
+                    side: BorderSide(
+                      color: _cacheSizeBytes > 0
+                          ? AppTheme.border
+                          : AppTheme.border.withValues(alpha: 0.3),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ]),
+      ],
+    );
+  }
+
+  Widget _buildMediaQualityCategory(StateSetter setSubState) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildSectionHeader(Icons.equalizer_rounded, 'Media Quality'),
+        _buildCard([
+          ListTile(
+            title: const Text(
+              'Wi-Fi streaming quality',
+              style: TextStyle(
+                fontSize: 15,
+                color: AppTheme.textPrimary,
+              ),
+            ),
+            subtitle: Text(
+              _dataSaverMode
+                  ? '$_streamingQuality · Data Saver caps at 96 kbps'
+                  : _streamingQuality,
+              style: const TextStyle(
+                fontSize: 13,
+                color: AppTheme.primary,
+              ),
+            ),
+            trailing: const Icon(
+              Icons.chevron_right_rounded,
+              color: AppTheme.textSecondary,
+            ),
+            onTap: () async {
+              await _showQualityPicker(isStreaming: true);
+              if (mounted) {
+                setState(() {});
+                setSubState(() {});
+              }
+            },
+          ),
+          const Divider(height: 1, color: AppTheme.border),
+          ListTile(
+            title: const Text(
+              'Audio download quality',
+              style: TextStyle(
+                fontSize: 15,
+                color: AppTheme.textPrimary,
+              ),
+            ),
+            subtitle: Text(
+              _dataSaverMode
+                  ? '$_downloadQuality · Data Saver caps at 96 kbps'
+                  : _downloadQuality,
+              style: const TextStyle(
+                fontSize: 13,
+                color: AppTheme.textSecondary,
+              ),
+            ),
+            trailing: const Icon(
+              Icons.chevron_right_rounded,
+              color: AppTheme.textSecondary,
+            ),
+            onTap: () async {
+              await _showQualityPicker(isStreaming: false);
+              if (mounted) {
+                setState(() {});
+                setSubState(() {});
+              }
+            },
+          ),
+        ]),
+      ],
+    );
+  }
+
+  Widget _buildSearchResults() {
+    final query = _searchController.text.trim().toLowerCase();
+    if (query.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.search_rounded, size: 48, color: Colors.grey.shade600),
+              const SizedBox(height: 16),
+              Text(
+                'Type to search settings',
+                style: TextStyle(fontSize: 16, color: Colors.grey.shade400),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'e.g. reduce animations, playback, equalizer, cache, quality',
+                style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final List<Widget> results = [];
+
+    // Check Reduce Animations
+    if ('reduce animations lag performance'.contains(query)) {
+      results.add(
+        _buildSwitchTile(
+          title: 'Reduce animations',
+          subtitle: 'Minimizes visual effects and visualizers to prevent lag',
+          value: _reduceAnimations,
+          onChanged: (val) {
+            setState(() => _reduceAnimations = val);
+            widget.controller?.setReduceAnimations(val, save: false);
+            _saveSetting('reduce_animations', val.toString());
+          },
+        ),
+      );
+    }
+
+    // Check Canvas
+    if ('canvas visualizer wave'.contains(query)) {
+      if (results.isNotEmpty) {
+        results.add(const Divider(height: 1, color: AppTheme.border));
+      }
+      results.add(
+        _buildSwitchTile(
+          title: 'Canvas (Visualizer)',
+          subtitle: 'Show audio wave effect in the player bar',
+          value: _canvasAnimation,
+          onChanged: (val) {
+            setState(() => _canvasAnimation = val);
+            widget.controller?.setVisualizerEnabled(val, save: false);
+            _saveSetting('canvas_animation', val.toString());
+          },
+        ),
+      );
+    }
+
+    // Check Explicit
+    if ('explicit content rating filter'.contains(query)) {
+      if (results.isNotEmpty) {
+        results.add(const Divider(height: 1, color: AppTheme.border));
+      }
+      results.add(
+        _buildSwitchTile(
+          title: 'Allow explicit content',
+          subtitle: 'Turn on to play explicit-rated tracks',
+          value: _allowExplicit,
+          onChanged: (val) {
+            setState(() => _allowExplicit = val);
+            widget.controller?.setAllowExplicit(val, save: false);
+            _saveSetting('allow_explicit', val.toString());
+          },
+        ),
+      );
+    }
+
+    // Check Lyrics
+    if ('lyrics auto show'.contains(query)) {
+      if (results.isNotEmpty) {
+        results.add(const Divider(height: 1, color: AppTheme.border));
+      }
+      results.add(
+        _buildSwitchTile(
+          title: 'Show lyrics automatically',
+          subtitle: 'Pop up lyrics sheet when starting a song',
+          value: _autoLyrics,
+          onChanged: (val) {
+            setState(() => _autoLyrics = val);
+            widget.controller?.setAutoLyrics(val, save: false);
+            _saveSetting('auto_lyrics', val.toString());
+          },
+        ),
+      );
+    }
+
+    // Check Gapless & Playback
+    if ('gapless playback silence'.contains(query)) {
+      if (results.isNotEmpty) {
+        results.add(const Divider(height: 1, color: AppTheme.border));
+      }
+      results.add(
+        _buildSwitchTile(
+          title: 'Gapless Playback',
+          subtitle: 'Seamless playback with no silent gaps',
+          value: _gaplessPlayback,
+          onChanged: (val) {
+            setState(() => _gaplessPlayback = val);
+            widget.controller?.setGaplessPlayback(val, save: false);
+            _saveSetting('gapless_playback', val.toString());
+          },
+        ),
+      );
+    }
+
+    if ('crossfade fade'.contains(query)) {
+      if (results.isNotEmpty) {
+        results.add(const Divider(height: 1, color: AppTheme.border));
+      }
+      results.add(
+        ListTile(
+          title: const Text('Crossfade', style: TextStyle(color: Colors.white)),
+          subtitle: Text(
+            'Current: ${_crossfadeSeconds.toInt()}s',
+            style: const TextStyle(color: AppTheme.primary),
+          ),
+          onTap: () => _openCategory(
+            'Playback',
+            (ctx, setSub) => _buildPlaybackCategory(setSub),
+          ),
+        ),
+      );
+    }
+
+    if ('equalizer eq bass treble sound'.contains(query)) {
+      if (results.isNotEmpty) {
+        results.add(const Divider(height: 1, color: AppTheme.border));
+      }
+      results.add(
+        ListTile(
+          title: const Text('Equalizer', style: TextStyle(color: Colors.white)),
+          subtitle: Text(
+            _equalizerPreset,
+            style: const TextStyle(color: AppTheme.primary),
+          ),
+          trailing: const Icon(Icons.tune_rounded, color: AppTheme.primary),
+          onTap: _showEqualizerPicker,
+        ),
+      );
+    }
+
+    if ('quality streaming bitrate audio download'.contains(query)) {
+      if (results.isNotEmpty) {
+        results.add(const Divider(height: 1, color: AppTheme.border));
+      }
+      results.add(
+        ListTile(
+          title: const Text(
+            'Wi-Fi streaming quality',
+            style: TextStyle(color: Colors.white),
+          ),
+          subtitle: Text(
+            _streamingQuality,
+            style: const TextStyle(color: AppTheme.primary),
+          ),
+          trailing: const Icon(
+            Icons.chevron_right_rounded,
+            color: Colors.white54,
+          ),
+          onTap: () => _showQualityPicker(isStreaming: true),
+        ),
+      );
+      results.add(const Divider(height: 1, color: AppTheme.border));
+      results.add(
+        ListTile(
+          title: const Text(
+            'Audio download quality',
+            style: TextStyle(color: Colors.white),
+          ),
+          subtitle: Text(
+            _downloadQuality,
+            style: const TextStyle(color: AppTheme.primary),
+          ),
+          trailing: const Icon(
+            Icons.chevron_right_rounded,
+            color: Colors.white54,
+          ),
+          onTap: () => _showQualityPicker(isStreaming: false),
+        ),
+      );
+    }
+
+    if ('cache storage delete clear'.contains(query)) {
+      if (results.isNotEmpty) {
+        results.add(const Divider(height: 1, color: AppTheme.border));
+      }
+      results.add(
+        ListTile(
+          title: const Text(
+            'Storage & Cache',
+            style: TextStyle(color: Colors.white),
+          ),
+          subtitle: Text(
+            'Audio cache: ${_formatCacheSize(_cacheSizeBytes)}',
+            style: const TextStyle(color: AppTheme.primary),
+          ),
+          trailing: const Icon(
+            Icons.chevron_right_rounded,
+            color: Colors.white54,
+          ),
+          onTap: () => _openCategory(
+            'Data-saving and offline',
+            (ctx, setSub) => _buildDataSavingCategory(setSub),
+          ),
+        ),
+      );
+    }
+
+    if ('data saver cellular mobile offline'.contains(query)) {
+      if (results.isNotEmpty) {
+        results.add(const Divider(height: 1, color: AppTheme.border));
+      }
+      results.add(
+        _buildSwitchTile(
+          title: 'Data Saver Mode',
+          subtitle: 'Caps streams at 96 kbps and saves data',
+          value: _dataSaverMode,
+          onChanged: (val) {
+            setState(() => _dataSaverMode = val);
+            widget.controller?.setDataSaverMode(val, save: false);
+            _saveSetting('data_saver_mode', val.toString());
+          },
+        ),
+      );
+    }
+
+    if ('account profile username credentials email logout'.contains(query)) {
+      if (results.isNotEmpty) {
+        results.add(const Divider(height: 1, color: AppTheme.border));
+      }
+      results.add(
+        ListTile(
+          title: const Text(
+            'Account Profile',
+            style: TextStyle(color: Colors.white),
+          ),
+          subtitle: Text(
+            AuthService.instance.userDisplayName,
+            style: const TextStyle(color: AppTheme.primary),
+          ),
+          trailing: const Icon(
+            Icons.chevron_right_rounded,
+            color: Colors.white54,
+          ),
+          onTap: () => _openCategory(
+            'Account',
+            (ctx, setSub) => _buildAccountCategory(setSub),
+          ),
+        ),
+      );
+    }
+
+    if (results.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.search_off_rounded,
+                size: 48,
+                color: Colors.grey.shade600,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'No settings found for "$query"',
+                style: TextStyle(fontSize: 15, color: Colors.grey.shade400),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return ListView(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      children: [
+        _buildCard(results),
+      ],
     );
   }
 
@@ -1954,18 +2528,16 @@ class _SettingsViewState extends State<SettingsView> {
   }
 
   Widget _buildCard(List<Widget> children) {
-    return Container(
-      decoration: BoxDecoration(
-        color: AppTheme.surface,
+    return Material(
+      color: AppTheme.surface,
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppTheme.border),
+        side: const BorderSide(color: AppTheme.border),
       ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: children,
-        ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: children,
       ),
     );
   }

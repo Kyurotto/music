@@ -7,7 +7,6 @@ import '../models/song_model.dart';
 import '../theme/app_theme.dart';
 import '../controllers/music_player_controller.dart';
 import '../widgets/sidebar_nav.dart';
-import '../widgets/hero_banner.dart';
 import '../widgets/album_card.dart';
 import '../widgets/track_list_view.dart';
 import '../widgets/right_panel.dart';
@@ -999,69 +998,18 @@ class _MusicDashboardViewState extends State<MusicDashboardView> {
   }
 
   Widget _buildHomeFeed(bool isMobile) {
-    final featuredSong =
-        _controller.allSongs.where((s) => s.isFeatured).firstOrNull ??
-        _controller.allSongs.firstOrNull;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Genre filter pills
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            children: SampleMusicData.genres.map((genre) {
-              final isSelected = _controller.selectedGenre == genre;
-              return Padding(
-                padding: const EdgeInsets.only(right: 8.0),
-                child: FilterChip(
-                  label: Text(genre),
-                  selected: isSelected,
-                  onSelected: (_) => _controller.setSelectedGenre(genre),
-                  backgroundColor: AppTheme.cardSurface,
-                  selectedColor: AppTheme.primary,
-                  checkmarkColor: Colors.white,
-                  labelStyle: TextStyle(
-                    fontSize: 13,
-                    fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-                    color: isSelected ? Colors.white : AppTheme.textSecondary,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(20),
-                    side: BorderSide(
-                      color: isSelected ? AppTheme.primary : AppTheme.border,
-                    ),
-                  ),
-                ),
-              );
-            }).toList(),
-          ),
-        ),
-
-        const SizedBox(height: 24),
-
-        // Hero Banner (Featured Release)
         if (_controller.searchQuery.isEmpty) ...[
-          HeroBanner(
-            song: featuredSong,
-            controller: _controller,
-            onPlaySong: _playSongWithLyrics,
-          ),
-          const SizedBox(height: 32),
-        ],
-
-        if (_controller.searchQuery.isEmpty &&
-            _controller.selectedGenre == 'All') ...[
           DiscoverySections(key: _discoveryKey, controller: _controller),
           const SizedBox(height: 32),
         ],
 
-        // Search Results or Genre Tracks (Trending English Songs, Jump Back In, and Featured Playlists removed to reduce scrolling lag)
-        if (_controller.searchQuery.isNotEmpty ||
-            _controller.selectedGenre != 'All') ...[
+        // Search Results
+        if (_controller.searchQuery.isNotEmpty) ...[
           _buildSectionHeader(
-            _controller.searchQuery.isNotEmpty
-                ? 'Search Results'
-                : '${_controller.selectedGenre} Tracks',
+            'Search Results',
             '${_controller.filteredSongs.length} tracks available',
           ),
           const SizedBox(height: 16),
