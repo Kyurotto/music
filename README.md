@@ -47,74 +47,13 @@
 - **Multi-Source Audio Resolver**: Automated full-track audio location engine scouring high-quality web audio providers (YouTube, Archive.org, Saavn, JioSaavn, iTunes) with smart metadata deduplication.
 - **Playlist Export & Backup**: Portable playlist database backup and JSON import/export functionality.
 
-### 💾 Offline-First Storage & Cache Management
-- **Concurrent Offline Downloader**: 3-worker multi-threaded background downloader for songs and complete radio stations.
-- **SQLite Database (`sqflite`)**: Local relational storage for playlists, downloaded tracks, playback metrics, and listening history.
-- **Dedicated Cache Manager**: View and manage local storage usage with one-tap cache purging and offline mode toggle in Settings.
-
-### 👤 Account Management & Spotify Drawer Navigation
-- **Spotify-Grade Mobile Drawer**:
-  - **User Profile Card**: Green avatar badge with user initials, username, and "View profile" shortcut.
-  - **+ Add account**: Seamless account switcher and multi-profile login.
-  - **Listening stats**: Detailed metrics on top artists, genres, total listening time, and weekly activity.
-  - **Recents**: Playback history tracking recently played songs and radio stations.
-  - **Your Updates**: Dedicated in-app announcement sheet detailing the latest features and updates.
-  - **Settings and privacy**: Quick access to audio preferences, streaming quality, equalizer, and account credentials.
-- **Authentication**: Local Salted SHA-256 secure authentication with optional Firebase Authentication and Cloud Firestore cloud sync.
-
 ### 📱 Responsive Hallmark Design
 - **Adaptive Breakpoints**:
   - **Mobile Layout**: Ergonomic bottom navigation layer (`Home`, `Explore`, `Library`), sliding hamburger drawer, and sticky bottom playback bar.
   - **Desktop / Tablet Layout**: Persistent left sidebar, hero banner, right activity panel (Now Playing visualizer and lyrics), and responsive grid cards.
 - **Hallmark Anti-AI-Slop System**: Deep `#121212` background palette, high-contrast typography, tactile press states, and zero RenderFlex layout overflows.
 
----
 
-## 🏛️ Architecture & Project Structure
-
-The codebase is organized into clean, modular layers following standard Flutter architectural best practices:
-
-```
-lib/
-├── auth/                 # Authentication service, user models, role management
-│   ├── auth_service.dart
-│   └── user_model.dart
-├── controllers/          # Business logic and state controllers
-│   └── music_player_controller.dart   # Main controller managing player, queue, cache, and downloads
-├── data/                 # SQLite database and schema migrations
-│   ├── local_database.dart
-│   └── sample_music_data.dart
-├── models/               # Data classes and entity definitions
-│   ├── song_model.dart
-│   ├── playlist_model.dart
-│   ├── equalizer_preset.dart
-│   └── listening_history.dart
-├── services/             # Background services and network engines
-│   ├── spotify_import_service.dart
-│   ├── track_enrichment_service.dart
-│   ├── radio_discovery_service.dart
-│   ├── local_audio_cache_service.dart
-│   └── spotify_export_service.dart
-├── theme/                # Design tokens, gradients, and typography
-│   └── app_theme.dart
-├── views/                # Full screens and route entrypoints
-│   ├── music_dashboard_view.dart      # Main dashboard view
-│   ├── settings_view.dart             # Settings, storage, audio preferences
-│   ├── profile_view.dart              # User profile details
-│   ├── accounts_view.dart             # Multi-account manager
-│   ├── listening_stats_view.dart      # Listening analytics
-│   ├── recents_view.dart              # Playback history
-│   └── auth_gate.dart                 # Authentication routing gate
-└── widgets/              # Reusable UI components
-    ├── spotify_lyrics_sheet.dart      # Now Playing artwork & synced lyrics sheet
-    ├── right_panel.dart               # Desktop Now Playing activity panel
-    ├── sidebar_nav.dart               # Spotify-styled drawer & desktop navigation
-    ├── bottom_player_bar.dart         # Mini player bar with progress scrub & volume
-    ├── song_artwork_widget.dart       # Cached album artwork with ambient glow
-    └── animated_visualizer.dart       # Real-time audio frequency visualizer
-```
-
----
 
 ## 🚀 Getting Started
 
@@ -158,17 +97,6 @@ lib/
 ## 🧪 Testing
 
 Pulse Studio is backed by a suite of over **235+ automated tests** verifying audio playback logic, Spotify and YouTube link resolution, offline cache operations, equalizer state transitions, and responsive UI layout boundaries:
-
-```bash
-# Run the complete test suite
-flutter test
-
-# Run specific feature tests
-flutter test test/bottom_nav_and_settings_drawer_test.dart
-flutter test test/now_playing_artwork_and_actions_test.dart
-flutter test test/dashboard_overflow_test.dart
-flutter test test/widget_test.dart
-```
 
 To run static code analysis:
 ```bash
