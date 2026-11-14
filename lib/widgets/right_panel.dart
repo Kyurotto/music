@@ -57,16 +57,16 @@ class _RightActivityPanelState extends State<RightActivityPanel>
 
   @override
   Widget build(BuildContext context) {
-    // The lyrics preview tracks playback progress, so subscribe to the
-    // lightweight position notifier instead of rebuilding on every tick of
-    // the main controller.
-    return ValueListenableBuilder<Duration>(
-      valueListenable: widget.controller.positionListenable,
-      builder: (context, _, child) {
-        final currentSong = widget.controller.currentSong;
-        final isPlaying = widget.controller.isPlaying;
+    return ListenableBuilder(
+      listenable: widget.controller,
+      builder: (context, _) {
+        return ValueListenableBuilder<Duration>(
+          valueListenable: widget.controller.positionListenable,
+          builder: (context, _, child) {
+            final currentSong = widget.controller.currentSong;
+            final isPlaying = widget.controller.isPlaying;
 
-        return Container(
+            return Container(
           width: 320,
           decoration: const BoxDecoration(
             color: AppTheme.surface,
@@ -229,6 +229,58 @@ class _RightActivityPanelState extends State<RightActivityPanel>
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
+
+                      // Action Buttons: Lyrics, Save, Download
+                      if (currentSong != null) ...[
+                        const SizedBox(height: 14),
+                        Wrap(
+                          alignment: WrapAlignment.center,
+                          spacing: 8,
+                          runSpacing: 6,
+                          children: [
+                            // Lyrics Button
+                            _buildActionButton(
+                              icon: Icons.lyrics_rounded,
+                              label: 'Lyrics',
+                              onTap: widget.onOpenLyrics,
+                            ),
+
+                            // Save Button
+                            _buildActionButton(
+                              icon: currentSong.isLiked
+                                  ? Icons.bookmark_rounded
+                                  : Icons.bookmark_border_rounded,
+                              label: currentSong.isLiked ? 'Saved' : 'Save',
+                              isActive: currentSong.isLiked,
+                              onTap: () => widget.controller.toggleLike(currentSong.id),
+                            ),
+
+                            // Download Button
+                            Builder(
+                              builder: (context) {
+                                final isDownloaded = widget.controller.isSongDownloaded(currentSong.id);
+                                final isDownloading = widget.controller.isSongDownloading(currentSong.id);
+                                return _buildActionButton(
+                                  icon: isDownloaded
+                                      ? Icons.download_done_rounded
+                                      : (isDownloading
+                                          ? Icons.sync_rounded
+                                          : Icons.download_rounded),
+                                  label: isDownloaded
+                                      ? 'Downloaded'
+                                      : (isDownloading ? 'Saving…' : 'Download'),
+                                  isActive: isDownloaded,
+                                  onTap: () async {
+                                    if (!isDownloaded && !isDownloading) {
+                                      await widget.controller.downloadSong(currentSong);
+                                    }
+                                  },
+                                );
+                              },
+                            ),
+                          ],
+                        ),
+                      ],
 
                       if (widget.controller.visualizerEnabled)
                         const SizedBox(height: 16),
@@ -626,6 +678,58 @@ class _RightActivityPanelState extends State<RightActivityPanel>
           ),
         );
       },
+    );
+  },
+);
+  }
+
+  Widget _buildActionButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback? onTap,
+    bool isActive = false,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: isActive
+                ? AppTheme.primary.withValues(alpha: 0.22)
+                : Colors.white.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: isActive
+                  ? AppTheme.primary.withValues(alpha: 0.6)
+                  : Colors.white.withValues(alpha: 0.15),
+              width: 1,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                size: 14,
+                color: isActive ? AppTheme.primary : Colors.white,
+              ),
+              const SizedBox(width: 5),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: isActive ? FontWeight.w700 : FontWeight.w600,
+                  color: isActive ? AppTheme.primary : Colors.white,
+                  letterSpacing: 0.2,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

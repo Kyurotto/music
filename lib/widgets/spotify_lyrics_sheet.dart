@@ -40,6 +40,7 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
   bool _lyricsLookupFailed = false;
   String? _fetchingForId;
   String? _lastSeenSongId;
+  bool _showLyricsView = false;
 
   /// True after the user taps a line — freezes auto-tracking for that
   /// song so a tap does not fight the playback progress cursor.
@@ -295,7 +296,7 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Text(
-                              'PLAYING WITH LYRICS',
+                              _showLyricsView ? 'PLAYING WITH LYRICS' : 'NOW PLAYING',
                               style: TextStyle(
                                 fontSize: 11,
                                 fontWeight: FontWeight.w700,
@@ -337,124 +338,220 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
 
                 const Divider(color: Colors.white12, height: 16),
 
-                // Song Header Preview Card
-                Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 24,
-                    vertical: 8,
-                  ),
-                  child: Row(
-                    children: [
-                      // Thumbnail
-                      SongArtworkWidget(
-                        song: currentSong,
-                        size: 58,
-                        borderRadius: 12,
-                        showGlow: true,
-                      ),
-                      const SizedBox(width: 14),
-
-                      // Info
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              currentSong.title,
-                              style: const TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.w800,
-                                color: Colors.white,
-                                letterSpacing: -0.3,
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
+                // Main Content: Cover Art View or Lyrics View
+                if (!_showLyricsView)
+                  Expanded(
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final availableHeight = constraints.maxHeight;
+                        final artSize = (availableHeight - 160).clamp(160.0, 310.0);
+                        return Center(
+                          child: SingleChildScrollView(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 24,
+                              vertical: 10,
                             ),
-                            const SizedBox(height: 2),
-                            Row(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              mainAxisAlignment: MainAxisAlignment.center,
                               children: [
-                                Flexible(
-                                  child: Text(
-                                    currentSong.artist,
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w500,
-                                      color: Colors.white.withValues(
-                                        alpha: 0.85,
+                                // 1. Image sa loob ng music
+                                Container(
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(24),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: (currentSong.gradientColors.isNotEmpty
+                                                ? currentSong.gradientColors.first
+                                                : AppTheme.primary)
+                                            .withValues(alpha: 0.45),
+                                        blurRadius: 36,
+                                        spreadRadius: 4,
+                                        offset: const Offset(0, 10),
                                       ),
+                                    ],
+                                  ),
+                                  child: SongArtworkWidget(
+                                    song: currentSong,
+                                    size: artSize,
+                                    borderRadius: 24,
+                                    showGlow: true,
+                                  ),
+                                ),
+                                const SizedBox(height: 20),
+
+                                // 2. Sa baba may title sa music saka artist
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                                  child: Text(
+                                    currentSong.title,
+                                    style: const TextStyle(
+                                      fontSize: 22,
+                                      fontWeight: FontWeight.w800,
+                                      color: Colors.white,
+                                      letterSpacing: -0.4,
                                     ),
+                                    textAlign: TextAlign.center,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                   ),
                                 ),
-                                const SizedBox(width: 6),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 6,
-                                    vertical: 2,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withValues(alpha: 0.15),
-                                    borderRadius: BorderRadius.circular(6),
-                                  ),
+                                const SizedBox(height: 6),
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 20),
                                   child: Text(
-                                    currentSong.genre,
-                                    style: const TextStyle(
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.w600,
-                                      color: Colors.white,
+                                    currentSong.artist,
+                                    style: TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w500,
+                                      color: Colors.white.withValues(alpha: 0.8),
                                     ),
+                                    textAlign: TextAlign.center,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
                                   ),
+                                ),
+                                const SizedBox(height: 18),
+
+                                // 3. Sa baba din ng title music saka artist may button na lyrics, save, saka download
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    // Lyrics Button
+                                    _buildActionButton(
+                                      icon: Icons.lyrics_rounded,
+                                      label: 'Lyrics',
+                                      isActive: false,
+                                      onTap: () {
+                                        setState(() => _showLyricsView = true);
+                                      },
+                                    ),
+                                    const SizedBox(width: 12),
+
+                                    // Save Button
+                                    _buildActionButton(
+                                      icon: currentSong.isLiked
+                                          ? Icons.bookmark_rounded
+                                          : Icons.bookmark_border_rounded,
+                                      label: currentSong.isLiked ? 'Saved' : 'Save',
+                                      isActive: currentSong.isLiked,
+                                      onTap: () => widget.controller.toggleLike(currentSong.id),
+                                    ),
+                                    const SizedBox(width: 12),
+
+                                    // Download Button
+                                    Builder(
+                                      builder: (context) {
+                                        final isDownloaded = widget.controller.isSongDownloaded(currentSong.id);
+                                        final isDownloading = widget.controller.isSongDownloading(currentSong.id);
+                                        return _buildActionButton(
+                                          icon: isDownloaded
+                                              ? Icons.download_done_rounded
+                                              : (isDownloading
+                                                  ? Icons.sync_rounded
+                                                  : Icons.download_rounded),
+                                          label: isDownloaded
+                                              ? 'Downloaded'
+                                              : (isDownloading ? 'Saving…' : 'Download'),
+                                          isActive: isDownloaded,
+                                          onTap: () async {
+                                            if (!isDownloaded && !isDownloading) {
+                                              await widget.controller.downloadSong(currentSong);
+                                            }
+                                          },
+                                        );
+                                      },
+                                    ),
+                                  ],
                                 ),
                               ],
                             ),
-                          ],
-                        ),
-                      ),
-
-                      // Lyrics tag badge
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(
-                            color: Colors.white.withValues(alpha: 0.2),
+                          ),
+                        );
+                      },
+                    ),
+                  )
+                else ...[
+                  // Song Header Preview Card for Lyrics View
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 20,
+                      vertical: 6,
+                    ),
+                    child: Row(
+                      children: [
+                        // Thumbnail
+                        InkWell(
+                          borderRadius: BorderRadius.circular(10),
+                          onTap: () => setState(() => _showLyricsView = false),
+                          child: SongArtworkWidget(
+                            song: currentSong,
+                            size: 46,
+                            borderRadius: 10,
+                            showGlow: true,
                           ),
                         ),
-                        child: const Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              Icons.lyrics_rounded,
-                              size: 14,
-                              color: Colors.white,
-                            ),
-                            SizedBox(width: 5),
-                            Text(
-                              'LYRICS',
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w700,
-                                color: Colors.white,
-                                letterSpacing: 0.8,
+                        const SizedBox(width: 12),
+
+                        // Info
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                currentSong.title,
+                                style: const TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w800,
+                                  color: Colors.white,
+                                  letterSpacing: -0.3,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
-                            ),
-                          ],
+                              Text(
+                                currentSong.artist,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                  color: Colors.white.withValues(alpha: 0.8),
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
-                    ],
+                        const SizedBox(width: 8),
+
+                        // Back to Cover Art
+                        _buildActionButton(
+                          icon: Icons.image_rounded,
+                          label: 'Cover',
+                          isActive: true,
+                          onTap: () => setState(() => _showLyricsView = false),
+                        ),
+                        const SizedBox(width: 6),
+
+                        // Save Button
+                        _buildActionButton(
+                          icon: currentSong.isLiked
+                              ? Icons.bookmark_rounded
+                              : Icons.bookmark_border_rounded,
+                          label: currentSong.isLiked ? 'Saved' : 'Save',
+                          isActive: currentSong.isLiked,
+                          onTap: () => widget.controller.toggleLike(currentSong.id),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
 
-                const SizedBox(height: 8),
+                  const Divider(color: Colors.white12, height: 12),
 
-                // Main Lyrics View
-                Expanded(
-                  child: currentSong.lyrics.isEmpty
+                  // Main Lyrics View
+                  Expanded(
+                    child: currentSong.lyrics.isEmpty
                       ? Center(
                           child: SingleChildScrollView(
                             padding: const EdgeInsets.symmetric(horizontal: 32),
@@ -599,6 +696,7 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
                           ),
                         ),
                 ),
+              ],
 
                 // Bottom Controls & Scrubber Section
                 Container(
@@ -785,6 +883,56 @@ class _SpotifyLyricsSheetState extends State<SpotifyLyricsSheet> {
           ),
         );
       },
+    );
+  }
+
+  Widget _buildActionButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback? onTap,
+    bool isActive = false,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(20),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(
+            color: isActive
+                ? AppTheme.primary.withValues(alpha: 0.25)
+                : Colors.white.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: isActive
+                  ? AppTheme.primary.withValues(alpha: 0.6)
+                  : Colors.white.withValues(alpha: 0.18),
+              width: 1,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                size: 15,
+                color: isActive ? AppTheme.primary : Colors.white,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: isActive ? FontWeight.w700 : FontWeight.w600,
+                  color: isActive ? AppTheme.primary : Colors.white,
+                  letterSpacing: 0.2,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

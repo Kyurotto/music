@@ -37,7 +37,7 @@
   "35": "artist_import_test.dart",
   "36": "db_sync_daemon.py",
   "37": ".MessageHandler",
-  "38": "StatelessWidget",
+  "38": "../models/song_model.dart",
   "39": "playlist_screen.dart",
   "40": "@visibleForTesting",
   "41": "Point",
@@ -156,6 +156,5 @@
   "155": "_PlaybackEventMessageExtension",
   "156": "_ValueStreamExtension",
   "157": "RunnerTests",
-  "158": "dart:io",
   "159": "n9-edge-aligned-minimal.md"
 }
